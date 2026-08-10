@@ -7,7 +7,8 @@ The application is one Next.js 16 service with one PostgreSQL-compatible databas
 ## What it measures
 
 - CCU growth over 1 hour, 24 hours, 72 hours, and 7 days, plus absolute player gains.
-- Acceleration, new visits, new favorites, chart movement, freshness, and growth persistence.
+- Rolling-window CCU growth, acceleration, new visits, new favorites, vote velocity, comparable chart movement, freshness, and growth persistence.
+- Provisional discovery signals remain separate from durable momentum. Momentum compares 24-hour, 72-hour, or 7-day averages as enough history becomes available and exposes its history confidence.
 - Independent dimensions for core loop, progression, reward, social pressure, and theme.
 - Rising title words and two-word phrases, promoted only when several independent creators adopt them and recent frequency exceeds the older baseline.
 - Trend breadth, creator diversity, combined demand, new entrants, growing share, and leader concentration.
@@ -48,13 +49,15 @@ npm run maintenance
 
 The commands are intentionally separate:
 
-- `collect` reads Roblox Charts, enriches games through the Games API, optionally discovers extra candidates through Rolimon's, and writes idempotent snapshots.
+- `collect` reads 22 broad and genre-specific Roblox Charts, enriches games through the Games and Votes APIs, explores bounded keyword search and recommendation results, optionally discovers extra candidates through Rolimon's, and writes idempotent snapshots.
 - `analyze` updates game momentum, trend stages, saturation, opportunity scores, history, and deterministic ideas.
 - `brief` writes an agent-oriented Markdown and JSON decision dossier using only fully covered evidence windows.
 - `report` sends only unseen breakout, stage-change, and opportunity events to Discord.
 - `maintenance` aggregates hourly snapshots older than the configured retention into daily rows and removes the compacted hourly rows.
 
 The default collection bucket is 30 minutes. A retry inside the same bucket updates the matching `(universe, bucket, source, chart)` row instead of creating a duplicate.
+
+Games published in the last 90 days continue to receive direct snapshots after leaving a chart. Older games continue to be tracked while they have recorded at least 100 CCU during the last 30 days. This avoids mistaking a missing chart observation for stable demand or losing the decline after a breakout.
 
 To merge an existing local PGlite history into a configured production PostgreSQL database, run:
 
@@ -141,16 +144,22 @@ The included Dockerfile builds the standalone Next.js output. It expects a `publ
 
 ## Verified external API behavior
 
-The endpoints were called directly on August 9, 2026:
+The endpoints were called directly on August 9–10, 2026:
 
 - `GET https://apis.roblox.com/explore-api/v1/get-sorts` accepted `sessionId`, `device`, and `country`. It returned a `sorts` array; game sorts included `top-trending`, `up-and-coming`, and `top-playing-now`, and currently embedded their game arrays.
 - `GET https://apis.roblox.com/explore-api/v1/get-sort-content` returned one sort object with a `games` array. Each game exposed `universeId`, `rootPlaceId`, `name`, `playerCount`, and vote/maturity fields. No continuation token was present in the tested response.
+- Direct sort-content calls succeeded for 22 configured sort IDs, including 13 `trending-in-*` genre sorts plus `top-rated`, `most-popular`, `top-paid-access`, and `top-earning`. Several of these valid sorts were not advertised by the tested `get-sorts` response.
 - `GET https://games.roblox.com/v1/games?universeIds=...` returned `data` with creator metadata, `created`, `updated`, `playing`, `visits`, and `favoritedCount`.
+- `GET https://games.roblox.com/v1/games/votes?universeIds=...` returned cumulative `upVotes` and `downVotes` without authentication.
+- `GET https://games.roblox.com/v1/games/recommendations/game/{universeId}?maxRows=20` returned related games with player counts, votes, and sponsorship fields without authentication.
+- `GET https://apis.roblox.com/search-api/omni-search` accepted `searchQuery`, `sessionId`, and `pageType=all`, returned 40 results in the tested first page, and exposed a next-page token. The collector intentionally uses only the first bounded page.
 - The tested Charts response advertised a 50 requests/minute limit for sort content and 120 requests/minute for sorts; Games advertised 300 requests/minute. These headers are observational and can change.
 - `GET https://api.rolimons.com/games/v1/gamelist` remained public and returned 7,137 games in a map from Place ID to `[name, activePlayers, iconUrl]`. It does not provide Universe IDs. The collector resolves only the configured number of highest-CCU extra candidates through Roblox's public place-to-universe endpoint.
 - `GET https://games.roblox.com/v1/games/multiget-place-details` returned `401` without authentication. The collector therefore uses `GET https://apis.roblox.com/universes/v1/places/{placeId}/universe`, which returned a Universe ID without authentication in the direct test.
 
 These public web endpoints are not a stability contract. The client validates response shapes, uses timeouts and bounded retries, honors `Retry-After`, caches responses in-process, limits Rolimon's resolution concurrency, and records source-specific failures without discarding successful sources.
+
+Competitor research and the resulting implementation decisions are documented in [`docs/market-research.md`](docs/market-research.md).
 
 ## Project map
 

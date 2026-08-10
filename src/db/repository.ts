@@ -1,12 +1,18 @@
-import { and, asc, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { and, asc, desc, eq, gte, inArray, lt, notInArray, or, sql } from "drizzle-orm";
 import { classifyGame, normalizeTitle } from "@/lib/classification";
-import { DEFAULT_SETTINGS } from "@/lib/config";
+import {
+  COLLECTION_DISCOVERY_CONFIG,
+  DEFAULT_SETTINGS,
+  LEGACY_ROBLOX_CHARTS,
+} from "@/lib/config";
 import type { AppSettings, CollectedGame, GameSnapshotPoint, GameTag } from "@/lib/types";
 import { getDatabase } from "./index";
 import {
   alertEvents,
   dailySnapshots,
   gameAnalyses,
+  gameMetadataHistory,
   games,
   gameTags,
   ideas,
@@ -20,6 +26,7 @@ import {
 
 export type GameRow = typeof games.$inferSelect;
 export type GameAnalysisRow = typeof gameAnalyses.$inferSelect;
+export type GameMetadataHistoryRow = typeof gameMetadataHistory.$inferSelect;
 export type TrendRow = typeof trends.$inferSelect;
 export type IdeaRow = typeof ideas.$inferSelect;
 export type SourceRunRow = typeof sourceRuns.$inferSelect;
@@ -28,6 +35,7 @@ export interface GameDatasetItem {
   game: GameRow;
   tags: GameTag[];
   snapshots: GameSnapshotPoint[];
+  metadataHistory: GameMetadataHistoryRow[];
   analysis: GameAnalysisRow | null;
 }
 
@@ -62,17 +70,25 @@ export async function saveSettings(value: AppSettings): Promise<void> {
     .onConflictDoUpdate({ target: settingsTable.id, set: { value, updatedAt: new Date() } });
 }
 
-function mergeSettings(value: Partial<AppSettings>): AppSettings {
+export function mergeSettings(value: Partial<AppSettings>): AppSettings {
+  const configuredCharts = value.collection?.charts;
+  const charts = configuredCharts && !sameStringSet(configuredCharts, LEGACY_ROBLOX_CHARTS)
+    ? configuredCharts
+    : DEFAULT_SETTINGS.collection.charts;
   return {
     ...structuredClone(DEFAULT_SETTINGS),
     ...value,
     thresholds: { ...DEFAULT_SETTINGS.thresholds, ...value.thresholds },
     momentumWeights: { ...DEFAULT_SETTINGS.momentumWeights, ...value.momentumWeights },
     opportunityWeights: { ...DEFAULT_SETTINGS.opportunityWeights, ...value.opportunityWeights },
-    collection: { ...DEFAULT_SETTINGS.collection, ...value.collection },
+    collection: { ...DEFAULT_SETTINGS.collection, ...value.collection, charts: [...charts] },
     taxonomy: { ...DEFAULT_SETTINGS.taxonomy, ...value.taxonomy },
     developerProfile: { ...DEFAULT_SETTINGS.developerProfile, ...value.developerProfile },
   };
+}
+
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value) => right.includes(value));
 }
 
 export async function saveCollectedGames(
@@ -118,10 +134,26 @@ export async function saveCollectedGames(
             creatorType: item.creatorType,
             updatedAt: item.updatedAt,
             lastSeenAt: collectedAt,
-            thumbnailUrl: item.thumbnailUrl,
+            ...(item.thumbnailUrl ? { thumbnailUrl: item.thumbnailUrl } : {}),
             genre: item.genre,
           },
         });
+
+      const fingerprint = createHash("sha256")
+        .update(`${item.name}\u0000${item.description}\u0000${item.updatedAt.toISOString()}`)
+        .digest("hex");
+      await transaction
+        .insert(gameMetadataHistory)
+        .values({
+          universeId: item.universeId,
+          fingerprint,
+          name: item.name,
+          normalizedTitle: normalizeTitle(item.name),
+          description: item.description,
+          gameUpdatedAt: item.updatedAt,
+          observedAt: collectedAt,
+        })
+        .onConflictDoNothing();
 
       const automaticTags = classifyGame(item.name, item.description, appSettings.taxonomy);
       await transaction
@@ -152,6 +184,9 @@ export async function saveCollectedGames(
           ccu: item.ccu,
           visits: item.visits,
           favorites: item.favorites,
+          upVotes: item.upVotes,
+          downVotes: item.downVotes,
+          isSponsored: item.isSponsored,
           chart: item.chart,
           rank: item.rank,
           source: item.source,
@@ -163,6 +198,9 @@ export async function saveCollectedGames(
             ccu: item.ccu,
             visits: item.visits,
             favorites: item.favorites,
+            upVotes: item.upVotes,
+            downVotes: item.downVotes,
+            isSponsored: item.isSponsored,
             rank: item.rank,
           },
         });
@@ -187,10 +225,11 @@ export async function replaceManualTags(universeId: string, tags: GameTag[]): Pr
 
 export async function loadGameDataset(): Promise<GameDatasetItem[]> {
   const database = getDatabase();
-  const [gameRows, tagRows, analysisRows, hourlyRows, dailyRows] = await Promise.all([
+  const [gameRows, tagRows, analysisRows, metadataRows, hourlyRows, dailyRows] = await Promise.all([
     database.select().from(games).orderBy(desc(games.lastSeenAt)),
     database.select().from(gameTags),
     database.select().from(gameAnalyses),
+    database.select().from(gameMetadataHistory).orderBy(asc(gameMetadataHistory.observedAt)),
     database.select().from(snapshots).orderBy(asc(snapshots.bucketAt)),
     database.select().from(dailySnapshots).orderBy(asc(dailySnapshots.dayAt)),
   ]);
@@ -205,6 +244,12 @@ export async function loadGameDataset(): Promise<GameDatasetItem[]> {
     tagsByGame.set(row.universeId, existing);
   }
   const analysisByGame = new Map(analysisRows.map((row) => [row.universeId, row]));
+  const metadataByGame = new Map<string, GameMetadataHistoryRow[]>();
+  for (const row of metadataRows) {
+    const history = metadataByGame.get(row.universeId) ?? [];
+    history.push(row);
+    metadataByGame.set(row.universeId, history);
+  }
   const pointsByGame = new Map<string, Map<number, GameSnapshotPoint>>();
   for (const row of dailyRows) {
     addPoint(pointsByGame, row.universeId, {
@@ -212,6 +257,8 @@ export async function loadGameDataset(): Promise<GameDatasetItem[]> {
       ccu: row.averageCcu,
       visits: row.visits,
       favorites: row.favorites,
+      upVotes: row.upVotes,
+      downVotes: row.downVotes,
       rank: row.bestRank,
     });
   }
@@ -221,8 +268,12 @@ export async function loadGameDataset(): Promise<GameDatasetItem[]> {
       ccu: row.ccu,
       visits: row.visits,
       favorites: row.favorites,
+      upVotes: row.upVotes,
+      downVotes: row.downVotes,
+      isSponsored: row.isSponsored,
       rank: row.rank,
       chart: row.chart,
+      chartRanks: row.rank === null ? {} : { [row.chart]: row.rank },
     });
   }
   return gameRows.map((game) => ({
@@ -231,6 +282,7 @@ export async function loadGameDataset(): Promise<GameDatasetItem[]> {
     snapshots: [...(pointsByGame.get(game.universeId)?.values() ?? [])].sort(
       (a, b) => a.collectedAt.getTime() - b.collectedAt.getTime(),
     ),
+    metadataHistory: metadataByGame.get(game.universeId) ?? [],
     analysis: analysisByGame.get(game.universeId) ?? null,
   }));
 }
@@ -243,9 +295,95 @@ function addPoint(
   const points = target.get(universeId) ?? new Map<number, GameSnapshotPoint>();
   const key = point.collectedAt.getTime();
   const current = points.get(key);
-  if (!current || point.ccu > current.ccu) points.set(key, point);
-  else if (point.rank && (!current.rank || point.rank < current.rank)) current.rank = point.rank;
+  if (!current) {
+    points.set(key, point);
+  } else {
+    current.ccu = Math.max(current.ccu, point.ccu);
+    current.visits = Math.max(current.visits, point.visits);
+    current.favorites = Math.max(current.favorites, point.favorites);
+    current.upVotes = maximumNullable(current.upVotes, point.upVotes);
+    current.downVotes = maximumNullable(current.downVotes, point.downVotes);
+    current.isSponsored = Boolean(current.isSponsored || point.isSponsored);
+    current.chartRanks = { ...current.chartRanks, ...point.chartRanks };
+    const preferredChart = preferredChartEntry(current.chartRanks);
+    if (preferredChart) {
+      current.chart = preferredChart[0];
+      current.rank = preferredChart[1];
+    } else if (point.rank && (!current.rank || point.rank < current.rank)) {
+      current.rank = point.rank;
+      current.chart = point.chart;
+    }
+  }
   target.set(universeId, points);
+}
+
+function maximumNullable(left: number | null | undefined, right: number | null | undefined): number | null {
+  if (left === null || left === undefined) return right ?? null;
+  if (right === null || right === undefined) return left;
+  return Math.max(left, right);
+}
+
+function preferredChartEntry(chartRanks: Record<string, number> | undefined): [string, number] | null {
+  if (!chartRanks) return null;
+  return Object.entries(chartRanks).sort(
+    ([leftChart, leftRank], [rightChart, rightRank]) =>
+      chartPriority(rightChart) - chartPriority(leftChart) || leftRank - rightRank,
+  )[0] ?? null;
+}
+
+function chartPriority(chart: string): number {
+  const normalized = chart.toLowerCase();
+  if (["top playing now", "top trending", "most popular", "top earning"].includes(normalized)) return 3;
+  if (["top revisited", "fun with friends", "top rated"].includes(normalized)) return 2;
+  if (normalized === "up-and-coming" || normalized.startsWith("trending in ")) return 1;
+  return 0;
+}
+
+export async function getTrackableUniverseIds(now = new Date()): Promise<string[]> {
+  const recentCutoff = new Date(
+    now.getTime() - COLLECTION_DISCOVERY_CONFIG.recentGameTrackingDays * 24 * 60 * 60 * 1000,
+  );
+  const activeCutoff = new Date(
+    now.getTime() - COLLECTION_DISCOVERY_CONFIG.activeGameTrackingDays * 24 * 60 * 60 * 1000,
+  );
+  const rows = await getDatabase()
+    .select({ universeId: games.universeId, lastSeenAt: games.lastSeenAt })
+    .from(games)
+    .leftJoin(
+      snapshots,
+      and(
+        eq(snapshots.universeId, games.universeId),
+        gte(snapshots.bucketAt, activeCutoff),
+        gte(snapshots.ccu, COLLECTION_DISCOVERY_CONFIG.activeGameMinimumCcu),
+      ),
+    )
+    .where(or(gte(games.createdAt, recentCutoff), gte(snapshots.ccu, COLLECTION_DISCOVERY_CONFIG.activeGameMinimumCcu)))
+    .groupBy(games.universeId, games.lastSeenAt)
+    .orderBy(desc(games.lastSeenAt))
+    .limit(COLLECTION_DISCOVERY_CONFIG.maximumTrackedGames);
+  return rows.map((row) => row.universeId);
+}
+
+export async function getCollectionSearchKeywords(limit: number): Promise<string[]> {
+  const rows = await getDatabase()
+    .select({ label: trends.label, stage: trends.stage })
+    .from(trends)
+    .where(notInArray(trends.stage, ["declining", "saturated"]))
+    .orderBy(desc(trends.trendScore))
+    .limit(limit * 3);
+  return [...new Set(rows.map((row) => row.label.trim()).filter((label) => label.length >= 3))].slice(0, limit);
+}
+
+export async function getRecommendationSeedIds(limit: number): Promise<string[]> {
+  const recentCutoff = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
+  const rows = await getDatabase()
+    .select({ universeId: games.universeId })
+    .from(gameAnalyses)
+    .innerJoin(games, eq(games.universeId, gameAnalyses.universeId))
+    .where(gte(games.createdAt, recentCutoff))
+    .orderBy(desc(gameAnalyses.momentumScore))
+    .limit(limit);
+  return rows.map((row) => row.universeId);
 }
 
 export async function recordSourceRun(input: {
@@ -367,6 +505,8 @@ export async function runMaintenance(retentionDays: number): Promise<{ aggregate
           peakCcu: Math.max(...group.map((row) => row.ccu)),
           visits: last.visits,
           favorites: last.favorites,
+          upVotes: last.upVotes,
+          downVotes: last.downVotes,
           bestRank: ranked.length ? Math.min(...ranked) : null,
         })
         .onConflictDoUpdate({
@@ -376,6 +516,8 @@ export async function runMaintenance(retentionDays: number): Promise<{ aggregate
             peakCcu: Math.max(...group.map((row) => row.ccu)),
             visits: last.visits,
             favorites: last.favorites,
+            upVotes: last.upVotes,
+            downVotes: last.downVotes,
             bestRank: ranked.length ? Math.min(...ranked) : null,
           },
         });

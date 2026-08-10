@@ -15,6 +15,13 @@
       "when": 1786361809239,
       "tag": "0001_stiff_night_thrasher",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786364481680,
+      "tag": "0002_wooden_roulette",
+      "breakpoints": true
     }
   ]
 }

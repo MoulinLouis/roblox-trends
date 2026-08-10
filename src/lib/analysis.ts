@@ -14,6 +14,7 @@ import type { AppSettings, GameTag, TrendMetrics } from "./types";
 import { generateDeterministicIdeas } from "./ideas";
 import { logger } from "./logger";
 import { normalizeTitle } from "./classification";
+import { ROBLOX_EVENT_MARKERS } from "./config";
 
 interface TrendCandidate {
   id: string;
@@ -27,7 +28,16 @@ export async function analyzeTrends(settings: AppSettings, now = new Date()): Pr
   const dataset = await loadGameDataset();
   const analysisByGame = new Map<string, ReturnType<typeof calculateGameMetrics>>();
   for (const item of dataset) {
-    const metrics = calculateGameMetrics(item.snapshots, item.game.createdAt, settings, now);
+    const recentMetadataCutoff = now.getTime() - 7 * 24 * 60 * 60 * 1000;
+    const recentTitles = item.metadataHistory
+      .filter((entry) => entry.observedAt.getTime() >= recentMetadataCutoff)
+      .map((entry) => entry.name.toLowerCase());
+    const metadataEventRisk = recentTitles.some((title) =>
+      ROBLOX_EVENT_MARKERS.some((marker) => title.includes(marker)),
+    );
+    const metrics = calculateGameMetrics(item.snapshots, item.game.createdAt, settings, now, {
+      metadataEventRisk,
+    });
     analysisByGame.set(item.game.universeId, metrics);
     await database
       .insert(gameAnalyses)

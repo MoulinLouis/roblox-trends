@@ -11,6 +11,10 @@ import type {
 
 const HOUR = 60 * 60 * 1000;
 
+export interface GameAnalysisContext {
+  metadataEventRisk?: boolean;
+}
+
 export function clamp(value: number, minimum = 0, maximum = 100): number {
   return Math.min(maximum, Math.max(minimum, Number.isFinite(value) ? value : 0));
 }
@@ -38,6 +42,7 @@ export function calculateGameMetrics(
   createdAt: Date,
   settings: AppSettings,
   now = new Date(),
+  context: GameAnalysisContext = {},
 ): GameMetrics {
   const points = [...inputPoints].sort((a, b) => a.collectedAt.getTime() - b.collectedAt.getTime());
   const current = points.at(-1) ?? {
@@ -67,13 +72,33 @@ export function calculateGameMetrics(
     settings.thresholds.minimumAbsoluteGain,
   );
   const acceleration = growths[1] - priorGrowth;
-  const recentSegments = [24, 48, 72].map((hours) => {
-    const newer = findBaseline(points, current.collectedAt.getTime() - (hours - 24) * HOUR) ?? current;
-    const older = findBaseline(points, current.collectedAt.getTime() - hours * HOUR) ?? newer;
-    return newer.ccu > older.ccu;
-  });
-  const persistence = (recentSegments.filter(Boolean).length / recentSegments.length) * 100;
+  const dailySegments = calculateDailySegments(points, current.collectedAt.getTime());
+  const persistence = dailySegments.length
+    ? (dailySegments.filter((segment) => segment > 0).length / dailySegments.length) * 100
+    : 0;
   const ageDays = Math.max(0, (now.getTime() - createdAt.getTime()) / (24 * HOUR));
+  const historyHours = points.length > 1
+    ? Math.max(0, (current.collectedAt.getTime() - points[0].collectedAt.getTime()) / HOUR)
+    : 0;
+  const durableSignal = calculateDurableSignal(points, current, settings);
+  const recentPoints = points.filter(
+    (point) => point.collectedAt.getTime() >= current.collectedAt.getTime() - 72 * HOUR,
+  );
+  const peakCcu72h = Math.max(current.ccu, ...recentPoints.map((point) => point.ccu));
+  const peakDrawdown72h = peakCcu72h > 0 ? ((peakCcu72h - current.ccu) / peakCcu72h) * 100 : 0;
+  const sponsoredDiscoveryRisk = recentPoints.some((point) => point.isSponsored === true);
+  const eventRisk = Boolean(context.metadataEventRisk || sponsoredDiscoveryRisk || peakDrawdown72h >= 35);
+  const newUpVotes24h = differenceWhenKnown(current.upVotes, baselines[1].upVotes);
+  const newDownVotes24h = differenceWhenKnown(current.downVotes, baselines[1].downVotes);
+  const totalVotes = (current.upVotes ?? 0) + (current.downVotes ?? 0);
+  const approvalRate = totalVotes > 0 ? ((current.upVotes ?? 0) / totalVotes) * 100 : 0;
+  const newVisits24h = Math.max(0, current.visits - baselines[1].visits);
+  const newFavorites24h = Math.max(0, current.favorites - baselines[1].favorites);
+  const likesPerThousandVisits24h = newVisits24h > 0 ? (newUpVotes24h / newVisits24h) * 1_000 : 0;
+  const favoritesPerThousandVisits24h = newVisits24h > 0 ? (newFavorites24h / newVisits24h) * 1_000 : 0;
+  const rankMovement24h = calculateSameChartRankMovement(current, baselines[1]);
+  const enteredMainChart24h = enteredMainChart(current, baselines[1]);
+  const chartBreadth = Object.keys(current.chartRanks ?? {}).length;
   const metrics = {
     growth1h: growths[0],
     growth24h: growths[1],
@@ -84,12 +109,26 @@ export function calculateGameMetrics(
     gain72h: gains[2],
     gain7d: gains[3],
     acceleration,
-    newVisits24h: Math.max(0, current.visits - baselines[1].visits),
-    newFavorites24h: Math.max(0, current.favorites - baselines[1].favorites),
-    rankMovement24h:
-      current.rank && baselines[1].rank ? Math.max(0, baselines[1].rank - current.rank) : 0,
+    newVisits24h,
+    newFavorites24h,
+    newUpVotes24h,
+    newDownVotes24h,
+    approvalRate,
+    likesPerThousandVisits24h,
+    favoritesPerThousandVisits24h,
+    rankMovement24h,
+    enteredMainChart24h,
+    chartBreadth,
     ageDays,
     persistence,
+    historyHours,
+    durableGrowth: durableSignal.growth,
+    durableGain: durableSignal.gain,
+    durableWindowHours: durableSignal.windowHours,
+    durabilityConfidence: clamp((historyHours / 168) * 100),
+    peakDrawdown72h,
+    eventRisk,
+    sponsoredDiscoveryRisk,
   };
 
   return { ...metrics, momentum: calculateMomentum(metrics, settings) };
@@ -99,46 +138,59 @@ type MomentumInputs = Omit<GameMetrics, "momentum">;
 
 export function calculateMomentum(metrics: MomentumInputs, settings: AppSettings): MomentumResult {
   const weights = settings.momentumWeights;
+  const durableConfidenceFactor = 0.35 + (metrics.durabilityConfidence / 100) * 0.65;
+  const stability = clamp(
+    70 + Math.min(30, metrics.acceleration) - metrics.peakDrawdown72h * 1.5 - (metrics.eventRisk ? 20 : 0),
+  );
+  const visitVelocity = clamp((Math.log10(metrics.newVisits24h + 1) / 6) * 100);
+  const qualityConversion = metrics.newVisits24h >= 1_000
+    ? clamp(metrics.likesPerThousandVisits24h * 8 + metrics.favoritesPerThousandVisits24h * 2)
+    : 0;
+  const demandQuality = qualityConversion > 0 ? visitVelocity * 0.8 + qualityConversion * 0.2 : visitVelocity;
   const inputs: Array<Omit<ScorePart, "points">> = [
     {
       key: "ccuGrowth",
-      label: "24h CCU growth",
-      raw: metrics.growth24h,
-      normalized: clamp(metrics.growth24h / 2),
+      label: "Sustained CCU growth",
+      raw: metrics.durableGrowth,
+      normalized: clamp(metrics.durableGrowth / 2) * durableConfidenceFactor,
       weight: weights.ccuGrowth,
-      explanation: `${formatSigned(metrics.growth24h)}% in 24 hours`,
+      explanation: `${formatSigned(metrics.durableGrowth)}% between compared ${formatWindow(metrics.durableWindowHours)} averages; ${Math.round(metrics.durabilityConfidence)}% history confidence`,
     },
     {
       key: "acceleration",
-      label: "Acceleration",
-      raw: metrics.acceleration,
-      normalized: clamp(50 + metrics.acceleration),
+      label: "Acceleration and spike resilience",
+      raw: stability,
+      normalized: stability,
       weight: weights.acceleration,
-      explanation: `${formatSigned(metrics.acceleration)} points versus the previous day`,
+      explanation: `${formatSigned(metrics.acceleration)} acceleration points; ${Math.round(metrics.peakDrawdown72h)}% below the 72h peak${metrics.eventRisk ? "; temporary-spike risk detected" : ""}`,
     },
     {
       key: "absoluteGain",
-      label: "Absolute player gain",
-      raw: metrics.gain24h,
-      normalized: clamp((Math.log10(Math.max(0, metrics.gain24h) + 1) / 4) * 100),
+      label: "Sustained player gain",
+      raw: metrics.durableGain,
+      normalized: clamp((Math.log10(Math.max(0, metrics.durableGain) + 1) / 4) * 100) * durableConfidenceFactor,
       weight: weights.absoluteGain,
-      explanation: `${formatNumber(metrics.gain24h)} net players in 24 hours`,
+      explanation: `${formatNumber(metrics.durableGain)} average concurrent players gained across the compared window`,
     },
     {
       key: "visitGrowth",
-      label: "New visits",
+      label: "Demand and approval velocity",
       raw: metrics.newVisits24h,
-      normalized: clamp((Math.log10(metrics.newVisits24h + 1) / 6) * 100),
+      normalized: demandQuality,
       weight: weights.visitGrowth,
-      explanation: `${formatNumber(metrics.newVisits24h)} new visits in 24 hours`,
+      explanation: `${formatNumber(metrics.newVisits24h)} new visits; ${metrics.likesPerThousandVisits24h.toFixed(1)} likes and ${metrics.favoritesPerThousandVisits24h.toFixed(1)} favorites per 1,000 new visits`,
     },
     {
       key: "rankImprovement",
-      label: "Chart rank movement",
-      raw: metrics.rankMovement24h,
-      normalized: clamp(metrics.rankMovement24h * 5),
+      label: "Comparable chart movement",
+      raw: metrics.rankMovement24h + (metrics.enteredMainChart24h ? 20 : 0),
+      normalized: metrics.enteredMainChart24h
+        ? 100
+        : clamp(metrics.rankMovement24h * 5 + Math.min(20, metrics.chartBreadth * 4)),
       weight: weights.rankImprovement,
-      explanation: `${metrics.rankMovement24h} places gained`,
+      explanation: metrics.enteredMainChart24h
+        ? `Entered a main discovery chart and now appears across ${metrics.chartBreadth} charts`
+        : `${metrics.rankMovement24h} places gained within the same chart; present across ${metrics.chartBreadth} charts`,
     },
     {
       key: "freshness",
@@ -163,6 +215,111 @@ export function calculateMomentum(metrics: MomentumInputs, settings: AppSettings
     points: (item.normalized * item.weight) / totalWeight,
   }));
   return { score: Math.round(breakdown.reduce((sum, item) => sum + item.points, 0)), breakdown };
+}
+
+function calculateDurableSignal(
+  points: GameSnapshotPoint[],
+  current: GameSnapshotPoint,
+  settings: AppSettings,
+): { growth: number; gain: number; windowHours: number } {
+  const currentTime = current.collectedAt.getTime();
+  for (const windowHours of [168, 72, 24]) {
+    const previous = points.filter((point) => {
+      const ageHours = (currentTime - point.collectedAt.getTime()) / HOUR;
+      return ageHours > windowHours && ageHours <= windowHours * 2;
+    });
+    const recent = points.filter((point) => {
+      const ageHours = (currentTime - point.collectedAt.getTime()) / HOUR;
+      return ageHours >= 0 && ageHours <= windowHours;
+    });
+    if (previous.length < 2 || recent.length < 2) continue;
+    const previousAverage = average(previous.map((point) => point.ccu));
+    const recentAverage = average(recent.map((point) => point.ccu));
+    return {
+      growth: protectedGrowth(
+        previousAverage,
+        recentAverage,
+        settings.thresholds.minimumBaselineCcu,
+        settings.thresholds.minimumAbsoluteGain,
+      ),
+      gain: recentAverage - previousAverage,
+      windowHours,
+    };
+  }
+  const first = points.at(0) ?? current;
+  const windowHours = Math.max(1, Math.min(24, (currentTime - first.collectedAt.getTime()) / HOUR));
+  return {
+    growth: protectedGrowth(
+      first.ccu,
+      current.ccu,
+      settings.thresholds.minimumBaselineCcu,
+      settings.thresholds.minimumAbsoluteGain,
+    ),
+    gain: current.ccu - first.ccu,
+    windowHours,
+  };
+}
+
+function calculateDailySegments(points: GameSnapshotPoint[], currentTime: number): number[] {
+  const segments: number[] = [];
+  for (let day = 0; day < 7; day += 1) {
+    const newer = nearestPoint(points, currentTime - day * 24 * HOUR, 3 * HOUR);
+    const older = nearestPoint(points, currentTime - (day + 1) * 24 * HOUR, 3 * HOUR);
+    if (!newer || !older) continue;
+    segments.push(newer.ccu - older.ccu);
+  }
+  return segments;
+}
+
+function nearestPoint(points: GameSnapshotPoint[], targetTime: number, tolerance: number): GameSnapshotPoint | null {
+  let result: GameSnapshotPoint | null = null;
+  let distance = Number.POSITIVE_INFINITY;
+  for (const point of points) {
+    const nextDistance = Math.abs(point.collectedAt.getTime() - targetTime);
+    if (nextDistance < distance) {
+      result = point;
+      distance = nextDistance;
+    }
+  }
+  return distance <= tolerance ? result : null;
+}
+
+function differenceWhenKnown(current: number | null | undefined, baseline: number | null | undefined): number {
+  if (current === null || current === undefined || baseline === null || baseline === undefined) return 0;
+  return Math.max(0, current - baseline);
+}
+
+function calculateSameChartRankMovement(current: GameSnapshotPoint, baseline: GameSnapshotPoint): number {
+  const currentRanks = current.chartRanks ?? {};
+  const baselineRanks = baseline.chartRanks ?? {};
+  return Math.max(
+    0,
+    ...Object.entries(currentRanks).map(([chart, rank]) =>
+      baselineRanks[chart] === undefined ? 0 : baselineRanks[chart] - rank,
+    ),
+  );
+}
+
+function enteredMainChart(current: GameSnapshotPoint, baseline: GameSnapshotPoint): boolean {
+  const baselineRanks = baseline.chartRanks ?? {};
+  return Object.keys(current.chartRanks ?? {}).some((chart) => isMainChart(chart) && baselineRanks[chart] === undefined);
+}
+
+function isMainChart(chart: string): boolean {
+  return ["top playing now", "top trending", "most popular", "top earning", "top revisited"].includes(
+    chart.toLowerCase(),
+  );
+}
+
+function average(values: number[]): number {
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+}
+
+function formatWindow(hours: number): string {
+  if (hours >= 168) return "7-day";
+  if (hours >= 72) return "72-hour";
+  if (hours >= 24) return "24-hour";
+  return `${Math.round(hours)}-hour discovery`;
 }
 
 export function calculateTrendStage(metrics: TrendMetrics, settings: AppSettings) {

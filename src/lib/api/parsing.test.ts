@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { parseGameDetailsResponse, parseSortContentResponse, parseSortsResponse } from "./roblox";
+import {
+  parseGameDetailsResponse,
+  parseGameVotesResponse,
+  parseRecommendationsResponse,
+  parseSearchResponse,
+  parseSortContentResponse,
+  parseSortsResponse,
+} from "./roblox";
 import { parseRolimonsResponse } from "./rolimons";
 
 describe("Roblox API response parsing", () => {
   it("parses current Charts sort and game fields", () => {
-    const sort = parseSortContentResponse({ contentType: "Games", sortId: "top-trending", sortDisplayName: "Top Trending", games: [{ universeId: 101, rootPlaceId: 202, name: "Game", playerCount: 345 }] });
+    const sort = parseSortContentResponse({ contentType: "Games", sortId: "top-trending", sortDisplayName: "Top Trending", games: [{ universeId: 101, rootPlaceId: 202, name: "Game", playerCount: 345, totalUpVotes: 90, totalDownVotes: 10, isSponsored: false }] });
     expect(sort.sortId).toBe("top-trending");
-    expect(sort.games[0]).toEqual({ universeId: 101, rootPlaceId: 202, name: "Game", playerCount: 345 });
+    expect(sort.games[0]).toEqual({ universeId: 101, rootPlaceId: 202, name: "Game", playerCount: 345, totalUpVotes: 90, totalDownVotes: 10, isSponsored: false });
   });
 
   it("filters non-game sort content from get-sorts", () => {
@@ -23,6 +30,32 @@ describe("Roblox API response parsing", () => {
 
   it("rejects malformed required fields", () => {
     expect(() => parseGameDetailsResponse({ data: [{ id: "not-a-number" }] })).toThrow();
+  });
+
+  it("parses public vote totals", () => {
+    expect(parseGameVotesResponse({ data: [{ id: 101, upVotes: 900, downVotes: 100 }] })).toEqual([
+      { id: 101, upVotes: 900, downVotes: 100 },
+    ]);
+  });
+
+  it("maps recommendation place IDs into chart discoveries", () => {
+    expect(parseRecommendationsResponse({ games: [{ universeId: 101, placeId: 202, name: "Recommended", playerCount: 50, totalUpVotes: 12, totalDownVotes: 2, isSponsored: false }] })[0]).toEqual({
+      universeId: 101,
+      rootPlaceId: 202,
+      name: "Recommended",
+      playerCount: 50,
+      totalUpVotes: 12,
+      totalDownVotes: 2,
+      isSponsored: false,
+    });
+  });
+
+  it("flattens game contents from omni-search and ignores other content", () => {
+    const games = parseSearchResponse({ searchResults: [{ contents: [
+      { contentType: "Game", universeId: 101, rootPlaceId: 202, name: "Search result", playerCount: 75 },
+      { contentType: "Avatar", universeId: 303, rootPlaceId: 404, name: "Ignored", playerCount: 0 },
+    ] }] });
+    expect(games).toEqual([{ universeId: 101, rootPlaceId: 202, name: "Search result", playerCount: 75 }]);
   });
 });
 

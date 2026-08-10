@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { collectionIdentity, deduplicateCollection, floorToBucket } from "./repository";
+import { collectionIdentity, deduplicateCollection, floorToBucket, mergeSettings } from "./repository";
+import { DEFAULT_SETTINGS, LEGACY_ROBLOX_CHARTS } from "@/lib/config";
 import type { CollectedGame } from "@/lib/types";
 
 describe("collection idempotency", () => {
@@ -16,6 +17,9 @@ describe("collection idempotency", () => {
     ccu: 500,
     visits: 10000,
     favorites: 100,
+    upVotes: 80,
+    downVotes: 20,
+    isSponsored: false,
     thumbnailUrl: null,
     genre: "Simulation",
     chart: "Top Trending",
@@ -40,5 +44,12 @@ describe("collection idempotency", () => {
   it("keeps independent chart observations", () => {
     const bucket = new Date("2026-08-09T12:00:00Z");
     expect(deduplicateCollection([game, { ...game, chart: "Top Playing Now" }], bucket)).toHaveLength(2);
+  });
+
+  it("upgrades the former three-chart default without overwriting custom chart choices", () => {
+    const upgraded = mergeSettings({ collection: { ...DEFAULT_SETTINGS.collection, charts: [...LEGACY_ROBLOX_CHARTS] } });
+    const custom = mergeSettings({ collection: { ...DEFAULT_SETTINGS.collection, charts: ["top-rated"] } });
+    expect(upgraded.collection.charts).toEqual(DEFAULT_SETTINGS.collection.charts);
+    expect(custom.collection.charts).toEqual(["top-rated"]);
   });
 });

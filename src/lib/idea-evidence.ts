@@ -90,7 +90,7 @@ export function buildIdeaGameEvidence(item: GameDatasetItem): IdeaGameEvidence |
 
   const input: AlgorithmEvidenceInput = {
     ageDays: metrics.ageDays,
-    historyHours: Math.max(0, (currentPoint.collectedAt.getTime() - firstPoint.collectedAt.getTime()) / 3_600_000),
+    historyHours: metrics.historyHours,
     currentCcu: currentPoint.ccu,
     growth24h: metrics.growth24h,
     gain24h: metrics.gain24h,
@@ -100,7 +100,16 @@ export function buildIdeaGameEvidence(item: GameDatasetItem): IdeaGameEvidence |
     momentumScore: item.analysis?.momentumScore ?? 0,
   };
   const result = calculateAlgorithmEvidence(input);
-  const durability = calculateDurabilityAssessment(item.snapshots, item.game.name);
+  const recentMetadataCutoff = currentPoint.collectedAt.getTime() - 7 * 24 * 3_600_000;
+  const recentTitles = item.metadataHistory
+    .filter((entry) => entry.observedAt.getTime() >= recentMetadataCutoff)
+    .map((entry) => entry.name)
+    .join(" ");
+  const durability = calculateDurabilityAssessment(item.snapshots, recentTitles || item.game.name);
+  if (metrics.sponsoredDiscoveryRisk) {
+    durability.eventRisk = true;
+    durability.durabilityWarnings.push("A recent discovery observation was marked as sponsored");
+  }
   return {
     universeId: item.game.universeId,
     name: item.game.name,

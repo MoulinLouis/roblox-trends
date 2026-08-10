@@ -35,6 +35,42 @@ describe("momentum score", () => {
     expect(result.momentum.breakdown).toHaveLength(7);
     expect(result.momentum.breakdown.every((part) => part.explanation.length > 0)).toBe(true);
   });
+
+  it("uses seven-day averages once two comparable weeks exist", () => {
+    const now = new Date("2026-08-09T12:00:00Z");
+    const points = Array.from({ length: 15 }, (_, index) => {
+      const daysAgo = 14 - index;
+      const ccu = daysAgo >= 8 ? 100 : 200;
+      return point(now, daysAgo * 24, ccu, 10_000 + index * 1_000, 100 + index * 10, 50);
+    });
+    const result = calculateGameMetrics(points, new Date("2026-06-01T00:00:00Z"), DEFAULT_SETTINGS, now);
+    expect(result.durableWindowHours).toBe(168);
+    expect(result.durableGrowth).toBe(100);
+    expect(result.durabilityConfidence).toBe(100);
+  });
+
+  it("keeps rank movement comparable within the same chart", () => {
+    const now = new Date("2026-08-09T12:00:00Z");
+    const baseline = point(now, 24, 1_000, 100_000, 1_000, 80);
+    baseline.chart = "Trending in Simulation";
+    baseline.chartRanks = { "Trending in Simulation": 80 };
+    const current = point(now, 0, 2_000, 200_000, 2_000, 5);
+    current.chart = "Top Trending";
+    current.chartRanks = { "Top Trending": 5 };
+    const result = calculateGameMetrics([baseline, current], new Date("2026-08-01T00:00:00Z"), DEFAULT_SETTINGS, now);
+    expect(result.rankMovement24h).toBe(0);
+    expect(result.enteredMainChart24h).toBe(true);
+  });
+
+  it("calculates approval velocity only from known vote snapshots", () => {
+    const now = new Date("2026-08-09T12:00:00Z");
+    const baseline = { ...point(now, 24, 1_000, 100_000, 1_000, 50), upVotes: 500, downVotes: 50 };
+    const current = { ...point(now, 0, 1_500, 200_000, 2_000, 40), upVotes: 1_500, downVotes: 100 };
+    const result = calculateGameMetrics([baseline, current], new Date("2026-08-01T00:00:00Z"), DEFAULT_SETTINGS, now);
+    expect(result.newUpVotes24h).toBe(1_000);
+    expect(result.likesPerThousandVisits24h).toBe(10);
+    expect(result.approvalRate).toBeCloseTo(93.75);
+  });
 });
 
 describe("trend and opportunity scoring", () => {

@@ -1,5 +1,45 @@
 import type { AppSettings } from "./types";
 
+export const ROBLOX_DISCOVERY_CHARTS = [
+  "top-trending",
+  "up-and-coming",
+  "top-playing-now",
+  "fun-with-friends",
+  "top-revisited",
+  "trending-in-simulation",
+  "trending-in-survival",
+  "trending-in-action",
+  "trending-in-rpg",
+  "trending-in-shooter",
+  "trending-in-strategy",
+  "trending-in-sports-and-racing",
+  "trending-in-roleplay-and-avatar-sim",
+  "trending-in-party-and-casual",
+  "trending-in-obby-and-platformer",
+  "trending-in-puzzle",
+  "trending-in-shopping",
+  "trending-in-entertainment",
+  "top-rated",
+  "most-popular",
+  "top-paid-access",
+  "top-earning",
+] as const;
+
+export const LEGACY_ROBLOX_CHARTS = ["top-trending", "up-and-coming", "top-playing-now"] as const;
+
+export const COLLECTION_DISCOVERY_CONFIG = {
+  recentGameTrackingDays: 90,
+  activeGameTrackingDays: 30,
+  activeGameMinimumCcu: 100,
+  maximumTrackedGames: 3_000,
+  maximumSearchKeywords: 6,
+  maximumRecommendationSeeds: 5,
+  searchResultsPerKeyword: 40,
+  recommendationsPerSeed: 20,
+} as const;
+
+export const ROBLOX_EVENT_MARKERS = ["[upd", "[update", "event", "2x", "x2", "admin abuse"] as const;
+
 export const DEFAULT_SETTINGS: AppSettings = {
   thresholds: {
     minimumBaselineCcu: 25,
@@ -32,7 +72,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     intervalMinutes: 30,
     country: process.env.ROBLOX_COUNTRY || "all",
     device: process.env.ROBLOX_DEVICE || "computer",
-    charts: ["top-trending", "up-and-coming", "top-playing-now"],
+    charts: [...ROBLOX_DISCOVERY_CHARTS],
     rolimonsEnabled: process.env.ROLIMONS_ENABLED !== "false",
     rolimonsCandidates: 20,
   },
@@ -127,7 +167,7 @@ export const IDEA_EVIDENCE_CONFIG = {
     durableMaximumPeakDrawdown: 25,
     fragilePeakDrawdown: 35,
     fragileDailyReversal: -20,
-    eventMarkers: ["[upd", "[update", "event", "2x", "x2", "admin abuse"],
+    eventMarkers: ROBLOX_EVENT_MARKERS,
   },
   evidenceWeights: {
     momentum: 25,

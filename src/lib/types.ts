@@ -14,8 +14,12 @@ export interface GameSnapshotPoint {
   ccu: number;
   visits: number;
   favorites: number;
+  upVotes?: number | null;
+  downVotes?: number | null;
+  isSponsored?: boolean | null;
   rank: number | null;
   chart?: string;
+  chartRanks?: Record<string, number>;
 }
 
 export interface ScorePart {
@@ -45,9 +49,24 @@ export interface GameMetrics {
   acceleration: number;
   newVisits24h: number;
   newFavorites24h: number;
+  newUpVotes24h: number;
+  newDownVotes24h: number;
+  approvalRate: number;
+  likesPerThousandVisits24h: number;
+  favoritesPerThousandVisits24h: number;
   rankMovement24h: number;
+  enteredMainChart24h: boolean;
+  chartBreadth: number;
   ageDays: number;
   persistence: number;
+  historyHours: number;
+  durableGrowth: number;
+  durableGain: number;
+  durableWindowHours: number;
+  durabilityConfidence: number;
+  peakDrawdown72h: number;
+  eventRisk: boolean;
+  sponsoredDiscoveryRisk: boolean;
   momentum: MomentumResult;
 }
 
@@ -142,6 +161,9 @@ export interface CollectedGame {
   ccu: number;
   visits: number;
   favorites: number;
+  upVotes: number | null;
+  downVotes: number | null;
+  isSponsored: boolean | null;
   thumbnailUrl: string | null;
   genre: string | null;
   chart: string;

@@ -28,7 +28,7 @@ export default async function DashboardPage() {
   const opportunities = [...trends].sort((a, b) => b.opportunityScore - a.opportunityScore).slice(0, 4);
   const combinedCcu = dataset.reduce((sum, item) => sum + (item.snapshots.at(-1)?.ccu ?? 0), 0);
 
-  return <div className="content"><PageHeading eyebrow="Daily command center" title="Catch the wave before the clones" subtitle="Momentum combines growth velocity, acceleration, real player gains, chart movement, persistence, and freshness—not just raw popularity." action={<Freshness date={latest} errors={errors.length} />} />
+  return <div className="content"><PageHeading eyebrow="Daily command center" title="Catch the wave before the clones" subtitle="Momentum now prioritizes rolling-window growth, comparable chart movement, approval velocity, persistence, and spike resilience—not one strong 24-hour event." action={<Freshness date={latest} errors={errors.length} />} />
     <div className="grid grid-4">
       <MetricCard label="Tracked demand" value={formatCompact(combinedCcu)} detail={`Across ${dataset.length} monitored games`} />
       <MetricCard label="Discovery breakouts" value={String(breakouts.length)} detail="24h evidence; durability requires 72h" tone="blue" />

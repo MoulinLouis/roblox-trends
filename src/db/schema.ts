@@ -59,6 +59,9 @@ export const snapshots = pgTable(
     ccu: integer("ccu").notNull(),
     visits: real("visits").notNull(),
     favorites: integer("favorites").notNull(),
+    upVotes: integer("up_votes"),
+    downVotes: integer("down_votes"),
+    isSponsored: boolean("is_sponsored"),
     chart: text("chart").notNull(),
     rank: integer("rank"),
     source: text("source").notNull(),
@@ -82,11 +85,33 @@ export const dailySnapshots = pgTable(
     peakCcu: integer("peak_ccu").notNull(),
     visits: real("visits").notNull(),
     favorites: integer("favorites").notNull(),
+    upVotes: integer("up_votes"),
+    downVotes: integer("down_votes"),
     bestRank: integer("best_rank"),
   },
   (table) => [
     uniqueIndex("daily_snapshots_game_day_idx").on(table.universeId, table.dayAt),
     index("daily_snapshots_time_idx").on(table.dayAt),
+  ],
+);
+
+export const gameMetadataHistory = pgTable(
+  "game_metadata_history",
+  {
+    id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    universeId: text("universe_id")
+      .notNull()
+      .references(() => games.universeId, { onDelete: "cascade" }),
+    fingerprint: text("fingerprint").notNull(),
+    name: text("name").notNull(),
+    normalizedTitle: text("normalized_title").notNull(),
+    description: text("description").notNull(),
+    gameUpdatedAt: timestamp("game_updated_at", { withTimezone: true }).notNull(),
+    observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("game_metadata_history_version_idx").on(table.universeId, table.fingerprint),
+    index("game_metadata_history_game_time_idx").on(table.universeId, table.observedAt),
   ],
 );
 

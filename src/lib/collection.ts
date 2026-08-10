@@ -1,8 +1,22 @@
 import type { AppSettings, CollectedGame, CollectionError } from "./types";
-import { RobloxClient, type RobloxChartGame, type RobloxGameDetail, type RobloxSort } from "./api/roblox";
+import {
+  RobloxClient,
+  type RobloxChartGame,
+  type RobloxGameDetail,
+  type RobloxGameVote,
+  type RobloxSort,
+} from "./api/roblox";
 import { getRolimonsGames } from "./api/rolimons";
 import { errorMessage, logger } from "./logger";
-import { floorToBucket, recordSourceRun, saveCollectedGames } from "@/db/repository";
+import { COLLECTION_DISCOVERY_CONFIG } from "./config";
+import {
+  floorToBucket,
+  getCollectionSearchKeywords,
+  getRecommendationSeedIds,
+  getTrackableUniverseIds,
+  recordSourceRun,
+  saveCollectedGames,
+} from "@/db/repository";
 
 export interface CollectionResult {
   collectedAt: Date;
@@ -96,35 +110,101 @@ export async function collectRobloxData(settings: AppSettings, now = new Date())
     }
   }
 
-  const universeIds = [...new Set(discoveries.map((item) => String(item.chartGame.universeId)))];
+  await collectSearchDiscoveries(client, discoveries, errors, runKey, startedAt);
+  await collectRecommendationDiscoveries(client, discoveries, errors, runKey, startedAt);
+
+  const discoveredUniverseIds = new Set(discoveries.map((item) => String(item.chartGame.universeId)));
+  let trackedUniverseIds: string[] = [];
+  try {
+    trackedUniverseIds = await getTrackableUniverseIds(now);
+  } catch (error) {
+    errors.push({ source: "roblox-tracked", message: errorMessage(error) });
+  }
+  const universeIds = [...new Set([...discoveredUniverseIds, ...trackedUniverseIds])];
   let details: RobloxGameDetail[] = [];
+  let votes: RobloxGameVote[] = [];
   let thumbnails = new Map<string, string>();
   if (universeIds.length) {
+    details = (
+      await fetchChunks(universeIds, 50, 1, (chunk) => client.getGameDetails(chunk), "roblox-games", errors, 250)
+    ).flat();
+    votes = (
+      await fetchChunks(universeIds, 50, 1, (chunk) => client.getGameVotes(chunk), "roblox-votes", errors, 250)
+    ).flat();
     try {
-      details = await client.getGameDetails(universeIds);
-    } catch (error) {
-      errors.push({ source: "roblox-games", message: errorMessage(error) });
-    }
-    try {
-      thumbnails = await client.getThumbnails(universeIds);
+      thumbnails = await client.getThumbnails([...discoveredUniverseIds]);
     } catch (error) {
       errors.push({ source: "roblox-thumbnails", message: errorMessage(error) });
     }
   }
-  const detailMap = new Map(details.map((detail) => [String(detail.id), detail]));
-  const collected = discoveries
-    .map((discovery) => toCollectedGame(discovery, detailMap.get(String(discovery.chartGame.universeId)), thumbnails))
-    .filter((game): game is CollectedGame => game !== null);
+  const voteMap = new Map(votes.map((vote) => [String(vote.id), vote]));
+  const discoveriesByUniverse = new Map<string, Discovery[]>();
+  for (const discovery of discoveries) {
+    const universeId = String(discovery.chartGame.universeId);
+    const entries = discoveriesByUniverse.get(universeId) ?? [];
+    entries.push(discovery);
+    discoveriesByUniverse.set(universeId, entries);
+  }
+  const collected = details.flatMap((detail) => {
+    const universeId = String(detail.id);
+    const matchedDiscoveries = discoveriesByUniverse.get(universeId);
+    if (matchedDiscoveries?.length) {
+      return matchedDiscoveries.map((discovery) =>
+        toCollectedGame(discovery, detail, voteMap.get(universeId), thumbnails),
+      );
+    }
+    return [toCollectedGame({
+      chart: "Direct tracking",
+      source: "roblox-tracked",
+      rank: null,
+      chartGame: {
+        universeId: detail.id,
+        rootPlaceId: detail.rootPlaceId,
+        name: detail.name,
+        playerCount: detail.playing,
+      },
+    }, detail, voteMap.get(universeId), thumbnails)];
+  });
   const saved = await saveCollectedGames(collected, now, settings);
   await recordSourceRun({
     runKey,
     job: "collect",
     source: "roblox-charts",
-    status: errors.some((error) => error.source.startsWith("roblox")) ? "partial" : "success",
+    status: errors.some((error) =>
+      error.source === "roblox-charts" ||
+      error.source === "roblox-games" ||
+      error.source === "roblox-thumbnails" ||
+      error.source.startsWith("roblox:"),
+    ) ? "partial" : "success",
     items: saved.snapshots,
     startedAt,
     finishedAt: new Date(),
-    error: errors.find((error) => error.source.startsWith("roblox"))?.message,
+    error: errors.find((error) =>
+      error.source === "roblox-charts" ||
+      error.source === "roblox-games" ||
+      error.source === "roblox-thumbnails" ||
+      error.source.startsWith("roblox:"),
+    )?.message,
+  });
+  await recordSourceRun({
+    runKey,
+    job: "collect",
+    source: "roblox-tracked",
+    status: errors.some((error) => error.source === "roblox-tracked") ? "partial" : "success",
+    items: collected.filter((item) => item.source === "roblox-tracked").length,
+    startedAt,
+    finishedAt: new Date(),
+    error: errors.find((error) => error.source === "roblox-tracked")?.message,
+  });
+  await recordSourceRun({
+    runKey,
+    job: "collect",
+    source: "roblox-votes",
+    status: errors.some((error) => error.source === "roblox-votes") ? "partial" : "success",
+    items: votes.length,
+    startedAt,
+    finishedAt: new Date(),
+    error: errors.find((error) => error.source === "roblox-votes")?.message,
   });
 
   logger.info("Collection completed", { games: saved.games, snapshots: saved.snapshots, errors: errors.length });
@@ -139,10 +219,10 @@ function addSortDiscoveries(target: Discovery[], sort: RobloxSort): void {
 
 function toCollectedGame(
   discovery: Discovery,
-  detail: RobloxGameDetail | undefined,
+  detail: RobloxGameDetail,
+  vote: RobloxGameVote | undefined,
   thumbnails: Map<string, string>,
-): CollectedGame | null {
-  if (!detail) return null;
+): CollectedGame {
   const universeId = String(detail.id);
   return {
     universeId,
@@ -157,12 +237,121 @@ function toCollectedGame(
     ccu: detail.playing,
     visits: detail.visits,
     favorites: detail.favoritedCount,
+    upVotes: vote?.upVotes ?? discovery.chartGame.totalUpVotes ?? null,
+    downVotes: vote?.downVotes ?? discovery.chartGame.totalDownVotes ?? null,
+    isSponsored: discovery.chartGame.isSponsored ?? null,
     thumbnailUrl: thumbnails.get(universeId) ?? null,
     genre: detail.genre_l1 || detail.genre || null,
     chart: discovery.chart,
     rank: discovery.rank,
     source: discovery.source,
   };
+}
+
+async function collectSearchDiscoveries(
+  client: RobloxClient,
+  discoveries: Discovery[],
+  errors: CollectionError[],
+  runKey: string,
+  startedAt: Date,
+): Promise<void> {
+  const source = "roblox-search";
+  const keywords = await getCollectionSearchKeywords(COLLECTION_DISCOVERY_CONFIG.maximumSearchKeywords);
+  if (!keywords.length) return;
+  await recordSourceRun({ runKey, job: "collect", source, status: "running", startedAt });
+  let items = 0;
+  for (const keyword of keywords) {
+    try {
+      const games = (await client.searchGames(keyword)).slice(0, COLLECTION_DISCOVERY_CONFIG.searchResultsPerKeyword);
+      addGameDiscoveries(discoveries, games, `Search: ${keyword}`, source);
+      items += games.length;
+    } catch (error) {
+      errors.push({ source, message: `${keyword}: ${errorMessage(error)}` });
+    }
+  }
+  await recordSourceRun({
+    runKey,
+    job: "collect",
+    source,
+    status: errors.some((error) => error.source === source) ? "partial" : "success",
+    items,
+    startedAt,
+    finishedAt: new Date(),
+    error: errors.find((error) => error.source === source)?.message,
+  });
+}
+
+async function collectRecommendationDiscoveries(
+  client: RobloxClient,
+  discoveries: Discovery[],
+  errors: CollectionError[],
+  runKey: string,
+  startedAt: Date,
+): Promise<void> {
+  const source = "roblox-recommendations";
+  const seeds = await getRecommendationSeedIds(COLLECTION_DISCOVERY_CONFIG.maximumRecommendationSeeds);
+  if (!seeds.length) return;
+  await recordSourceRun({ runKey, job: "collect", source, status: "running", startedAt });
+  let items = 0;
+  for (const seed of seeds) {
+    try {
+      const games = await client.getRecommendations(seed, COLLECTION_DISCOVERY_CONFIG.recommendationsPerSeed);
+      addGameDiscoveries(discoveries, games, `Recommendations from ${seed}`, source);
+      items += games.length;
+    } catch (error) {
+      errors.push({ source, message: `${seed}: ${errorMessage(error)}` });
+    }
+  }
+  await recordSourceRun({
+    runKey,
+    job: "collect",
+    source,
+    status: errors.some((error) => error.source === source) ? "partial" : "success",
+    items,
+    startedAt,
+    finishedAt: new Date(),
+    error: errors.find((error) => error.source === source)?.message,
+  });
+}
+
+function addGameDiscoveries(
+  target: Discovery[],
+  games: RobloxChartGame[],
+  chart: string,
+  source: string,
+): void {
+  games.forEach((chartGame, index) => target.push({ chart, source, rank: index + 1, chartGame }));
+}
+
+async function fetchChunks<T>(
+  items: string[],
+  chunkSize: number,
+  concurrency: number,
+  fetcher: (chunk: string[]) => Promise<T[]>,
+  source: string,
+  errors: CollectionError[],
+  minimumDelayMs = 0,
+): Promise<T[][]> {
+  const chunks = Array.from({ length: Math.ceil(items.length / chunkSize) }, (_, index) =>
+    items.slice(index * chunkSize, (index + 1) * chunkSize),
+  );
+  const fetchResilientChunk = async (chunk: string[], splitDepth = 0): Promise<T[]> => {
+    try {
+      return await fetcher(chunk);
+    } catch (error) {
+      if (chunk.length > 1 && splitDepth < 2) {
+        const midpoint = Math.ceil(chunk.length / 2);
+        const left = await fetchResilientChunk(chunk.slice(0, midpoint), splitDepth + 1);
+        const right = await fetchResilientChunk(chunk.slice(midpoint), splitDepth + 1);
+        return [...left, ...right];
+      }
+      errors.push({ source, message: `${chunk[0]}…${chunk.at(-1)}: ${errorMessage(error)}` });
+      return [];
+    } finally {
+      if (minimumDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, minimumDelayMs));
+    }
+  };
+  return mapWithConcurrency(chunks, concurrency, (chunk) => fetchResilientChunk(chunk));
 }
 
 async function mapWithConcurrency<T, R>(
