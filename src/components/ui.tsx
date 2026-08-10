@@ -3,6 +3,7 @@ import { Clock3 } from "lucide-react";
 import Image from "next/image";
 import { STAGE_LABELS } from "@/lib/config";
 import type { GameSnapshotPoint, TrendStage } from "@/lib/types";
+import { InteractiveAreaChart } from "./InteractiveAreaChart";
 
 export function StageBadge({ stage }: { stage: TrendStage }) {
   return <span className={`badge ${stage}`}>{STAGE_LABELS[stage]}</span>;
@@ -36,20 +37,21 @@ export function Sparkline({ points, color = "var(--accent)", width = 110, height
   return <svg className="sparkline" width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Historical trend"><path d={path} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 }
 
-export function AreaChart({ points, value, color = "var(--accent)" }: { points: GameSnapshotPoint[]; value: keyof Pick<GameSnapshotPoint, "ccu" | "visits" | "favorites" | "rank">; color?: string }) {
-  const values = points.map((point) => Number(point[value] ?? 0));
-  if (!values.length) return <div className="empty">No history collected yet.</div>;
-  const width = 760;
-  const height = 210;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const range = max - min || 1;
-  const coords = values.map((item, index) => ({ x: (index / Math.max(1, values.length - 1)) * width, y: height - 12 - ((item - min) / range) * (height - 28) }));
-  const line = coords.map((point, index) => `${index ? "L" : "M"}${point.x},${point.y}`).join(" ");
-  const area = `${line} L${width},${height} L0,${height} Z`;
-  const first = points[0]?.collectedAt;
-  const last = points.at(-1)?.collectedAt;
-  return <div><svg className="area-chart" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label={`${String(value)} history`}><defs><linearGradient id={`fill-${String(value)}`} x1="0" x2="0" y1="0" y2="1"><stop offset="0" stopColor={color} stopOpacity=".3" /><stop offset="1" stopColor={color} stopOpacity="0" /></linearGradient></defs><path d={area} fill={`url(#fill-${String(value)})`} /><path d={line} fill="none" stroke={color} strokeWidth="3" vectorEffect="non-scaling-stroke" /></svg><div className="axis-labels"><span>{first ? formatDate(first) : ""}</span><span>{formatCompact(max)}</span><span>{last ? formatDate(last) : ""}</span></div></div>;
+export function AreaChart({ points, value, color = "var(--accent)", yAxisLabel }: { points: GameSnapshotPoint[]; value: keyof Pick<GameSnapshotPoint, "ccu" | "visits" | "favorites" | "rank">; color?: string; yAxisLabel?: string }) {
+  const labels = {
+    ccu: "Concurrent players",
+    visits: "Total visits",
+    favorites: "Total favorites",
+    rank: "Chart rank",
+  };
+  const data = points.flatMap((point) => {
+    const item = point[value];
+    if (item === null || item === undefined || !Number.isFinite(Number(item))) return [];
+    return [{ timestamp: point.collectedAt.toISOString(), value: Number(item) }];
+  });
+  if (!data.length) return <div className="empty">No history collected yet.</div>;
+  const label = yAxisLabel ?? labels[value];
+  return <InteractiveAreaChart data={data} color={color} valueLabel={label} yAxisLabel={label} rankIsBetter={value === "rank"} />;
 }
 
 export function MetricCard({ label, value, detail, tone = "accent" }: { label: string; value: string; detail: string; tone?: "accent" | "blue" | "purple" | "orange" }) {
