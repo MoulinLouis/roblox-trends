@@ -1,0 +1,40 @@
+name: Analyze and report
+
+on:
+  schedule:
+    - cron: "20 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: roblox-trend-daily
+  cancel-in-progress: false
+
+jobs:
+  analyze-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.2
+          cache: npm
+      - run: npm ci
+      - name: Verify persistent database configuration
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "DATABASE_URL secret is required for scheduled analysis."
+            exit 1
+          fi
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - run: npm run analyze
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - run: npm run report
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      - run: npm run maintenance
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}

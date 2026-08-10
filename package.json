@@ -1,0 +1,48 @@
+{
+  "name": "roblox-trend-radar",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "collect": "tsx scripts/collect.ts",
+    "analyze": "tsx scripts/analyze.ts",
+    "brief": "tsx scripts/brief.ts",
+    "report": "tsx scripts/report.ts",
+    "maintenance": "tsx scripts/maintenance.ts",
+    "cron:install": "bash scripts/manage-local-cron.sh install",
+    "cron:status": "bash scripts/manage-local-cron.sh status",
+    "cron:remove": "bash scripts/manage-local-cron.sh remove",
+    "validate": "npm run lint && npm run typecheck && npm run test && npm run build"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.4",
+    "drizzle-orm": "^0.45.2",
+    "lucide-react": "^1.30.0",
+    "next": "^16.3.0",
+    "pg": "^8.23.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@types/pg": "^8.21.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "drizzle-kit": "^0.31.10",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.3.0",
+    "tsx": "^4.23.11",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  }
+}

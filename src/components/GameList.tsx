@@ -1,0 +1,11 @@
+import Link from "next/link";
+import type { GameDatasetItem } from "@/db/repository";
+import { formatCompact, formatPercent, GameThumbnail, ScoreRing, Sparkline, TagList } from "./ui";
+
+export function GameList({ items, compact = false }: { items: GameDatasetItem[]; compact?: boolean }) {
+  if (!items.length) return <div className="empty">No games match this signal yet.</div>;
+  if (compact) {
+    return <div className="list">{items.map((item) => <Link className="list-row" href={`/games/${item.game.universeId}`} key={item.game.universeId}><div className="game-cell"><GameThumbnail name={item.game.normalizedTitle} url={item.game.thumbnailUrl} /><div><strong>{item.game.normalizedTitle}</strong><span>{item.game.creatorName} · {formatCompact(item.snapshots.at(-1)?.ccu ?? 0)} CCU</span></div></div><div style={{ textAlign: "right" }}><strong className="positive">{formatPercent(item.analysis?.metrics.growth24h ?? 0)}</strong><span className="trend-meta">24h</span></div></Link>)}</div>;
+  }
+  return <div className="table-scroll"><table><thead><tr><th>Game</th><th>CCU</th><th>24h growth</th><th>24h gain</th><th>Age</th><th>Rank</th><th>Momentum</th><th>Tags</th><th>History</th></tr></thead><tbody>{items.map((item) => { const point = item.snapshots.at(-1); const metrics = item.analysis?.metrics; return <tr key={item.game.universeId}><td><Link className="game-cell" href={`/games/${item.game.universeId}`}><GameThumbnail name={item.game.normalizedTitle} url={item.game.thumbnailUrl} /><div><strong>{item.game.normalizedTitle}</strong><span>{item.game.creatorName}</span></div></Link></td><td><strong>{formatCompact(point?.ccu ?? 0)}</strong></td><td className={(metrics?.growth24h ?? 0) >= 0 ? "positive" : "negative"}>{formatPercent(metrics?.growth24h ?? 0)}</td><td>{(metrics?.gain24h ?? 0) > 0 ? "+" : ""}{formatCompact(metrics?.gain24h ?? 0)}</td><td>{Math.round(metrics?.ageDays ?? 0)}d</td><td>{point?.rank ? `#${point.rank}` : "—"}</td><td><ScoreRing score={item.analysis?.momentumScore ?? 0} /></td><td><TagList tags={item.tags} limit={3} /></td><td><Sparkline points={item.snapshots.slice(-24).map((snapshot) => snapshot.ccu)} /></td></tr>; })}</tbody></table></div>;
+}
