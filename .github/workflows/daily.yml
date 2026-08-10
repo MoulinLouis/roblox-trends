@@ -31,6 +31,18 @@ jobs:
       - run: npm run analyze
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - run: npm run brief
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - name: Upload agent decision brief
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-decision-brief
+          path: |
+            .data/reports/latest-agent-brief.md
+            .data/reports/latest-agent-brief.json
+          if-no-files-found: error
+          retention-days: 30
       - run: npm run report
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}

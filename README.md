@@ -115,7 +115,7 @@ Three GitHub Actions workflows are included:
 
 - `CI` runs linting, type checking, tests, and the production build on pushes and pull requests.
 - `Collect Roblox data` runs every 30 minutes at minutes 17 and 47.
-- `Analyze and report` runs daily at 05:20 UTC, sends the Discord report, then compacts old snapshots.
+- `Analyze and report` runs daily at 05:20 UTC, uploads the agent decision brief for 30 days, sends the Discord report, then compacts old snapshots.
 
 Every workflow supports manual dispatch. Scheduled workflows must receive a persistent `DATABASE_URL` repository secret; a runner-local PGlite database is intentionally not suitable because GitHub runners are ephemeral. Add `DISCORD_WEBHOOK_URL` as a secret for reports.
 
