@@ -117,6 +117,18 @@ export const IDEA_EVIDENCE_CONFIG = {
   strongNewVisits24h: 1_000_000,
   strongRankMovement24h: 20,
   maximumSupportingGames: 4,
+  durability: {
+    minimumHours: 72,
+    strongHours: 168,
+    dailyWindowToleranceHours: 3,
+    minimumPositiveDailyWindows: 2,
+    minimumDailyGain: 500,
+    minimumDailyGrowth: 5,
+    durableMaximumPeakDrawdown: 25,
+    fragilePeakDrawdown: 35,
+    fragileDailyReversal: -20,
+    eventMarkers: ["[upd", "[update", "event", "2x", "x2", "admin abuse"],
+  },
   evidenceWeights: {
     momentum: 25,
     freshness: 15,
@@ -127,7 +139,8 @@ export const IDEA_EVIDENCE_CONFIG = {
     persistence: 5,
   },
   recommendationWeights: {
-    algorithmEvidence: 45,
+    algorithmEvidence: 30,
+    durability: 15,
     proofBreadth: 15,
     trendOpportunity: 15,
     lowSaturation: 10,

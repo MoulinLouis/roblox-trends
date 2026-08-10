@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS } from "./config";
-import { calculateAlgorithmEvidence } from "./idea-evidence";
+import { calculateAlgorithmEvidence, calculateDurabilityAssessment } from "./idea-evidence";
 import { buildDeterministicRecommendations } from "./ideas";
 import type { GameDatasetItem } from "@/db/repository";
 import type { GameTag } from "./types";
@@ -70,7 +70,40 @@ describe("deterministic recommendations", () => {
     expect(titles).toEqual(expect.arrayContaining(["Catch 1 Billion Bugs", "Paint to Hide!"]));
     expect(recommendations.every(({ idea }) => idea.alternativeTitles.length >= 2)).toBe(true);
     expect(recommendations.every(({ idea }) => !/workshop/i.test(`${idea.workingTitle} ${idea.pitch}`))).toBe(true);
-    expect(recommendations.every(({ idea }) => idea.relevance.includes("algorithm-breakout gate"))).toBe(true);
+    expect(recommendations.every(({ idea }) => idea.relevance.includes("discovery-breakout gate"))).toBe(true);
+    expect(recommendations.every(({ idea }) => idea.relevance.includes("Durability is unverified"))).toBe(true);
+  });
+});
+
+describe("medium-term durability", () => {
+  it("keeps a one-day breakout explicitly unverified", () => {
+    const result = calculateDurabilityAssessment(durabilityPoints([7_000, 10_000]));
+
+    expect(result.durabilityStatus).toBe("unverified");
+    expect(result.observedDailyWindows).toBe(1);
+    expect(result.durabilityConfidence).toBeLessThan(60);
+  });
+
+  it("requires several positive daily windows and limited peak drawdown", () => {
+    const result = calculateDurabilityAssessment(durabilityPoints([4_000, 6_000, 8_000, 10_000]));
+
+    expect(result.durabilityStatus).toBe("durable");
+    expect(result.positiveDailyWindows).toBe(3);
+    expect(result.peakDrawdownPercent).toBe(0);
+  });
+
+  it("marks a sharp post-spike reversal as fragile", () => {
+    const result = calculateDurabilityAssessment(durabilityPoints([6_000, 7_000, 8_000, 5_000]));
+
+    expect(result.durabilityStatus).toBe("fragile");
+    expect(result.peakDrawdownPercent).toBeGreaterThanOrEqual(35);
+  });
+
+  it("flags promotional title markers as possible event risk", () => {
+    const result = calculateDurabilityAssessment(durabilityPoints([4_000, 6_000, 8_000, 10_000]), "[UPD] Example Game");
+
+    expect(result.eventRisk).toBe(true);
+    expect(result.durabilityWarnings.join(" ")).toMatch(/update|event/i);
   });
 });
 
@@ -126,4 +159,12 @@ function gameFixture(name: string, description: string, tags: GameTag[]): GameDa
       },
     },
   };
+}
+
+function durabilityPoints(ccuByDay: number[]) {
+  const start = new Date("2026-08-07T10:00:00.000Z");
+  return ccuByDay.map((ccu, index) => ({
+    collectedAt: new Date(start.getTime() + index * 24 * 3_600_000),
+    ccu,
+  }));
 }

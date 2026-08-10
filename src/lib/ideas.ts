@@ -157,12 +157,24 @@ function rankBlueprint(
     .sort((a, b) => b.opportunityScore - a.opportunityScore)
     .slice(0, 4);
   const strongestEvidence = average(evidence.slice(0, 2).map((candidate) => candidate.evidence.evidenceScore));
+  const durabilityEvidence = average(
+    evidence.slice(0, 2).map((candidate) => {
+      const statusAdjustment = candidate.evidence.durabilityStatus === "durable"
+        ? 10
+        : candidate.evidence.durabilityStatus === "fragile"
+          ? -25
+          : 0;
+      const eventAdjustment = candidate.evidence.eventRisk ? -10 : 0;
+      return Math.max(0, Math.min(100, candidate.evidence.durabilityConfidence + statusAdjustment + eventAdjustment));
+    }),
+  );
   const proofBreadth = Math.min(100, (evidence.length / 3) * 100);
   const trendOpportunity = trends.length ? average(trends.map((trend) => trend.opportunityScore)) : 40;
   const lowSaturation = trends.length ? 100 - average(trends.map((trend) => trend.saturationScore)) : 50;
   const weights = IDEA_EVIDENCE_CONFIG.recommendationWeights;
   const weightedScore =
     strongestEvidence * weights.algorithmEvidence +
+    durabilityEvidence * weights.durability +
     proofBreadth * weights.proofBreadth +
     trendOpportunity * weights.trendOpportunity +
     lowSaturation * weights.lowSaturation +
@@ -304,11 +316,16 @@ function createBlueprintIdea(candidate: RankedBlueprint, settings: AppSettings):
 function buildRelevance(candidate: RankedBlueprint): string {
   const lead = candidate.evidence[0].evidence;
   const proofCount = candidate.evidence.length;
-  const rankEvidence = lead.rankMovement24h > 0 ? ` and improved ${lead.rankMovement24h} chart places` : " while remaining in a tracked chart";
+  const rankEvidence = lead.rankMovement24h > 0
+    ? ` and improved ${lead.rankMovement24h} chart place${lead.rankMovement24h === 1 ? "" : "s"}`
+    : " while remaining in a tracked chart";
   const trendEvidence = candidate.trends.length
     ? ` Related signals include ${candidate.trends.slice(0, 3).map((trend) => `${trend.label} (${trend.opportunityScore}/100 opportunity)`).join(", ")}.`
     : "";
-  return `${proofCount} recent supporting game${proofCount === 1 ? " passes" : "s pass"} the algorithm-breakout gate. ${lead.name} launched ${Math.round(lead.ageDays)} days ago, reached ${formatCount(lead.currentCcu)} CCU, gained ${formatCount(lead.gain24h)} players (${formatPercent(lead.growth24h)}) in a verified 24-hour window${rankEvidence}. This is evidence that Roblox discovery can surface the loop, not merely sustain an established game.${trendEvidence}`;
+  const durabilityEvidence = lead.durabilityStatus === "durable"
+    ? `Durability is supported across ${lead.observedDailyWindows} daily windows with ${lead.positiveDailyWindows} positive windows and a ${lead.peakDrawdownPercent.toFixed(1)}% drawdown from peak.`
+    : `Durability is ${lead.durabilityStatus}: only ${Math.round(lead.historyHours)} hours are observed, with ${lead.observedDailyWindows} complete daily window${lead.observedDailyWindows === 1 ? "" : "s"}. Treat this as discovery evidence until at least 72 hours are verified.`;
+  return `${proofCount} recent supporting game${proofCount === 1 ? " passes" : "s pass"} the discovery-breakout gate. ${lead.name} launched ${Math.round(lead.ageDays)} days ago, reached ${formatCount(lead.currentCcu)} CCU, gained ${formatCount(lead.gain24h)} players (${formatPercent(lead.growth24h)}) in a verified 24-hour window${rankEvidence}. This shows that Roblox discovery can surface the loop, not that demand will persist. ${durabilityEvidence}${trendEvidence}`;
 }
 
 function reusableSystems(settings: AppSettings, conceptSystems: string[]): string[] {

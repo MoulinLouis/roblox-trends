@@ -12,6 +12,7 @@ import {
 } from "@/db/repository";
 import { protectedGrowth } from "./scoring";
 import { IDEA_EVIDENCE_CONFIG } from "./config";
+import { calculateDurabilityAssessment, type DurabilityAssessment } from "./idea-evidence";
 import type { AppSettings, GameSnapshotPoint, GameTag } from "./types";
 
 const HOUR = 60 * 60 * 1000;
@@ -59,6 +60,7 @@ interface GameEvidence {
   currentChart: string | null;
   snapshotCount: number;
   historyHours: number;
+  durability: DurabilityAssessment;
   tags: GameTag[];
   verifiedWindows: {
     oneHour: WindowChange | null;
@@ -373,6 +375,7 @@ function toGameEvidence(item: GameDatasetItem, settings: AppSettings): GameEvide
     currentChart: current?.chart ?? null,
     snapshotCount: item.snapshots.length,
     historyHours: first && current ? round((current.collectedAt.getTime() - first.collectedAt.getTime()) / HOUR, 1) : 0,
+    durability: calculateDurabilityAssessment(item.snapshots, item.game.name),
     tags: item.tags,
     verifiedWindows: {
       oneHour: calculateVerifiedWindow(item.snapshots, 1, settings),
@@ -575,9 +578,9 @@ export function renderAgentDecisionBrief(brief: AgentDecisionBrief): string {
     "",
     renderTrendTable(brief.combinations),
     "",
-    "## Recent games proving Roblox discovery",
+    "## Recent discovery breakouts and durability review",
     "",
-    "These games were released within 90 days and reached meaningful scale with a verified 24-hour gain. They demonstrate that Roblox discovery can currently surface a new game, not only revive an established title.",
+    "These games were released within 90 days and reached meaningful scale with a verified 24-hour gain. This demonstrates discovery, not medium-term demand. Durability requires at least 72 hours, several positive daily windows, limited drawdown from peak, and no sharp reversal; seven days provide strong confidence.",
     "",
     renderAlgorithmBreakoutTable(brief.recentAlgorithmBreakouts),
     "",
@@ -600,11 +603,11 @@ export function renderAgentDecisionBrief(brief: AgentDecisionBrief): string {
 function renderAlgorithmBreakoutTable(games: AgentDecisionBrief["recentAlgorithmBreakouts"]): string {
   if (!games.length) return "No recent game passes the complete algorithm-breakout evidence gate yet.";
   return [
-    "| Game | Released / age | CCU | 24h growth | Gain | New visits | Rank movement | Chart |",
-    "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
+    "| Game | Released / age | CCU | 24h growth | Gain | New visits | Rank movement | Durability | Event risk |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |",
     ...games.map(
       (game) =>
-        `| [${escapeCell(game.name)}](${game.url}) | ${game.createdAt.slice(0, 10)} / ${Math.round(game.ageDays)}d | ${formatNumber(game.currentCcu)} | ${formatPercent(game.evidence.growth)} | ${formatSigned(game.evidence.gain)} | ${formatSigned(game.evidence.visitsGain)} | ${game.evidence.rankImprovement > 0 ? `+${game.evidence.rankImprovement}` : "0"} | ${escapeCell(game.currentChart ?? "Unknown")} |`,
+        `| [${escapeCell(game.name)}](${game.url}) | ${game.createdAt.slice(0, 10)} / ${Math.round(game.ageDays)}d | ${formatNumber(game.currentCcu)} | ${formatPercent(game.evidence.growth)} | ${formatSigned(game.evidence.gain)} | ${formatSigned(game.evidence.visitsGain)} | ${game.evidence.rankImprovement > 0 ? `+${game.evidence.rankImprovement}` : "0"} | ${game.durability.durabilityStatus} · ${game.durability.durabilityConfidence}/100 · ${game.historyHours}h | ${game.durability.eventRisk ? "Possible" : "Not detected"} |`,
     ),
   ].join("\n");
 }
