@@ -27,12 +27,13 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
       });
       if (!response.ok) {
         const retryAfter = Number(response.headers.get("retry-after") ?? 0);
+        const rateLimitReset = Number(response.headers.get("x-ratelimit-reset") ?? 0);
         const error = new Error(`${response.status} ${response.statusText} for ${new URL(url).hostname}`);
         if (response.status !== 429 && response.status < 500) throw error;
         lastError = error;
         if (attempt < retries) {
           const fallbackDelay = response.status === 429 ? 5_000 * 2 ** attempt : 500 * 2 ** attempt;
-          await delay(Math.max(retryAfter * 1000, fallbackDelay));
+          await delay(Math.max(retryAfter * 1000, rateLimitReset * 1000, fallbackDelay));
         }
         continue;
       }
@@ -57,7 +58,7 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
 }
 
 function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, Math.min(milliseconds, 30_000)));
+  return new Promise((resolve) => setTimeout(resolve, Math.min(milliseconds, 60_000)));
 }
 
 export function clearResponseCache(): void {

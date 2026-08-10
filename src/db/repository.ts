@@ -101,112 +101,119 @@ export async function saveCollectedGames(
   const uniqueSnapshots = deduplicateCollection(collectedGames, bucketAt);
   const latestGames = new Map<string, CollectedGame>();
   for (const game of collectedGames) latestGames.set(game.universeId, game);
+  const latestItems = [...latestGames.values()];
+  const gameValues = latestItems.map((item) => ({
+    universeId: item.universeId,
+    rootPlaceId: item.rootPlaceId,
+    name: item.name,
+    normalizedTitle: normalizeTitle(item.name),
+    description: item.description,
+    creatorId: item.creatorId,
+    creatorName: item.creatorName,
+    creatorType: item.creatorType,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+    firstSeenAt: collectedAt,
+    lastSeenAt: collectedAt,
+    thumbnailUrl: item.thumbnailUrl,
+    genre: item.genre,
+  }));
+  const metadataValues = latestItems.map((item) => ({
+    universeId: item.universeId,
+    fingerprint: createHash("sha256")
+      .update(`${item.name}\u0000${item.description}\u0000${item.updatedAt.toISOString()}`)
+      .digest("hex"),
+    name: item.name,
+    normalizedTitle: normalizeTitle(item.name),
+    description: item.description,
+    gameUpdatedAt: item.updatedAt,
+    observedAt: collectedAt,
+  }));
+  const automaticTagValues = latestItems.flatMap((item) =>
+    classifyGame(item.name, item.description, appSettings.taxonomy).map((tag) => ({
+      universeId: item.universeId,
+      dimension: tag.dimension,
+      tag: tag.tag,
+      source: tag.source,
+    })),
+  );
+  const snapshotValues = uniqueSnapshots.map((item) => ({
+    universeId: item.universeId,
+    collectedAt,
+    bucketAt,
+    ccu: item.ccu,
+    visits: item.visits,
+    favorites: item.favorites,
+    upVotes: item.upVotes,
+    downVotes: item.downVotes,
+    isSponsored: item.isSponsored,
+    chart: item.chart,
+    rank: item.rank,
+    source: item.source,
+  }));
 
   await database.transaction(async (transaction) => {
-    for (const item of latestGames.values()) {
+    for (const values of chunked(gameValues, 250)) {
       await transaction
         .insert(games)
-        .values({
-          universeId: item.universeId,
-          rootPlaceId: item.rootPlaceId,
-          name: item.name,
-          normalizedTitle: normalizeTitle(item.name),
-          description: item.description,
-          creatorId: item.creatorId,
-          creatorName: item.creatorName,
-          creatorType: item.creatorType,
-          createdAt: item.createdAt,
-          updatedAt: item.updatedAt,
-          firstSeenAt: collectedAt,
-          lastSeenAt: collectedAt,
-          thumbnailUrl: item.thumbnailUrl,
-          genre: item.genre,
-        })
+        .values(values)
         .onConflictDoUpdate({
           target: games.universeId,
           set: {
-            rootPlaceId: item.rootPlaceId,
-            name: item.name,
-            normalizedTitle: normalizeTitle(item.name),
-            description: item.description,
-            creatorId: item.creatorId,
-            creatorName: item.creatorName,
-            creatorType: item.creatorType,
-            updatedAt: item.updatedAt,
-            lastSeenAt: collectedAt,
-            ...(item.thumbnailUrl ? { thumbnailUrl: item.thumbnailUrl } : {}),
-            genre: item.genre,
+            rootPlaceId: sql`excluded.root_place_id`,
+            name: sql`excluded.name`,
+            normalizedTitle: sql`excluded.normalized_title`,
+            description: sql`excluded.description`,
+            creatorId: sql`excluded.creator_id`,
+            creatorName: sql`excluded.creator_name`,
+            creatorType: sql`excluded.creator_type`,
+            updatedAt: sql`excluded.updated_at`,
+            lastSeenAt: sql`excluded.last_seen_at`,
+            thumbnailUrl: sql`coalesce(excluded.thumbnail_url, ${games.thumbnailUrl})`,
+            genre: sql`excluded.genre`,
           },
         });
-
-      const fingerprint = createHash("sha256")
-        .update(`${item.name}\u0000${item.description}\u0000${item.updatedAt.toISOString()}`)
-        .digest("hex");
+    }
+    for (const values of chunked(metadataValues, 500)) {
       await transaction
         .insert(gameMetadataHistory)
-        .values({
-          universeId: item.universeId,
-          fingerprint,
-          name: item.name,
-          normalizedTitle: normalizeTitle(item.name),
-          description: item.description,
-          gameUpdatedAt: item.updatedAt,
-          observedAt: collectedAt,
-        })
+        .values(values)
         .onConflictDoNothing();
-
-      const automaticTags = classifyGame(item.name, item.description, appSettings.taxonomy);
+    }
+    for (const universeIds of chunked(latestItems.map((item) => item.universeId), 500)) {
       await transaction
         .delete(gameTags)
-        .where(and(eq(gameTags.universeId, item.universeId), eq(gameTags.source, "automatic")));
-      if (automaticTags.length) {
-        await transaction
-          .insert(gameTags)
-          .values(
-            automaticTags.map((tag) => ({
-              universeId: item.universeId,
-              dimension: tag.dimension,
-              tag: tag.tag,
-              source: tag.source,
-            })),
-          )
-          .onConflictDoNothing();
-      }
+        .where(and(inArray(gameTags.universeId, universeIds), eq(gameTags.source, "automatic")));
     }
-
-    for (const item of uniqueSnapshots) {
+    for (const values of chunked(automaticTagValues, 500)) {
+      await transaction.insert(gameTags).values(values).onConflictDoNothing();
+    }
+    for (const values of chunked(snapshotValues, 250)) {
       await transaction
         .insert(snapshots)
-        .values({
-          universeId: item.universeId,
-          collectedAt,
-          bucketAt,
-          ccu: item.ccu,
-          visits: item.visits,
-          favorites: item.favorites,
-          upVotes: item.upVotes,
-          downVotes: item.downVotes,
-          isSponsored: item.isSponsored,
-          chart: item.chart,
-          rank: item.rank,
-          source: item.source,
-        })
+        .values(values)
         .onConflictDoUpdate({
           target: [snapshots.universeId, snapshots.bucketAt, snapshots.source, snapshots.chart],
           set: {
-            collectedAt,
-            ccu: item.ccu,
-            visits: item.visits,
-            favorites: item.favorites,
-            upVotes: item.upVotes,
-            downVotes: item.downVotes,
-            isSponsored: item.isSponsored,
-            rank: item.rank,
+            collectedAt: sql`excluded.collected_at`,
+            ccu: sql`excluded.ccu`,
+            visits: sql`excluded.visits`,
+            favorites: sql`excluded.favorites`,
+            upVotes: sql`excluded.up_votes`,
+            downVotes: sql`excluded.down_votes`,
+            isSponsored: sql`excluded.is_sponsored`,
+            rank: sql`excluded.rank`,
           },
         });
     }
   });
   return { games: latestGames.size, snapshots: uniqueSnapshots.length };
+}
+
+function chunked<T>(items: T[], size: number): T[][] {
+  return Array.from({ length: Math.ceil(items.length / size) }, (_, index) =>
+    items.slice(index * size, (index + 1) * size),
+  );
 }
 
 export async function replaceManualTags(universeId: string, tags: GameTag[]): Promise<void> {
