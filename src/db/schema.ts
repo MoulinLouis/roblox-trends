@@ -155,6 +155,8 @@ export const ideas = pgTable(
   {
     id: text("id").primaryKey(),
     workingTitle: text("working_title").notNull(),
+    alternativeTitles: jsonb("alternative_titles").$type<string[]>().notNull().default([]),
+    recommendationScore: integer("recommendation_score").notNull().default(0),
     pitch: text("pitch").notNull(),
     coreLoop: text("core_loop").notNull(),
     firstTwentySeconds: text("first_twenty_seconds").notNull(),

@@ -312,7 +312,7 @@ export async function getTrendLinks(): Promise<Array<typeof trendGames.$inferSel
 }
 
 export async function getIdeas(): Promise<IdeaRow[]> {
-  return getDatabase().select().from(ideas).orderBy(desc(ideas.createdAt));
+  return getDatabase().select().from(ideas).orderBy(desc(ideas.recommendationScore), desc(ideas.createdAt));
 }
 
 export async function updateIdea(

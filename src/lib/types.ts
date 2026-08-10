@@ -156,6 +156,8 @@ export interface CollectionError {
 
 export interface GeneratedIdea {
   workingTitle: string;
+  alternativeTitles: string[];
+  recommendationScore: number;
   pitch: string;
   coreLoop: string;
   firstTwentySeconds: string;

@@ -12,7 +12,7 @@ The application is one Next.js 16 service with one PostgreSQL-compatible databas
 - Rising title words and two-word phrases, promoted only when several independent creators adopt them and recent frequency exceeds the older baseline.
 - Trend breadth, creator diversity, combined demand, new entrants, growing share, and leader concentration.
 - Separate momentum, trend, saturation, and solo-developer opportunity scores with visible breakdowns.
-- Deterministic, data-supported ideas that work without a paid API; optional OpenAI structured generation.
+- Evidence-ranked ideas with title alternatives and recent-game breakout proof; deterministic generation works without a paid API, with optional OpenAI structured generation.
 
 ## Clean installation with live data
 

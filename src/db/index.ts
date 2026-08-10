@@ -6,6 +6,7 @@ import { Pool } from "pg";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import * as schema from "./schema";
+import { normalizePostgresConnectionUrl } from "./connection-url";
 
 const environmentNamespace = nextEnvNamespace as unknown as {
   default?: typeof import("@next/env");
@@ -25,7 +26,7 @@ export function getDatabase(): AppDatabase {
 
   const databaseUrl = process.env.DATABASE_URL?.trim();
   if (databaseUrl) {
-    pgPool = new Pool({ connectionString: databaseUrl, max: 5 });
+    pgPool = new Pool({ connectionString: normalizePostgresConnectionUrl(databaseUrl), max: 5 });
     database = drizzlePg(pgPool, { schema }) as unknown as AppDatabase;
   } else {
     const dataDirectory = process.env.PGLITE_DATA_DIR || ".data/roblox-trends";

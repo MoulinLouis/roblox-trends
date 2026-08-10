@@ -2,6 +2,7 @@ import { access } from "node:fs/promises";
 import { resolve } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { Pool, type PoolClient } from "pg";
+import { normalizePostgresConnectionUrl } from "../src/db/connection-url";
 import { logger } from "@/lib/logger";
 
 type DatabaseRow = Record<string, unknown>;
@@ -161,7 +162,7 @@ const sourceDirectory = resolve(process.env.PGLITE_DATA_DIR?.trim() || ".data/ro
 await access(sourceDirectory);
 
 const source = new PGlite(sourceDirectory);
-const target = new Pool({ connectionString: databaseUrl, max: 2 });
+const target = new Pool({ connectionString: normalizePostgresConnectionUrl(databaseUrl), max: 2 });
 const client = await target.connect();
 
 try {

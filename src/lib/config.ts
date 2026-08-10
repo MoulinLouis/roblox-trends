@@ -104,3 +104,33 @@ export const STAGE_LABELS = {
   saturated: "Saturated",
   declining: "Declining",
 } as const;
+
+export const IDEA_EVIDENCE_CONFIG = {
+  recentGameMaxAgeDays: 90,
+  minimumHistoryHours: 20,
+  minimumCurrentCcu: 5_000,
+  minimumGain24h: 1_000,
+  minimumGrowth24h: 15,
+  minimumNewVisits24h: 100_000,
+  strongGrowth24h: 100,
+  strongGain24h: 6_000,
+  strongNewVisits24h: 1_000_000,
+  strongRankMovement24h: 20,
+  maximumSupportingGames: 4,
+  evidenceWeights: {
+    momentum: 25,
+    freshness: 15,
+    growth24h: 20,
+    gain24h: 15,
+    newVisits24h: 10,
+    rankMovement24h: 10,
+    persistence: 5,
+  },
+  recommendationWeights: {
+    algorithmEvidence: 45,
+    proofBreadth: 15,
+    trendOpportunity: 15,
+    lowSaturation: 10,
+    soloFit: 15,
+  },
+} as const;
