@@ -56,6 +56,14 @@ The commands are intentionally separate:
 
 The default collection bucket is 30 minutes. A retry inside the same bucket updates the matching `(universe, bucket, source, chart)` row instead of creating a duplicate.
 
+To merge an existing local PGlite history into a configured production PostgreSQL database, run:
+
+```bash
+DATABASE_URL="postgresql://..." npm run db:import-local
+```
+
+The import copies only live game metadata, tags, snapshots, daily aggregates, and source-run history. It is idempotent and does not copy derived scores, trends, ideas, settings, alert state, or secrets. Run `npm run analyze` against the production database after the import.
+
 ## Local WSL scheduler
 
 Install the managed user crontab block:
