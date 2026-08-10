@@ -1,4 +1,4 @@
-import { eq, notInArray } from "drizzle-orm";
+import { inArray, notInArray, sql } from "drizzle-orm";
 import { getDatabase } from "@/db";
 import { loadGameDataset, type GameDatasetItem } from "@/db/repository";
 import { gameAnalyses, trendGames, trendHistory, trends } from "@/db/schema";
@@ -27,6 +27,7 @@ export async function analyzeTrends(settings: AppSettings, now = new Date()): Pr
   const database = getDatabase();
   const dataset = await loadGameDataset();
   const analysisByGame = new Map<string, ReturnType<typeof calculateGameMetrics>>();
+  const gameAnalysisValues: Array<typeof gameAnalyses.$inferInsert> = [];
   for (const item of dataset) {
     const recentMetadataCutoff = now.getTime() - 7 * 24 * 60 * 60 * 1000;
     const recentTitles = item.metadataHistory
@@ -39,21 +40,18 @@ export async function analyzeTrends(settings: AppSettings, now = new Date()): Pr
       metadataEventRisk,
     });
     analysisByGame.set(item.game.universeId, metrics);
-    await database
-      .insert(gameAnalyses)
-      .values({
-        universeId: item.game.universeId,
-        metrics,
-        momentumScore: metrics.momentum.score,
-        analyzedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: gameAnalyses.universeId,
-        set: { metrics, momentumScore: metrics.momentum.score, analyzedAt: now },
-      });
+    gameAnalysisValues.push({
+      universeId: item.game.universeId,
+      metrics,
+      momentumScore: metrics.momentum.score,
+      analyzedAt: now,
+    });
   }
 
   const candidates = buildTrendCandidates(dataset, analysisByGame, settings, now);
+  const trendValues: Array<typeof trends.$inferInsert> = [];
+  const trendGameValues: Array<typeof trendGames.$inferInsert> = [];
+  const trendHistoryValues: Array<typeof trendHistory.$inferInsert> = [];
   for (const candidate of candidates) {
     const metrics = calculateTrendMetricsAt(candidate.games, now, settings);
     const stage = calculateTrendStage(metrics, settings);
@@ -66,78 +64,100 @@ export async function analyzeTrends(settings: AppSettings, now = new Date()): Pr
       settings.developerProfile,
       settings,
     );
-    await database
-      .insert(trends)
-      .values({
-        id: candidate.id,
-        label: candidate.label,
-        tags: candidate.tags,
-        stage,
-        trendScore,
-        saturationScore,
-        opportunityScore: opportunity.score,
-        metrics,
-        scoreBreakdown: opportunity.breakdown,
-        saturationExplanation: saturationExplanation(metrics, saturationScore),
-        analyzedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: trends.id,
-        set: {
-          label: candidate.label,
-          tags: candidate.tags,
-          stage,
-          trendScore,
-          saturationScore,
-          opportunityScore: opportunity.score,
-          metrics,
-          scoreBreakdown: opportunity.breakdown,
-          saturationExplanation: saturationExplanation(metrics, saturationScore),
-          analyzedAt: now,
-        },
-      });
-    await database.delete(trendGames).where(eq(trendGames.trendId, candidate.id));
-    if (candidate.games.length) {
-      await database.insert(trendGames).values(
-        candidate.games.map((item) => ({ trendId: candidate.id, universeId: item.game.universeId })),
-      );
-    }
+    trendValues.push({
+      id: candidate.id,
+      label: candidate.label,
+      tags: candidate.tags,
+      stage,
+      trendScore,
+      saturationScore,
+      opportunityScore: opportunity.score,
+      metrics,
+      scoreBreakdown: opportunity.breakdown,
+      saturationExplanation: saturationExplanation(metrics, saturationScore),
+      analyzedAt: now,
+    });
+    trendGameValues.push(
+      ...candidate.games.map((item) => ({ trendId: candidate.id, universeId: item.game.universeId })),
+    );
     for (let daysAgo = 7; daysAgo >= 0; daysAgo -= 1) {
       const dayAt = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000);
       dayAt.setUTCHours(0, 0, 0, 0);
       const historicalMetrics = calculateTrendMetricsAt(candidate.games, dayAt, settings);
       const historicalStage = calculateTrendStage(historicalMetrics, settings);
-      await database
-        .insert(trendHistory)
-        .values({
-          trendId: candidate.id,
-          dayAt,
-          stage: historicalStage,
-          trendScore: calculateTrendScore(historicalMetrics),
-          saturationScore: calculateSaturation(historicalMetrics),
-          combinedCcu: historicalMetrics.combinedCcu,
-          gameCount: historicalMetrics.gameCount,
-        })
-        .onConflictDoUpdate({
-          target: [trendHistory.trendId, trendHistory.dayAt],
-          set: {
-            stage: historicalStage,
-            trendScore: calculateTrendScore(historicalMetrics),
-            saturationScore: calculateSaturation(historicalMetrics),
-            combinedCcu: historicalMetrics.combinedCcu,
-            gameCount: historicalMetrics.gameCount,
-          },
-        });
+      trendHistoryValues.push({
+        trendId: candidate.id,
+        dayAt,
+        stage: historicalStage,
+        trendScore: calculateTrendScore(historicalMetrics),
+        saturationScore: calculateSaturation(historicalMetrics),
+        combinedCcu: historicalMetrics.combinedCcu,
+        gameCount: historicalMetrics.gameCount,
+      });
     }
   }
-  if (candidates.length) {
-    await database.delete(trends).where(notInArray(trends.id, candidates.map((candidate) => candidate.id)));
-  } else {
-    await database.delete(trends);
-  }
+  const candidateIds = candidates.map((candidate) => candidate.id);
+  await database.transaction(async (transaction) => {
+    for (const values of chunked(gameAnalysisValues, 250)) {
+      await transaction.insert(gameAnalyses).values(values).onConflictDoUpdate({
+        target: gameAnalyses.universeId,
+        set: {
+          metrics: sql`excluded.metrics`,
+          momentumScore: sql`excluded.momentum_score`,
+          analyzedAt: sql`excluded.analyzed_at`,
+        },
+      });
+    }
+    for (const values of chunked(trendValues, 200)) {
+      await transaction.insert(trends).values(values).onConflictDoUpdate({
+        target: trends.id,
+        set: {
+          label: sql`excluded.label`,
+          tags: sql`excluded.tags`,
+          stage: sql`excluded.stage`,
+          trendScore: sql`excluded.trend_score`,
+          saturationScore: sql`excluded.saturation_score`,
+          opportunityScore: sql`excluded.opportunity_score`,
+          metrics: sql`excluded.metrics`,
+          scoreBreakdown: sql`excluded.score_breakdown`,
+          saturationExplanation: sql`excluded.saturation_explanation`,
+          analyzedAt: sql`excluded.analyzed_at`,
+        },
+      });
+    }
+    if (candidateIds.length) {
+      await transaction.delete(trends).where(notInArray(trends.id, candidateIds));
+      for (const ids of chunked(candidateIds, 500)) {
+        await transaction.delete(trendGames).where(inArray(trendGames.trendId, ids));
+      }
+    } else {
+      await transaction.delete(trends);
+    }
+    for (const values of chunked(trendGameValues, 500)) {
+      await transaction.insert(trendGames).values(values).onConflictDoNothing();
+    }
+    for (const values of chunked(trendHistoryValues, 250)) {
+      await transaction.insert(trendHistory).values(values).onConflictDoUpdate({
+        target: [trendHistory.trendId, trendHistory.dayAt],
+        set: {
+          stage: sql`excluded.stage`,
+          trendScore: sql`excluded.trend_score`,
+          saturationScore: sql`excluded.saturation_score`,
+          combinedCcu: sql`excluded.combined_ccu`,
+          gameCount: sql`excluded.game_count`,
+        },
+      });
+    }
+  });
   await generateDeterministicIdeas(settings);
   logger.info("Analysis completed", { games: dataset.length, trends: candidates.length });
   return { games: dataset.length, trends: candidates.length };
+}
+
+function chunked<T>(items: T[], size: number): T[][] {
+  return Array.from({ length: Math.ceil(items.length / size) }, (_, index) =>
+    items.slice(index * size, (index + 1) * size),
+  );
 }
 
 function buildTrendCandidates(
