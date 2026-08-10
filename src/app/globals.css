@@ -212,6 +212,9 @@ tbody tr:hover { background: rgba(255,255,255,.018); }
 .rating button.active { color: var(--yellow); }
 .saved-card { border-color: rgba(132,240,193,.38); }
 .rejected-card { opacity: .54; }
+.algorithm-badge { display: block; width: fit-content; margin-top: 5px; padding: 3px 6px; border: 1px solid rgba(132,240,193,.25); border-radius: 999px; color: var(--accent) !important; background: rgba(132,240,193,.05); font-size: 9px !important; font-weight: 750; }
+.algorithm-proof { margin-bottom: 18px; border-color: rgba(132,240,193,.25); background: rgba(132,240,193,.05); }
+.algorithm-proof strong { color: var(--accent); }
 
 .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .settings-section { padding: 20px; }

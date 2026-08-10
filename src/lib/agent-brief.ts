@@ -11,6 +11,7 @@ import {
   type TrendRow,
 } from "@/db/repository";
 import { protectedGrowth } from "./scoring";
+import { IDEA_EVIDENCE_CONFIG } from "./config";
 import type { AppSettings, GameSnapshotPoint, GameTag } from "./types";
 
 const HOUR = 60 * 60 * 1000;
@@ -117,6 +118,7 @@ export interface AgentDecisionBrief {
   titlePhraseSignals: TrendEvidence[];
   combinations: TrendEvidence[];
   saturationWatch: TrendEvidence[];
+  recentAlgorithmBreakouts: Array<GameEvidence & { evidence: WindowChange }>;
   verifiedMovers: Array<
     GameEvidence & { evidenceWindowHours: number; marketRelativeGrowth: number; evidence: WindowChange }
   >;
@@ -317,6 +319,7 @@ function buildAgentDecisionBrief(
       )
       .sort((a, b) => b.saturationScore - a.saturationScore)
       .slice(0, 12),
+    recentAlgorithmBreakouts: buildRecentAlgorithmBreakouts([...gameEvidence.values()]),
     verifiedMovers: buildVerifiedMovers([...gameEvidence.values()], settings, marketWindows),
     humanReviewQuestions: [
       "Can a child understand the core action and objective from one thumbnail and the first ten seconds?",
@@ -326,6 +329,29 @@ function buildAgentDecisionBrief(
       "Which evidence would falsify the recommendation during a one-room or one-loop vertical-slice test?",
     ],
   };
+}
+
+function buildRecentAlgorithmBreakouts(
+  games: GameEvidence[],
+): AgentDecisionBrief["recentAlgorithmBreakouts"] {
+  const config = IDEA_EVIDENCE_CONFIG;
+  return games
+    .map((game) => {
+      const evidence = game.verifiedWindows.twentyFourHours;
+      return evidence ? { ...game, evidence } : null;
+    })
+    .filter((game): game is GameEvidence & { evidence: WindowChange } => Boolean(game))
+    .filter(
+      (game) =>
+        game.ageDays <= config.recentGameMaxAgeDays &&
+        game.historyHours >= config.minimumHistoryHours &&
+        game.currentCcu >= config.minimumCurrentCcu &&
+        game.evidence.gain >= config.minimumGain24h &&
+        game.evidence.growth >= config.minimumGrowth24h &&
+        game.evidence.visitsGain >= config.minimumNewVisits24h,
+    )
+    .sort((a, b) => b.evidence.growth - a.evidence.growth || b.evidence.gain - a.evidence.gain)
+    .slice(0, 20);
 }
 
 function toGameEvidence(item: GameDatasetItem, settings: AppSettings): GameEvidence {
@@ -549,6 +575,12 @@ export function renderAgentDecisionBrief(brief: AgentDecisionBrief): string {
     "",
     renderTrendTable(brief.combinations),
     "",
+    "## Recent games proving Roblox discovery",
+    "",
+    "These games were released within 90 days and reached meaningful scale with a verified 24-hour gain. They demonstrate that Roblox discovery can currently surface a new game, not only revive an established title.",
+    "",
+    renderAlgorithmBreakoutTable(brief.recentAlgorithmBreakouts),
+    "",
     "## Verified movers",
     "",
     renderMoverTable(brief.verifiedMovers),
@@ -563,6 +595,18 @@ export function renderAgentDecisionBrief(brief: AgentDecisionBrief): string {
     "",
   ];
   return `${lines.join("\n")}\n`;
+}
+
+function renderAlgorithmBreakoutTable(games: AgentDecisionBrief["recentAlgorithmBreakouts"]): string {
+  if (!games.length) return "No recent game passes the complete algorithm-breakout evidence gate yet.";
+  return [
+    "| Game | Released / age | CCU | 24h growth | Gain | New visits | Rank movement | Chart |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
+    ...games.map(
+      (game) =>
+        `| [${escapeCell(game.name)}](${game.url}) | ${game.createdAt.slice(0, 10)} / ${Math.round(game.ageDays)}d | ${formatNumber(game.currentCcu)} | ${formatPercent(game.evidence.growth)} | ${formatSigned(game.evidence.gain)} | ${formatSigned(game.evidence.visitsGain)} | ${game.evidence.rankImprovement > 0 ? `+${game.evidence.rankImprovement}` : "0"} | ${escapeCell(game.currentChart ?? "Unknown")} |`,
+    ),
+  ].join("\n");
 }
 
 function renderTrendTable(trends: TrendEvidence[]): string {

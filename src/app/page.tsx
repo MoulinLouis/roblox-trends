@@ -3,17 +3,25 @@ import Link from "next/link";
 import { GameList } from "@/components/GameList";
 import { TrendCard } from "@/components/TrendCard";
 import { Freshness, formatCompact, MetricCard, PageHeading } from "@/components/ui";
+import { buildIdeaGameEvidence } from "@/lib/idea-evidence";
 import { latestCollectionTime, loadApplicationData } from "@/lib/view-data";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const { settings, dataset, trends, ideas, sourceRuns } = await loadApplicationData();
+  const { dataset, trends, ideas, sourceRuns } = await loadApplicationData();
   const latest = latestCollectionTime(dataset);
   const errors = sourceRuns.filter((run) => run.status === "error" || run.status === "partial");
+  const evidenceByGame = new Map(
+    dataset.map((item) => [item.game.universeId, buildIdeaGameEvidence(item)]),
+  );
   const breakouts = dataset
-    .filter((item) => (item.analysis?.momentumScore ?? 0) >= settings.thresholds.breakoutMomentum)
-    .sort((a, b) => (b.analysis?.momentumScore ?? 0) - (a.analysis?.momentumScore ?? 0));
+    .filter((item) => evidenceByGame.get(item.game.universeId)?.algorithmProof)
+    .sort(
+      (a, b) =>
+        (evidenceByGame.get(b.game.universeId)?.evidenceScore ?? 0) -
+        (evidenceByGame.get(a.game.universeId)?.evidenceScore ?? 0),
+    );
   const emerging = trends.filter((trend) => trend.stage === "emerging" || trend.stage === "spark").slice(0, 3);
   const expanding = trends.filter((trend) => trend.stage === "expanding" || trend.stage === "copy_wave").slice(0, 3);
   const saturated = trends.filter((trend) => trend.stage === "saturated").slice(0, 3);
@@ -23,14 +31,14 @@ export default async function DashboardPage() {
   return <div className="content"><PageHeading eyebrow="Daily command center" title="Catch the wave before the clones" subtitle="Momentum combines growth velocity, acceleration, real player gains, chart movement, persistence, and freshness—not just raw popularity." action={<Freshness date={latest} errors={errors.length} />} />
     <div className="grid grid-4">
       <MetricCard label="Tracked demand" value={formatCompact(combinedCcu)} detail={`Across ${dataset.length} monitored games`} />
-      <MetricCard label="Breakout games" value={String(breakouts.length)} detail={`Momentum ≥ ${settings.thresholds.breakoutMomentum}`} tone="blue" />
+      <MetricCard label="Recent algorithm breakouts" value={String(breakouts.length)} detail="Recent games with verified 24h scale" tone="blue" />
       <MetricCard label="Expanding signals" value={String(expanding.length)} detail="Multi-creator growth" tone="purple" />
       <MetricCard label="Saturated formats" value={String(saturated.length)} detail="Supply is outpacing demand" tone="orange" />
     </div>
 
     <section className="section"><div className="section-heading"><h2>Highest-scoring opportunities</h2><Link href="/trends">Explore all trends <ArrowUpRight size={12} /></Link></div><div className="grid grid-4">{opportunities.map((trend) => <TrendCard trend={trend} key={trend.id} />)}</div></section>
 
-    <div className="dashboard-layout section"><div><div className="section-heading"><h2>Breakout games</h2><Link href="/games?sort=momentum">View games</Link></div><div className="card table-shell"><GameList items={breakouts.slice(0, 7)} compact /></div></div><div><div className="section-heading"><h2>Source health</h2><span className="trend-meta">Last 12 runs</span></div><div className="card card-pad">{errors.length ? <div className="list">{errors.slice(0, 4).map((run) => <div className="alert" key={`${run.runKey}-${run.source}`}><AlertTriangle size={16} /><div><strong>{run.source}</strong><br />{run.error || "Partial source response"}</div></div>)}</div> : <div className="empty">All recent sources completed successfully.</div>}<div className="list" style={{ marginTop: 10 }}>{sourceRuns.filter((run) => run.status === "success").slice(0, 3).map((run) => <div className="list-row" key={`${run.runKey}-${run.source}`}><div className="list-row-main"><strong>{run.source}</strong><span>{run.items} records · healthy</span></div><span className="positive">●</span></div>)}</div></div></div></div>
+    <div className="dashboard-layout section"><div><div className="section-heading"><h2>Recent games proving discovery</h2><Link href="/games?proof=1&sort=algorithm">View proof set</Link></div><div className="card table-shell"><GameList items={breakouts.slice(0, 7)} compact /></div></div><div><div className="section-heading"><h2>Source health</h2><span className="trend-meta">Last 12 runs</span></div><div className="card card-pad">{errors.length ? <div className="list">{errors.slice(0, 4).map((run) => <div className="alert" key={`${run.runKey}-${run.source}`}><AlertTriangle size={16} /><div><strong>{run.source}</strong><br />{run.error || "Partial source response"}</div></div>)}</div> : <div className="empty">All recent sources completed successfully.</div>}<div className="list" style={{ marginTop: 10 }}>{sourceRuns.filter((run) => run.status === "success").slice(0, 3).map((run) => <div className="list-row" key={`${run.runKey}-${run.source}`}><div className="list-row-main"><strong>{run.source}</strong><span>{run.items} records · healthy</span></div><span className="positive">●</span></div>)}</div></div></div></div>
 
     <section className="section"><div className="section-heading"><h2>Emerging trends</h2><Link href="/trends?stage=emerging">See stage</Link></div><div className="grid grid-3">{emerging.map((trend) => <TrendCard trend={trend} key={trend.id} />)}</div></section>
     <section className="section"><div className="section-heading"><h2>Expansion and copy waves</h2><span className="trend-meta">Credibility rises with independent creators</span></div><div className="grid grid-3">{expanding.map((trend) => <TrendCard trend={trend} key={trend.id} />)}</div></section>
