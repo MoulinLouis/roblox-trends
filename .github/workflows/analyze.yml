@@ -1,17 +1,16 @@
-name: Collect Roblox data
+name: Refresh analysis
 
 on:
   schedule:
-    - cron: "17 * * * *"
-    - cron: "47 * * * *"
+    - cron: "20 1,9,13,17,21 * * *"
   workflow_dispatch:
 
 concurrency:
-  group: roblox-trend-collection
+  group: roblox-trend-analysis
   cancel-in-progress: false
 
 jobs:
-  collect:
+  analyze:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -24,7 +23,7 @@ jobs:
       - name: Verify persistent database configuration
         run: |
           if [ -z "$DATABASE_URL" ]; then
-            echo "DATABASE_URL secret is required for scheduled collection."
+            echo "DATABASE_URL secret is required for scheduled analysis."
             exit 1
           fi
         env:
@@ -32,11 +31,6 @@ jobs:
       - run: npm run db:migrate
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      - run: npm run collect
+      - run: npm run analyze
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          COLLECTION_TRIGGER: ${{ github.event.schedule || 'manual' }}
-          ROBLOX_COUNTRY: all
-          ROBLOX_DEVICE: computer
-          ROLIMONS_ENABLED: "true"

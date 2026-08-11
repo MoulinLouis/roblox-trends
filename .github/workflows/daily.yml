@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: roblox-trend-daily
+  group: roblox-trend-analysis
   cancel-in-progress: false
 
 jobs:

@@ -4,6 +4,17 @@ import { errorMessage, logger } from "@/lib/logger";
 const responseCache = new Map<string, { expiresAt: number; value: unknown }>();
 const nextRequestAtByHost = new Map<string, number>();
 const blockedUntilByHost = new Map<string, number>();
+const requestMetrics = {
+  attempts: 0,
+  retries: 0,
+  rateLimitedResponses: 0,
+};
+
+export interface HttpRequestMetrics {
+  attempts: number;
+  retries: number;
+  rateLimitedResponses: number;
+}
 
 interface FetchJsonOptions {
   timeoutMs?: number;
@@ -36,6 +47,7 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
   let lastError: unknown;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     await waitForRequestWindow(host, minimumIntervalMs);
+    requestMetrics.attempts += 1;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -46,9 +58,11 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
       applyRateLimitHeaders(host, response.headers);
       if (!response.ok) {
         const error = new HttpError(response.status, response.statusText, url);
+        if (response.status === 429) requestMetrics.rateLimitedResponses += 1;
         if (response.status !== 429 && response.status < 500) throw error;
         lastError = error;
         if (attempt < retries) {
+          requestMetrics.retries += 1;
           const retryDelayMs = retryDelay(response, attempt);
           blockHost(host, retryDelayMs);
           logger.warn("External service throttled or unavailable; retrying", {
@@ -67,6 +81,7 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
       lastError = error;
       if (error instanceof HttpError && error.status < 500 && error.status !== 429) throw error;
       if (attempt < retries) {
+        requestMetrics.retries += 1;
         const retryDelayMs = cappedDelay(
           EXTERNAL_REQUEST_CONFIG.serverErrorBaseDelayMs * 2 ** attempt + retryJitter(),
         );
@@ -152,4 +167,11 @@ export function clearResponseCache(): void {
   responseCache.clear();
   nextRequestAtByHost.clear();
   blockedUntilByHost.clear();
+  requestMetrics.attempts = 0;
+  requestMetrics.retries = 0;
+  requestMetrics.rateLimitedResponses = 0;
+}
+
+export function getHttpRequestMetrics(): HttpRequestMetrics {
+  return { ...requestMetrics };
 }

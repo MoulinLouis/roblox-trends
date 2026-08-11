@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import type { AppSettings, CollectedGame, CollectionError } from "./types";
-import { HttpError } from "./api/http";
+import { clearResponseCache, getHttpRequestMetrics, HttpError } from "./api/http";
 import {
   RobloxClient,
   type RobloxChartGame,
@@ -10,19 +11,28 @@ import {
 import { getRolimonsGames } from "./api/rolimons";
 import { errorMessage, logger } from "./logger";
 import { COLLECTION_DISCOVERY_CONFIG } from "./config";
+import { classifyCollectionHealth, selectRotatingWindow, type CollectionHealth } from "./collection-health";
 import {
+  createCollectionAttempt,
+  finishCollectionAttempt,
   floorToBucket,
   getCollectionSearchKeywords,
   getRecommendationSeedIds,
   getTrackableUniverseIds,
+  getUniverseIdsByRootPlaceIds,
   recordSourceRun,
   saveCollectedGames,
 } from "@/db/repository";
 
 export interface CollectionResult {
+  attemptId: string;
   collectedAt: Date;
+  bucketAt: Date;
   games: number;
   snapshots: number;
+  snapshotsBySource: Record<string, number>;
+  details: Record<string, unknown>;
+  health: CollectionHealth;
   errors: CollectionError[];
 }
 
@@ -33,99 +43,137 @@ interface Discovery {
   chartGame: RobloxChartGame;
 }
 
-export async function collectRobloxData(settings: AppSettings, now = new Date()): Promise<CollectionResult> {
+interface DiscoveryStats {
+  discovered: number;
+  attempted: number;
+  completed: number;
+  cached?: number;
+  resolved?: number;
+  labels?: string[];
+}
+
+interface CollectionContext {
+  attemptId: string;
+  runKey: string;
+  startedAt: Date;
+}
+
+export async function collectRobloxData(
+  settings: AppSettings,
+  now = new Date(),
+  trigger = "manual",
+): Promise<CollectionResult> {
+  clearResponseCache();
+  const bucketAt = floorToBucket(now, settings.collection.intervalMinutes);
+  const runKey = `collect:${bucketAt.toISOString()}`;
+  const attemptId = randomUUID();
+  const startedAt = new Date();
+  await createCollectionAttempt({
+    id: attemptId,
+    runKey,
+    bucketAt,
+    trigger,
+    status: "running",
+    startedAt,
+    details: {},
+  });
+
+  try {
+    const result = await executeCollection(settings, now, bucketAt, { attemptId, runKey, startedAt });
+    await finishCollectionAttempt(attemptId, {
+      status: result.health.status,
+      games: result.games,
+      snapshots: result.snapshots,
+      errorCount: result.errors.length,
+      error: result.health.reasons[0] ?? null,
+      details: result.details,
+      finishedAt: new Date(),
+    });
+    logger.info("Collection completed", {
+      attemptId,
+      health: result.health.status,
+      games: result.games,
+      snapshots: result.snapshots,
+      errors: result.errors.length,
+      http: getHttpRequestMetrics(),
+    });
+    return result;
+  } catch (error) {
+    await finishCollectionAttempt(attemptId, {
+      status: "critical",
+      errorCount: 1,
+      error: errorMessage(error),
+      details: { http: getHttpRequestMetrics() },
+      finishedAt: new Date(),
+    });
+    throw error;
+  }
+}
+
+async function executeCollection(
+  settings: AppSettings,
+  now: Date,
+  bucketAt: Date,
+  context: CollectionContext,
+): Promise<CollectionResult> {
   const client = new RobloxClient(settings.collection.country, settings.collection.device);
   const errors: CollectionError[] = [];
   const discoveries: Discovery[] = [];
-  const bucket = floorToBucket(now, settings.collection.intervalMinutes);
-  const runKey = `collect:${bucket.toISOString()}`;
-  const startedAt = new Date();
 
-  await recordSourceRun({ runKey, job: "collect", source: "roblox-charts", status: "running", startedAt });
+  await startSourceRun(context, "roblox-charts");
   let availableSorts: RobloxSort[] = [];
+  let completedCharts = 0;
   try {
     availableSorts = await client.getSorts();
-    for (const sortId of settings.collection.charts) {
-      const fallback = availableSorts.find((sort) => sort.sortId === sortId);
-      try {
-        const sort = await client.getSortContent(sortId);
-        addSortDiscoveries(discoveries, sort);
-      } catch (error) {
-        if (fallback) addSortDiscoveries(discoveries, fallback);
-        errors.push({ source: `roblox:${sortId}`, message: errorMessage(error) });
-      }
-    }
   } catch (error) {
-    errors.push({ source: "roblox-charts", message: errorMessage(error) });
+    errors.push({ source: "roblox-chart-catalog", message: errorMessage(error) });
   }
-
-  const knownPlaceIds = new Set(discoveries.map((item) => String(item.chartGame.rootPlaceId)));
-  if (settings.collection.rolimonsEnabled) {
-    await recordSourceRun({ runKey, job: "collect", source: "rolimons", status: "running", startedAt });
+  for (const sortId of settings.collection.charts) {
+    const fallback = availableSorts.find((sort) => sort.sortId === sortId);
     try {
-      const candidates = (await getRolimonsGames())
-        .filter((game) => !knownPlaceIds.has(game.placeId))
-        .sort((a, b) => b.ccu - a.ccu)
-        .slice(0, settings.collection.rolimonsCandidates);
-      const resolved = await mapWithConcurrency(candidates, 4, async (candidate) => {
-        try {
-          const universeId = await client.resolveUniverseId(candidate.placeId);
-          return {
-            chart: "Rolimon's discovery",
-            source: "rolimons",
-            rank: null,
-            chartGame: {
-              universeId: Number(universeId),
-              rootPlaceId: Number(candidate.placeId),
-              name: candidate.name,
-              playerCount: candidate.ccu,
-            },
-          } satisfies Discovery;
-        } catch (error) {
-          errors.push({ source: "rolimons-place-resolution", message: `${candidate.placeId}: ${errorMessage(error)}` });
-          return null;
-        }
-      });
-      discoveries.push(...resolved.filter((item) => item !== null));
-      await recordSourceRun({
-        runKey,
-        job: "collect",
-        source: "rolimons",
-        status: errors.some((error) => error.source.startsWith("rolimons")) ? "partial" : "success",
-        items: resolved.filter(Boolean).length,
-        startedAt,
-        finishedAt: new Date(),
-        error: errors.find((error) => error.source.startsWith("rolimons"))?.message,
-      });
+      const sort = await client.getSortContent(sortId);
+      addSortDiscoveries(discoveries, sort);
+      completedCharts += 1;
     } catch (error) {
-      errors.push({ source: "rolimons", message: errorMessage(error) });
-      await recordSourceRun({
-        runKey,
-        job: "collect",
-        source: "rolimons",
-        status: "error",
-        startedAt,
-        finishedAt: new Date(),
-        error: errorMessage(error),
-      });
+      if (fallback) {
+        addSortDiscoveries(discoveries, fallback);
+        completedCharts += 1;
+      }
+      errors.push({ source: `roblox:${sortId}`, message: errorMessage(error) });
     }
   }
 
-  await collectSearchDiscoveries(client, discoveries, errors, runKey, startedAt);
-  await collectRecommendationDiscoveries(client, discoveries, errors, runKey, startedAt);
+  const searchStats = await collectSearchDiscoveries(
+    client,
+    discoveries,
+    errors,
+    context,
+    bucketAt,
+    settings.collection.intervalMinutes,
+  );
+  const rolimonsStats = settings.collection.rolimonsEnabled
+    ? await collectRolimonsDiscoveries(client, discoveries, errors, context, settings.collection.rolimonsCandidates)
+    : null;
+  const recommendationStats = await collectRecommendationDiscoveries(client, discoveries, errors, context);
 
   const discoveredUniverseIds = new Set(discoveries.map((item) => String(item.chartGame.universeId)));
   let trackedUniverseIds: string[] = [];
+  await startSourceRun(context, "roblox-tracked");
   try {
     trackedUniverseIds = await getTrackableUniverseIds(now);
   } catch (error) {
     errors.push({ source: "roblox-tracked", message: errorMessage(error) });
   }
+
   const universeIds = [...new Set([...discoveredUniverseIds, ...trackedUniverseIds])];
   let details: RobloxGameDetail[] = [];
   let votes: RobloxGameVote[] = [];
   let thumbnails = new Map<string, string>();
   if (universeIds.length) {
+    await Promise.all([
+      startSourceRun(context, "roblox-games"),
+      startSourceRun(context, "roblox-votes"),
+    ]);
     details = (
       await fetchChunks(universeIds, 50, 1, (chunk) => client.getGameDetails(chunk), "roblox-games", errors)
     ).flat();
@@ -138,6 +186,7 @@ export async function collectRobloxData(settings: AppSettings, now = new Date())
       errors.push({ source: "roblox-thumbnails", message: errorMessage(error) });
     }
   }
+
   const voteMap = new Map(votes.map((vote) => [String(vote.id), vote]));
   const discoveriesByUniverse = new Map<string, Discovery[]>();
   for (const discovery of discoveries) {
@@ -166,50 +215,219 @@ export async function collectRobloxData(settings: AppSettings, now = new Date())
       },
     }, detail, voteMap.get(universeId), thumbnails)];
   });
-  const saved = await saveCollectedGames(collected, now, settings);
-  await recordSourceRun({
-    runKey,
-    job: "collect",
-    source: "roblox-charts",
-    status: errors.some((error) =>
-      error.source === "roblox-charts" ||
-      error.source === "roblox-games" ||
-      error.source === "roblox-thumbnails" ||
-      error.source.startsWith("roblox:"),
-    ) ? "partial" : "success",
-    items: saved.snapshots,
-    startedAt,
-    finishedAt: new Date(),
-    error: errors.find((error) =>
-      error.source === "roblox-charts" ||
-      error.source === "roblox-games" ||
-      error.source === "roblox-thumbnails" ||
-      error.source.startsWith("roblox:"),
-    )?.message,
-  });
-  await recordSourceRun({
-    runKey,
-    job: "collect",
-    source: "roblox-tracked",
-    status: errors.some((error) => error.source === "roblox-tracked") ? "partial" : "success",
-    items: collected.filter((item) => item.source === "roblox-tracked").length,
-    startedAt,
-    finishedAt: new Date(),
-    error: errors.find((error) => error.source === "roblox-tracked")?.message,
-  });
-  await recordSourceRun({
-    runKey,
-    job: "collect",
-    source: "roblox-votes",
-    status: errors.some((error) => error.source === "roblox-votes") ? "partial" : "success",
-    items: votes.length,
-    startedAt,
-    finishedAt: new Date(),
-    error: errors.find((error) => error.source === "roblox-votes")?.message,
-  });
 
-  logger.info("Collection completed", { games: saved.games, snapshots: saved.snapshots, errors: errors.length });
-  return { collectedAt: now, ...saved, errors };
+  const saved = await saveCollectedGames(collected, now, settings);
+  const persisted = (source: string) => saved.snapshotsBySource[source] ?? 0;
+  await Promise.all([
+    finishSourceRun(context, "roblox-charts", persisted("roblox-charts"), relevantErrors(errors, (source) =>
+      source === "roblox-chart-catalog" || source === "roblox-games" || source === "roblox-thumbnails" || source.startsWith("roblox:"),
+    )),
+    finishSourceRun(context, "roblox-tracked", persisted("roblox-tracked"), relevantErrors(errors, (source) =>
+      source === "roblox-tracked" || source === "roblox-games",
+    )),
+    ...(universeIds.length ? [finishSourceRun(
+      context,
+      "roblox-games",
+      details.length,
+      relevantErrors(errors, (source) => source === "roblox-games"),
+    )] : []),
+    finishSourceRun(context, "roblox-votes", votes.length, relevantErrors(errors, (source) => source === "roblox-votes")),
+    ...(searchStats ? [finishSourceRun(
+      context,
+      "roblox-search",
+      persisted("roblox-search"),
+      relevantErrors(errors, (source) => source === "roblox-search" || source === "roblox-games"),
+      searchStats.discovered,
+    )] : []),
+    ...(rolimonsStats ? [finishSourceRun(
+      context,
+      "rolimons",
+      persisted("rolimons"),
+      relevantErrors(errors, (source) => source.startsWith("rolimons") || source === "roblox-games"),
+      rolimonsStats.discovered,
+    )] : []),
+    ...(recommendationStats ? [finishSourceRun(
+      context,
+      "roblox-recommendations",
+      persisted("roblox-recommendations"),
+      relevantErrors(errors, (source) => source === "roblox-recommendations" || source === "roblox-games"),
+      recommendationStats.discovered,
+    )] : []),
+  ]);
+
+  const health = classifyCollectionHealth({
+    errors,
+    snapshots: saved.snapshots,
+    expectedCharts: settings.collection.charts.length,
+    completedCharts,
+    expectedGames: universeIds.length,
+    completedGames: details.length,
+  });
+  const detailsBySource = {
+    charts: { attempted: settings.collection.charts.length, completed: completedCharts },
+    search: searchStats,
+    rolimons: rolimonsStats,
+    recommendations: recommendationStats,
+  };
+  return {
+    attemptId: context.attemptId,
+    collectedAt: now,
+    bucketAt,
+    ...saved,
+    details: {
+      discovery: detailsBySource,
+      enrichment: { requested: universeIds.length, completed: details.length, votes: votes.length },
+      snapshotsBySource: saved.snapshotsBySource,
+      healthReasons: health.reasons,
+      http: getHttpRequestMetrics(),
+    },
+    health,
+    errors,
+  };
+}
+
+async function collectRolimonsDiscoveries(
+  client: RobloxClient,
+  discoveries: Discovery[],
+  errors: CollectionError[],
+  context: CollectionContext,
+  candidateLimit: number,
+): Promise<DiscoveryStats> {
+  const source = "rolimons";
+  await startSourceRun(context, source);
+  const knownPlaceIds = new Set(discoveries.map((item) => String(item.chartGame.rootPlaceId)));
+  try {
+    const candidates = (await getRolimonsGames())
+      .filter((game) => !knownPlaceIds.has(game.placeId))
+      .sort((a, b) => b.ccu - a.ccu)
+      .slice(0, candidateLimit);
+    const knownUniverseIds = await getUniverseIdsByRootPlaceIds(candidates.map((candidate) => candidate.placeId));
+    let cached = 0;
+    let resolved = 0;
+    const mapped = await mapWithConcurrency(candidates, 4, async (candidate) => {
+      try {
+        const cachedUniverseId = knownUniverseIds.get(candidate.placeId);
+        const universeId = cachedUniverseId ?? await client.resolveUniverseId(candidate.placeId);
+        if (cachedUniverseId) cached += 1;
+        else resolved += 1;
+        return {
+          chart: "Rolimon's discovery",
+          source,
+          rank: null,
+          chartGame: {
+            universeId: Number(universeId),
+            rootPlaceId: Number(candidate.placeId),
+            name: candidate.name,
+            playerCount: candidate.ccu,
+          },
+        } satisfies Discovery;
+      } catch (error) {
+        errors.push({ source: "rolimons-place-resolution", message: `${candidate.placeId}: ${errorMessage(error)}` });
+        return null;
+      }
+    });
+    const completed = mapped.filter((item) => item !== null);
+    discoveries.push(...completed);
+    return { attempted: candidates.length, completed: completed.length, discovered: completed.length, cached, resolved };
+  } catch (error) {
+    errors.push({ source, message: errorMessage(error) });
+    return { attempted: 0, completed: 0, discovered: 0, cached: 0, resolved: 0 };
+  }
+}
+
+async function collectSearchDiscoveries(
+  client: RobloxClient,
+  discoveries: Discovery[],
+  errors: CollectionError[],
+  context: CollectionContext,
+  bucketAt: Date,
+  intervalMinutes: number,
+): Promise<DiscoveryStats | null> {
+  const source = "roblox-search";
+  const availableKeywords = await getCollectionSearchKeywords(COLLECTION_DISCOVERY_CONFIG.maximumSearchKeywords);
+  const keywords = selectRotatingWindow(
+    availableKeywords,
+    COLLECTION_DISCOVERY_CONFIG.searchKeywordsPerRun,
+    bucketAt,
+    intervalMinutes,
+  );
+  if (!keywords.length) return null;
+  await startSourceRun(context, source);
+  let items = 0;
+  let completed = 0;
+  for (const keyword of keywords) {
+    try {
+      const games = (await client.searchGames(keyword)).slice(0, COLLECTION_DISCOVERY_CONFIG.searchResultsPerKeyword);
+      addGameDiscoveries(discoveries, games, `Search: ${keyword}`, source);
+      items += games.length;
+      completed += 1;
+    } catch (error) {
+      errors.push({ source, message: `${keyword}: ${errorMessage(error)}` });
+      if (error instanceof HttpError && error.status === 429) break;
+    }
+  }
+  return { attempted: keywords.length, completed, discovered: items, labels: keywords };
+}
+
+async function collectRecommendationDiscoveries(
+  client: RobloxClient,
+  discoveries: Discovery[],
+  errors: CollectionError[],
+  context: CollectionContext,
+): Promise<DiscoveryStats | null> {
+  const source = "roblox-recommendations";
+  const seeds = await getRecommendationSeedIds(COLLECTION_DISCOVERY_CONFIG.maximumRecommendationSeeds);
+  if (!seeds.length) return null;
+  await startSourceRun(context, source);
+  let items = 0;
+  let completed = 0;
+  for (const seed of seeds) {
+    try {
+      const games = await client.getRecommendations(seed, COLLECTION_DISCOVERY_CONFIG.recommendationsPerSeed);
+      addGameDiscoveries(discoveries, games, `Recommendations from ${seed}`, source);
+      items += games.length;
+      completed += 1;
+    } catch (error) {
+      errors.push({ source, message: `${seed}: ${errorMessage(error)}` });
+    }
+  }
+  return { attempted: seeds.length, completed, discovered: items, labels: seeds };
+}
+
+async function startSourceRun(context: CollectionContext, source: string): Promise<void> {
+  await recordSourceRun({
+    attemptId: context.attemptId,
+    runKey: context.runKey,
+    job: "collect",
+    source,
+    status: "running",
+    startedAt: context.startedAt,
+  });
+}
+
+async function finishSourceRun(
+  context: CollectionContext,
+  source: string,
+  items: number,
+  errors: CollectionError[],
+  discovered = items,
+): Promise<void> {
+  const missingPersistence = discovered > 0 && items === 0;
+  await recordSourceRun({
+    attemptId: context.attemptId,
+    runKey: context.runKey,
+    job: "collect",
+    source,
+    status: errors.length || missingPersistence ? "partial" : "success",
+    items,
+    startedAt: context.startedAt,
+    finishedAt: new Date(),
+    error: errors[0]?.message ?? (missingPersistence ? "Discovery produced no persisted snapshots." : null),
+  });
+}
+
+function relevantErrors(errors: CollectionError[], predicate: (source: string) => boolean): CollectionError[] {
+  return errors.filter((error) => predicate(error.source));
 }
 
 function addSortDiscoveries(target: Discovery[], sort: RobloxSort): void {
@@ -247,72 +465,6 @@ function toCollectedGame(
     rank: discovery.rank,
     source: discovery.source,
   };
-}
-
-async function collectSearchDiscoveries(
-  client: RobloxClient,
-  discoveries: Discovery[],
-  errors: CollectionError[],
-  runKey: string,
-  startedAt: Date,
-): Promise<void> {
-  const source = "roblox-search";
-  const keywords = await getCollectionSearchKeywords(COLLECTION_DISCOVERY_CONFIG.maximumSearchKeywords);
-  if (!keywords.length) return;
-  await recordSourceRun({ runKey, job: "collect", source, status: "running", startedAt });
-  let items = 0;
-  for (const keyword of keywords) {
-    try {
-      const games = (await client.searchGames(keyword)).slice(0, COLLECTION_DISCOVERY_CONFIG.searchResultsPerKeyword);
-      addGameDiscoveries(discoveries, games, `Search: ${keyword}`, source);
-      items += games.length;
-    } catch (error) {
-      errors.push({ source, message: `${keyword}: ${errorMessage(error)}` });
-    }
-  }
-  await recordSourceRun({
-    runKey,
-    job: "collect",
-    source,
-    status: errors.some((error) => error.source === source) ? "partial" : "success",
-    items,
-    startedAt,
-    finishedAt: new Date(),
-    error: errors.find((error) => error.source === source)?.message,
-  });
-}
-
-async function collectRecommendationDiscoveries(
-  client: RobloxClient,
-  discoveries: Discovery[],
-  errors: CollectionError[],
-  runKey: string,
-  startedAt: Date,
-): Promise<void> {
-  const source = "roblox-recommendations";
-  const seeds = await getRecommendationSeedIds(COLLECTION_DISCOVERY_CONFIG.maximumRecommendationSeeds);
-  if (!seeds.length) return;
-  await recordSourceRun({ runKey, job: "collect", source, status: "running", startedAt });
-  let items = 0;
-  for (const seed of seeds) {
-    try {
-      const games = await client.getRecommendations(seed, COLLECTION_DISCOVERY_CONFIG.recommendationsPerSeed);
-      addGameDiscoveries(discoveries, games, `Recommendations from ${seed}`, source);
-      items += games.length;
-    } catch (error) {
-      errors.push({ source, message: `${seed}: ${errorMessage(error)}` });
-    }
-  }
-  await recordSourceRun({
-    runKey,
-    job: "collect",
-    source,
-    status: errors.some((error) => error.source === source) ? "partial" : "success",
-    items,
-    startedAt,
-    finishedAt: new Date(),
-    error: errors.find((error) => error.source === source)?.message,
-  });
 }
 
 function addGameDiscoveries(
