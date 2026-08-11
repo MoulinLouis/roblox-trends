@@ -11,6 +11,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import type { AppSettings, GameMetrics, GameTag, ScorePart, TrendMetrics, TrendStage } from "@/lib/types";
+import type { CollectionAttemptStatus } from "@/lib/collection-health";
 
 export const games = pgTable(
   "games",
@@ -30,7 +31,11 @@ export const games = pgTable(
     thumbnailUrl: text("thumbnail_url"),
     genre: text("genre"),
   },
-  (table) => [index("games_created_at_idx").on(table.createdAt), index("games_last_seen_idx").on(table.lastSeenAt)],
+  (table) => [
+    index("games_created_at_idx").on(table.createdAt),
+    index("games_last_seen_idx").on(table.lastSeenAt),
+    index("games_root_place_idx").on(table.rootPlaceId),
+  ],
 );
 
 export const gameTags = pgTable(
@@ -214,10 +219,33 @@ export const settings = pgTable("settings", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const collectionAttempts = pgTable(
+  "collection_attempts",
+  {
+    id: text("id").primaryKey(),
+    runKey: text("run_key").notNull(),
+    bucketAt: timestamp("bucket_at", { withTimezone: true }).notNull(),
+    trigger: text("trigger").notNull(),
+    status: text("status").$type<CollectionAttemptStatus>().notNull(),
+    games: integer("games").notNull().default(0),
+    snapshots: integer("snapshots").notNull().default(0),
+    errorCount: integer("error_count").notNull().default(0),
+    error: text("error"),
+    details: jsonb("details").$type<Record<string, unknown>>().notNull().default({}),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("collection_attempts_bucket_idx").on(table.bucketAt),
+    index("collection_attempts_started_idx").on(table.startedAt),
+  ],
+);
+
 export const sourceRuns = pgTable(
   "source_runs",
   {
     id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+    attemptId: text("attempt_id").references(() => collectionAttempts.id, { onDelete: "cascade" }),
     runKey: text("run_key").notNull(),
     job: text("job").notNull(),
     source: text("source").notNull(),
@@ -227,7 +255,10 @@ export const sourceRuns = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
-  (table) => [uniqueIndex("source_runs_key_idx").on(table.runKey, table.source)],
+  (table) => [
+    uniqueIndex("source_runs_attempt_source_idx").on(table.attemptId, table.source),
+    index("source_runs_bucket_idx").on(table.runKey, table.startedAt),
+  ],
 );
 
 export const alertEvents = pgTable("alert_events", {

@@ -1,5 +1,6 @@
 import {
   getIdeas,
+  getRecentCollectionAttempts,
   getRecentSourceRuns,
   getSettings,
   getTrendLinks,
@@ -12,12 +13,13 @@ import { ensureAppReady } from "./app-ready";
 
 export async function loadApplicationData() {
   await ensureAppReady();
-  const [settings, dataset, trends, ideas, sourceRuns, links] = await Promise.all([
+  const [settings, dataset, trends, ideas, sourceRuns, collectionAttempts, links] = await Promise.all([
     getSettings(),
     loadGameDataset(),
     getTrends(),
     getIdeas(),
-    getRecentSourceRuns(),
+    getRecentSourceRuns(36),
+    getRecentCollectionAttempts(),
     getTrendLinks(),
   ]);
   const trendById = new Map(trends.map((trend) => [trend.id, trend]));
@@ -29,7 +31,7 @@ export async function loadApplicationData() {
     stages.add(stage);
     stagesByGame.set(link.universeId, stages);
   }
-  return { settings, dataset, trends, ideas, sourceRuns, links, stagesByGame };
+  return { settings, dataset, trends, ideas, sourceRuns, collectionAttempts, links, stagesByGame };
 }
 
 export function currentPoint(item: GameDatasetItem) {

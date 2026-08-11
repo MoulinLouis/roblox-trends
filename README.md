@@ -49,13 +49,15 @@ npm run maintenance
 
 The commands are intentionally separate:
 
-- `collect` reads 22 broad and genre-specific Roblox Charts, enriches games through the Games and Votes APIs, explores bounded keyword search and recommendation results, optionally discovers extra candidates through Rolimon's, and writes idempotent snapshots.
+- `collect` reads 22 broad and genre-specific Roblox Charts, enriches games through the Games and Votes APIs, rotates through a bounded keyword-search window, explores recommendation results, optionally discovers extra candidates through Rolimon's, and writes idempotent snapshots. Previously resolved Rolimon's Place IDs are reused from the game catalog instead of calling Roblox again.
 - `analyze` updates game momentum, trend stages, saturation, opportunity scores, history, and deterministic ideas.
 - `brief` writes an agent-oriented Markdown and JSON decision dossier using only fully covered evidence windows.
 - `report` sends only unseen breakout, stage-change, and opportunity events to Discord.
 - `maintenance` aggregates hourly snapshots older than the configured retention into daily rows and removes the compacted hourly rows.
 
-The collection bucket is one hour. A retry inside the same bucket updates the matching `(universe, bucket, source, chart)` row instead of creating a duplicate.
+The collection bucket is one hour. A retry inside the same bucket updates the matching `(universe, bucket, source, chart)` row instead of creating a duplicate. Every attempt and its per-source outcome are retained separately for diagnosis. Collection health is `healthy`, `degraded`, or `critical`; missing optional discovery remains degraded, while missing snapshots, insufficient chart coverage, or Games API failures are critical.
+
+Scheduled collection has a primary run at minute 17 and a rescue run at minute 47. The rescue checks the database and exits immediately when the bucket already has a usable attempt, so normal operation does not duplicate external API traffic. Discord receives an immediate critical alert, an alert after two consecutive degraded attempts, and a recovery alert. Alert delivery failures are isolated from collection.
 
 Games published in the last 90 days continue to receive direct snapshots after leaving a chart. Older games continue to be tracked while they have recorded at least 100 CCU during the last 30 days. This avoids mistaking a missing chart observation for stable demand or losing the decline after a breakout.
 
@@ -95,7 +97,7 @@ npm run brief
 | `ROBLOX_COUNTRY` | No | Charts country filter; defaults to `all`. |
 | `ROBLOX_DEVICE` | No | Charts device filter; defaults to `computer`. |
 | `ROLIMONS_ENABLED` | No | Enables the additional Rolimon's discovery source. |
-| `DISCORD_WEBHOOK_URL` | Reporting | Discord webhook; it can alternatively be stored in Settings. |
+| `DISCORD_WEBHOOK_URL` | Reporting | Discord webhook for daily reports and collection-health alerts; it can alternatively be stored in Settings. |
 | `OPENAI_API_KEY` | No | Enables optional structured AI idea generation. |
 | `OPENAI_MODEL` | No | OpenAI model for ideas; defaults to `gpt-5-mini`. |
 
@@ -103,11 +105,12 @@ Settings persisted from the interface take precedence for collection thresholds,
 
 ## Automation
 
-Three GitHub Actions workflows are included:
+Four GitHub Actions workflows are included:
 
 - `CI` runs linting, type checking, tests, and the production build on pushes and pull requests.
-- `Collect Roblox data` runs once per hour at minute 17.
-- `Analyze and report` runs daily at 05:20 UTC, uploads the agent decision brief for 30 days, sends the Discord report, then compacts old snapshots.
+- `Collect Roblox data` runs a primary attempt at minute 17 and a database-aware rescue at minute 47.
+- `Refresh analysis` refreshes scores and trends at 01:20, 09:20, 13:20, 17:20, and 21:20 UTC.
+- `Analyze and report` completes the four-hour analysis cadence at 05:20 UTC, uploads the agent decision brief for 30 days, sends the Discord report, then compacts old snapshots.
 
 Every workflow supports manual dispatch. Scheduled workflows must receive a persistent `DATABASE_URL` repository secret; a runner-local PGlite database is intentionally not suitable because GitHub runners are ephemeral. Add `DISCORD_WEBHOOK_URL` as a secret for reports.
 
@@ -138,7 +141,7 @@ The endpoints were called directly on August 9–10, 2026:
 - `GET https://api.rolimons.com/games/v1/gamelist` remained public and returned 7,137 games in a map from Place ID to `[name, activePlayers, iconUrl]`. It does not provide Universe IDs. The collector resolves only the configured number of highest-CCU extra candidates through Roblox's public place-to-universe endpoint.
 - `GET https://games.roblox.com/v1/games/multiget-place-details` returned `401` without authentication. The collector therefore uses `GET https://apis.roblox.com/universes/v1/places/{placeId}/universe`, which returned a Universe ID without authentication in the direct test.
 
-These public web endpoints are not a stability contract. The client validates response shapes, spaces requests per Roblox host, uses timeouts and bounded exponential-backoff retries with jitter, honors `Retry-After` and rate-limit reset headers, caches responses in-process, limits Rolimon's resolution concurrency, and records source-specific failures without discarding successful sources.
+These public web endpoints are not a stability contract. The client validates response shapes, spaces requests per Roblox host, uses timeouts and bounded exponential-backoff retries with jitter, honors `Retry-After` and rate-limit reset headers, caches responses in-process, rotates search keywords, stops search after a terminal `429`, limits Rolimon's resolution concurrency, reuses known Place-to-Universe mappings, and records source-specific failures without discarding successful sources. Attempt details also retain request, retry, and rate-limit counters.
 
 The retry behavior follows Roblox's [rate-limit guidance](https://create.roblox.com/docs/cloud/reference/rate-limits): treat `429` as expected, honor server-provided retry timing, and use exponential backoff when no timing header is present.
 

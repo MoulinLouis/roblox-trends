@@ -22,6 +22,13 @@
       "when": 1786364481680,
       "tag": "0002_wooden_roulette",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786492213194,
+      "tag": "0003_shocking_mach_iv",
+      "breakpoints": true
     }
   ]
 }

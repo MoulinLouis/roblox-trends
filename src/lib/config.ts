@@ -33,9 +33,12 @@ export const COLLECTION_DISCOVERY_CONFIG = {
   activeGameMinimumCcu: 100,
   maximumTrackedGames: 3_000,
   maximumSearchKeywords: 6,
+  searchKeywordsPerRun: 2,
   maximumRecommendationSeeds: 5,
   searchResultsPerKeyword: 40,
   recommendationsPerSeed: 20,
+  minimumChartCoverageRatio: 0.8,
+  minimumGameDetailCoverageRatio: 0.8,
 } as const;
 
 export const EXTERNAL_REQUEST_CONFIG = {

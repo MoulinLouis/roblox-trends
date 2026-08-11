@@ -10,6 +10,7 @@ import type { AppSettings, CollectedGame, GameSnapshotPoint, GameTag } from "@/l
 import { getDatabase } from "./index";
 import {
   alertEvents,
+  collectionAttempts,
   dailySnapshots,
   gameAnalyses,
   gameMetadataHistory,
@@ -30,6 +31,7 @@ export type GameMetadataHistoryRow = typeof gameMetadataHistory.$inferSelect;
 export type TrendRow = typeof trends.$inferSelect;
 export type IdeaRow = typeof ideas.$inferSelect;
 export type SourceRunRow = typeof sourceRuns.$inferSelect;
+export type CollectionAttemptRow = typeof collectionAttempts.$inferSelect;
 
 export interface GameDatasetItem {
   game: GameRow;
@@ -100,10 +102,14 @@ export async function saveCollectedGames(
   collectedGames: CollectedGame[],
   collectedAt: Date,
   appSettings: AppSettings,
-): Promise<{ games: number; snapshots: number }> {
+): Promise<{ games: number; snapshots: number; snapshotsBySource: Record<string, number> }> {
   const database = getDatabase();
   const bucketAt = floorToBucket(collectedAt, appSettings.collection.intervalMinutes);
   const uniqueSnapshots = deduplicateCollection(collectedGames, bucketAt);
+  const snapshotsBySource: Record<string, number> = {};
+  for (const snapshot of uniqueSnapshots) {
+    snapshotsBySource[snapshot.source] = (snapshotsBySource[snapshot.source] ?? 0) + 1;
+  }
   const latestGames = new Map<string, CollectedGame>();
   for (const game of collectedGames) latestGames.set(game.universeId, game);
   const latestItems = [...latestGames.values()];
@@ -212,7 +218,7 @@ export async function saveCollectedGames(
         });
     }
   });
-  return { games: latestGames.size, snapshots: uniqueSnapshots.length };
+  return { games: latestGames.size, snapshots: uniqueSnapshots.length, snapshotsBySource };
 }
 
 function chunked<T>(items: T[], size: number): T[][] {
@@ -235,15 +241,22 @@ export async function replaceManualTags(universeId: string, tags: GameTag[]): Pr
   });
 }
 
-export async function loadGameDataset(): Promise<GameDatasetItem[]> {
+export async function loadGameDataset(universeIds?: string[]): Promise<GameDatasetItem[]> {
+  if (universeIds && !universeIds.length) return [];
   const database = getDatabase();
+  const gameFilter = universeIds ? inArray(games.universeId, universeIds) : undefined;
+  const tagFilter = universeIds ? inArray(gameTags.universeId, universeIds) : undefined;
+  const analysisFilter = universeIds ? inArray(gameAnalyses.universeId, universeIds) : undefined;
+  const metadataFilter = universeIds ? inArray(gameMetadataHistory.universeId, universeIds) : undefined;
+  const snapshotFilter = universeIds ? inArray(snapshots.universeId, universeIds) : undefined;
+  const dailyFilter = universeIds ? inArray(dailySnapshots.universeId, universeIds) : undefined;
   const [gameRows, tagRows, analysisRows, metadataRows, hourlyRows, dailyRows] = await Promise.all([
-    database.select().from(games).orderBy(desc(games.lastSeenAt)),
-    database.select().from(gameTags),
-    database.select().from(gameAnalyses),
-    database.select().from(gameMetadataHistory).orderBy(asc(gameMetadataHistory.observedAt)),
-    database.select().from(snapshots).orderBy(asc(snapshots.bucketAt)),
-    database.select().from(dailySnapshots).orderBy(asc(dailySnapshots.dayAt)),
+    database.select().from(games).where(gameFilter).orderBy(desc(games.lastSeenAt)),
+    database.select().from(gameTags).where(tagFilter),
+    database.select().from(gameAnalyses).where(analysisFilter),
+    database.select().from(gameMetadataHistory).where(metadataFilter).orderBy(asc(gameMetadataHistory.observedAt)),
+    database.select().from(snapshots).where(snapshotFilter).orderBy(asc(snapshots.bucketAt)),
+    database.select().from(dailySnapshots).where(dailyFilter).orderBy(asc(dailySnapshots.dayAt)),
   ]);
   const tagsByGame = new Map<string, GameTag[]>();
   for (const row of tagRows) {
@@ -376,6 +389,15 @@ export async function getTrackableUniverseIds(now = new Date()): Promise<string[
   return rows.map((row) => row.universeId);
 }
 
+export async function getUniverseIdsByRootPlaceIds(rootPlaceIds: string[]): Promise<Map<string, string>> {
+  if (!rootPlaceIds.length) return new Map();
+  const rows = await getDatabase()
+    .select({ rootPlaceId: games.rootPlaceId, universeId: games.universeId })
+    .from(games)
+    .where(inArray(games.rootPlaceId, rootPlaceIds));
+  return new Map(rows.map((row) => [row.rootPlaceId, row.universeId]));
+}
+
 export async function getCollectionSearchKeywords(limit: number): Promise<string[]> {
   const rows = await getDatabase()
     .select({ label: trends.label, stage: trends.stage })
@@ -399,6 +421,7 @@ export async function getRecommendationSeedIds(limit: number): Promise<string[]>
 }
 
 export async function recordSourceRun(input: {
+  attemptId: string;
   runKey: string;
   job: string;
   source: string;
@@ -413,14 +436,47 @@ export async function recordSourceRun(input: {
     .insert(sourceRuns)
     .values({ items: 0, finishedAt: null, error: null, ...input })
     .onConflictDoUpdate({
-      target: [sourceRuns.runKey, sourceRuns.source],
+      target: [sourceRuns.attemptId, sourceRuns.source],
       set: {
+        runKey: input.runKey,
+        job: input.job,
         status: input.status,
         items: input.items ?? 0,
         error: input.error ?? null,
+        startedAt: input.startedAt,
         finishedAt: input.finishedAt ?? null,
       },
     });
+}
+
+export async function createCollectionAttempt(input: typeof collectionAttempts.$inferInsert): Promise<void> {
+  await getDatabase().insert(collectionAttempts).values(input);
+}
+
+export async function finishCollectionAttempt(
+  id: string,
+  values: Partial<Pick<
+    typeof collectionAttempts.$inferInsert,
+    "status" | "games" | "snapshots" | "errorCount" | "error" | "details" | "finishedAt"
+  >>,
+): Promise<void> {
+  await getDatabase().update(collectionAttempts).set(values).where(eq(collectionAttempts.id, id));
+}
+
+export async function hasUsableCollectionAttempt(bucketAt: Date): Promise<boolean> {
+  const [row] = await getDatabase()
+    .select({ id: collectionAttempts.id })
+    .from(collectionAttempts)
+    .where(and(
+      eq(collectionAttempts.bucketAt, bucketAt),
+      inArray(collectionAttempts.status, ["healthy", "degraded"]),
+    ))
+    .limit(1);
+  return Boolean(row);
+}
+
+export async function getRecentCollectionAttempts(limit = 6): Promise<CollectionAttemptRow[]> {
+  return getDatabase().select().from(collectionAttempts).orderBy(desc(collectionAttempts.startedAt)).limit(limit);
 }
 
 export async function getRecentSourceRuns(limit = 12): Promise<SourceRunRow[]> {
@@ -439,17 +495,16 @@ export async function getTrend(id: string): Promise<{
   const database = getDatabase();
   const [trend] = await database.select().from(trends).where(eq(trends.id, id)).limit(1);
   if (!trend) return null;
-  const [history, links, dataset] = await Promise.all([
+  const [history, links] = await Promise.all([
     database.select().from(trendHistory).where(eq(trendHistory.trendId, id)).orderBy(asc(trendHistory.dayAt)),
     database.select().from(trendGames).where(eq(trendGames.trendId, id)),
-    loadGameDataset(),
   ]);
-  const ids = new Set(links.map((link) => link.universeId));
-  return { trend, history, games: dataset.filter((item) => ids.has(item.game.universeId)) };
+  const dataset = await loadGameDataset(links.map((link) => link.universeId));
+  return { trend, history, games: dataset };
 }
 
 export async function getGame(universeId: string): Promise<GameDatasetItem | null> {
-  return (await loadGameDataset()).find((item) => item.game.universeId === universeId) ?? null;
+  return (await loadGameDataset([universeId]))[0] ?? null;
 }
 
 export async function getTrendIdsForGame(universeId: string): Promise<string[]> {
@@ -491,55 +546,71 @@ export async function recordAlertEvent(
 export async function runMaintenance(retentionDays: number): Promise<{ aggregated: number; removed: number }> {
   const database = getDatabase();
   const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
-  const oldRows = await database.select().from(snapshots).where(lt(snapshots.bucketAt, cutoff));
-  if (!oldRows.length) return { aggregated: 0, removed: 0 };
-  const groups = new Map<string, typeof oldRows>();
-  for (const row of oldRows) {
-    const dayAt = new Date(row.bucketAt);
-    dayAt.setUTCHours(0, 0, 0, 0);
-    const key = `${row.universeId}:${dayAt.toISOString()}`;
-    const group = groups.get(key) ?? [];
-    group.push(row);
-    groups.set(key, group);
-  }
+  cutoff.setUTCHours(0, 0, 0, 0);
+  const [summary] = await database
+    .select({ count: sql<number>`count(*)` })
+    .from(snapshots)
+    .where(lt(snapshots.bucketAt, cutoff));
+  const removed = Number(summary.count);
+  if (!removed) return { aggregated: 0, removed: 0 };
+
+  let aggregated = 0;
   await database.transaction(async (transaction) => {
-    for (const group of groups.values()) {
-      const last = [...group].sort((a, b) => a.bucketAt.getTime() - b.bucketAt.getTime()).at(-1)!;
-      const dayAt = new Date(last.bucketAt);
-      dayAt.setUTCHours(0, 0, 0, 0);
-      const ranked = group.map((row) => row.rank).filter((rank): rank is number => rank !== null);
-      await transaction
-        .insert(dailySnapshots)
-        .values({
-          universeId: last.universeId,
-          dayAt,
-          averageCcu: Math.round(group.reduce((sum, row) => sum + row.ccu, 0) / group.length),
-          peakCcu: Math.max(...group.map((row) => row.ccu)),
-          visits: last.visits,
-          favorites: last.favorites,
-          upVotes: last.upVotes,
-          downVotes: last.downVotes,
-          bestRank: ranked.length ? Math.min(...ranked) : null,
-        })
-        .onConflictDoUpdate({
-          target: [dailySnapshots.universeId, dailySnapshots.dayAt],
-          set: {
-            averageCcu: Math.round(group.reduce((sum, row) => sum + row.ccu, 0) / group.length),
-            peakCcu: Math.max(...group.map((row) => row.ccu)),
-            visits: last.visits,
-            favorites: last.favorites,
-            upVotes: last.upVotes,
-            downVotes: last.downVotes,
-            bestRank: ranked.length ? Math.min(...ranked) : null,
-          },
-        });
-    }
-    const ids = oldRows.map((row) => row.id);
-    for (let offset = 0; offset < ids.length; offset += 500) {
-      await transaction.delete(snapshots).where(inArray(snapshots.id, ids.slice(offset, offset + 500)));
-    }
+    const result = await transaction.execute(sql`
+      with hourly as (
+        select
+          universe_id,
+          bucket_at,
+          max(ccu)::integer as ccu,
+          max(visits)::real as visits,
+          max(favorites)::integer as favorites,
+          max(up_votes)::integer as up_votes,
+          max(down_votes)::integer as down_votes,
+          min(rank)::integer as best_rank
+        from snapshots
+        where bucket_at < ${cutoff}
+        group by universe_id, bucket_at
+      ), daily as (
+        select
+          universe_id,
+          date_trunc('day', bucket_at) as day_at,
+          round(avg(ccu))::integer as average_ccu,
+          max(ccu)::integer as peak_ccu,
+          max(visits)::real as visits,
+          max(favorites)::integer as favorites,
+          max(up_votes)::integer as up_votes,
+          max(down_votes)::integer as down_votes,
+          min(best_rank)::integer as best_rank
+        from hourly
+        group by universe_id, date_trunc('day', bucket_at)
+      ), upserted as (
+        insert into daily_snapshots (
+          universe_id, day_at, average_ccu, peak_ccu, visits, favorites, up_votes, down_votes, best_rank
+        )
+        select universe_id, day_at, average_ccu, peak_ccu, visits, favorites, up_votes, down_votes, best_rank
+        from daily
+        on conflict (universe_id, day_at) do update set
+          average_ccu = excluded.average_ccu,
+          peak_ccu = excluded.peak_ccu,
+          visits = excluded.visits,
+          favorites = excluded.favorites,
+          up_votes = excluded.up_votes,
+          down_votes = excluded.down_votes,
+          best_rank = excluded.best_rank
+        returning 1
+      )
+      select count(*)::integer as count from upserted
+    `);
+    aggregated = Number(resultRows<{ count: number }>(result)[0]?.count ?? 0);
+    await transaction.delete(snapshots).where(lt(snapshots.bucketAt, cutoff));
   });
-  return { aggregated: groups.size, removed: oldRows.length };
+  return { aggregated, removed };
+}
+
+function resultRows<T>(result: unknown): T[] {
+  if (Array.isArray(result)) return result as T[];
+  if (result && typeof result === "object" && "rows" in result) return (result as { rows: T[] }).rows;
+  return [];
 }
 
 export async function databaseCounts(): Promise<Record<string, number>> {
