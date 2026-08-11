@@ -47,8 +47,9 @@ describe("collection idempotency", () => {
   });
 
   it("upgrades the former three-chart default without overwriting custom chart choices", () => {
-    const upgraded = mergeSettings({ collection: { ...DEFAULT_SETTINGS.collection, charts: [...LEGACY_ROBLOX_CHARTS] } });
+    const upgraded = mergeSettings({ collection: { ...DEFAULT_SETTINGS.collection, intervalMinutes: 30, charts: [...LEGACY_ROBLOX_CHARTS] } });
     const custom = mergeSettings({ collection: { ...DEFAULT_SETTINGS.collection, charts: ["top-rated"] } });
+    expect(upgraded.collection.intervalMinutes).toBe(60);
     expect(upgraded.collection.charts).toEqual(DEFAULT_SETTINGS.collection.charts);
     expect(custom.collection.charts).toEqual(["top-rated"]);
   });

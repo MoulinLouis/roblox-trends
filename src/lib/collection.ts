@@ -1,4 +1,5 @@
 import type { AppSettings, CollectedGame, CollectionError } from "./types";
+import { HttpError } from "./api/http";
 import {
   RobloxClient,
   type RobloxChartGame,
@@ -126,10 +127,10 @@ export async function collectRobloxData(settings: AppSettings, now = new Date())
   let thumbnails = new Map<string, string>();
   if (universeIds.length) {
     details = (
-      await fetchChunks(universeIds, 50, 1, (chunk) => client.getGameDetails(chunk), "roblox-games", errors, 250)
+      await fetchChunks(universeIds, 50, 1, (chunk) => client.getGameDetails(chunk), "roblox-games", errors)
     ).flat();
     votes = (
-      await fetchChunks(universeIds, 50, 1, (chunk) => client.getGameVotes(chunk), "roblox-votes", errors, 250)
+      await fetchChunks(universeIds, 50, 1, (chunk) => client.getGameVotes(chunk), "roblox-votes", errors)
     ).flat();
     try {
       thumbnails = await client.getThumbnails([...discoveredUniverseIds]);
@@ -330,7 +331,6 @@ async function fetchChunks<T>(
   fetcher: (chunk: string[]) => Promise<T[]>,
   source: string,
   errors: CollectionError[],
-  minimumDelayMs = 0,
 ): Promise<T[][]> {
   const chunks = Array.from({ length: Math.ceil(items.length / chunkSize) }, (_, index) =>
     items.slice(index * chunkSize, (index + 1) * chunkSize),
@@ -339,7 +339,7 @@ async function fetchChunks<T>(
     try {
       return await fetcher(chunk);
     } catch (error) {
-      if (chunk.length > 1 && splitDepth < 2) {
+      if (error instanceof HttpError && error.status === 400 && chunk.length > 1 && splitDepth < 2) {
         const midpoint = Math.ceil(chunk.length / 2);
         const left = await fetchResilientChunk(chunk.slice(0, midpoint), splitDepth + 1);
         const right = await fetchResilientChunk(chunk.slice(midpoint), splitDepth + 1);
@@ -347,8 +347,6 @@ async function fetchChunks<T>(
       }
       errors.push({ source, message: `${chunk[0]}…${chunk.at(-1)}: ${errorMessage(error)}` });
       return [];
-    } finally {
-      if (minimumDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, minimumDelayMs));
     }
   };
   return mapWithConcurrency(chunks, concurrency, (chunk) => fetchResilientChunk(chunk));
