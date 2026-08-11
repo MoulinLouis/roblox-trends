@@ -81,7 +81,12 @@ export function mergeSettings(value: Partial<AppSettings>): AppSettings {
     thresholds: { ...DEFAULT_SETTINGS.thresholds, ...value.thresholds },
     momentumWeights: { ...DEFAULT_SETTINGS.momentumWeights, ...value.momentumWeights },
     opportunityWeights: { ...DEFAULT_SETTINGS.opportunityWeights, ...value.opportunityWeights },
-    collection: { ...DEFAULT_SETTINGS.collection, ...value.collection, charts: [...charts] },
+    collection: {
+      ...DEFAULT_SETTINGS.collection,
+      ...value.collection,
+      intervalMinutes: DEFAULT_SETTINGS.collection.intervalMinutes,
+      charts: [...charts],
+    },
     taxonomy: { ...DEFAULT_SETTINGS.taxonomy, ...value.taxonomy },
     developerProfile: { ...DEFAULT_SETTINGS.developerProfile, ...value.developerProfile },
   };

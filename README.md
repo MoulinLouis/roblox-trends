@@ -55,7 +55,7 @@ The commands are intentionally separate:
 - `report` sends only unseen breakout, stage-change, and opportunity events to Discord.
 - `maintenance` aggregates hourly snapshots older than the configured retention into daily rows and removes the compacted hourly rows.
 
-The default collection bucket is 30 minutes. A retry inside the same bucket updates the matching `(universe, bucket, source, chart)` row instead of creating a duplicate.
+The collection bucket is one hour. A retry inside the same bucket updates the matching `(universe, bucket, source, chart)` row instead of creating a duplicate.
 
 Games published in the last 90 days continue to receive direct snapshots after leaving a chart. Older games continue to be tracked while they have recorded at least 100 CCU during the last 30 days. This avoids mistaking a missing chart observation for stable demand or losing the decline after a breakout.
 
@@ -66,25 +66,6 @@ DATABASE_URL="postgresql://..." npm run db:import-local
 ```
 
 The import copies only live game metadata, tags, snapshots, daily aggregates, and source-run history. It is idempotent and does not copy derived scores, trends, ideas, settings, alert state, or secrets. Run `npm run analyze` against the production database after the import.
-
-## Local WSL scheduler
-
-Install the managed user crontab block:
-
-```bash
-npm run cron:install
-npm run cron:status
-```
-
-The local schedule runs a collection at minutes 17 and 47 of every hour. It refreshes analysis near every six hours, with the 06:35 daily run providing the fourth refresh while also sending the report and running maintenance. From 06:35 onward, the daily work retries hourly until it completes once for the current day. An `@reboot` entry collects immediately whenever the WSL cron service starts. All jobs share one non-blocking lock so collection and analysis cannot overlap.
-
-Logs are appended to `.data/logs/local-scheduler.log`. The installer preserves unrelated crontab entries and can safely be run again. Remove only the managed block with:
-
-```bash
-npm run cron:remove
-```
-
-The WSL distribution and its `cron` systemd service must remain running. Windows sleep pauses collection, and a Windows restart requires WSL to start again unless a Windows logon task launches it automatically.
 
 ## Agent decision dossier
 
@@ -125,7 +106,7 @@ Settings persisted from the interface take precedence for collection thresholds,
 Three GitHub Actions workflows are included:
 
 - `CI` runs linting, type checking, tests, and the production build on pushes and pull requests.
-- `Collect Roblox data` runs every 30 minutes at minutes 17 and 47.
+- `Collect Roblox data` runs once per hour at minute 17.
 - `Analyze and report` runs daily at 05:20 UTC, uploads the agent decision brief for 30 days, sends the Discord report, then compacts old snapshots.
 
 Every workflow supports manual dispatch. Scheduled workflows must receive a persistent `DATABASE_URL` repository secret; a runner-local PGlite database is intentionally not suitable because GitHub runners are ephemeral. Add `DISCORD_WEBHOOK_URL` as a secret for reports.
@@ -157,7 +138,9 @@ The endpoints were called directly on August 9–10, 2026:
 - `GET https://api.rolimons.com/games/v1/gamelist` remained public and returned 7,137 games in a map from Place ID to `[name, activePlayers, iconUrl]`. It does not provide Universe IDs. The collector resolves only the configured number of highest-CCU extra candidates through Roblox's public place-to-universe endpoint.
 - `GET https://games.roblox.com/v1/games/multiget-place-details` returned `401` without authentication. The collector therefore uses `GET https://apis.roblox.com/universes/v1/places/{placeId}/universe`, which returned a Universe ID without authentication in the direct test.
 
-These public web endpoints are not a stability contract. The client validates response shapes, uses timeouts and bounded retries, honors `Retry-After`, caches responses in-process, limits Rolimon's resolution concurrency, and records source-specific failures without discarding successful sources.
+These public web endpoints are not a stability contract. The client validates response shapes, spaces requests per Roblox host, uses timeouts and bounded exponential-backoff retries with jitter, honors `Retry-After` and rate-limit reset headers, caches responses in-process, limits Rolimon's resolution concurrency, and records source-specific failures without discarding successful sources.
+
+The retry behavior follows Roblox's [rate-limit guidance](https://create.roblox.com/docs/cloud/reference/rate-limits): treat `429` as expected, honor server-provided retry timing, and use exponential backoff when no timing header is present.
 
 Competitor research and the resulting implementation decisions are documented in [`docs/market-research.md`](docs/market-research.md).
 

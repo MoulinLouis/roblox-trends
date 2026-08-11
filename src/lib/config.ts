@@ -38,6 +38,20 @@ export const COLLECTION_DISCOVERY_CONFIG = {
   recommendationsPerSeed: 20,
 } as const;
 
+export const EXTERNAL_REQUEST_CONFIG = {
+  defaultTimeoutMs: 10_000,
+  defaultRetries: 3,
+  rateLimitBaseDelayMs: 5_000,
+  serverErrorBaseDelayMs: 500,
+  maximumRetryDelayMs: 60_000,
+  retryJitterMs: 750,
+  minimumIntervalByHost: {
+    "apis.roblox.com": 1_300,
+    "games.roblox.com": 500,
+    "thumbnails.roblox.com": 500,
+  } satisfies Record<string, number>,
+} as const;
+
 export const ROBLOX_EVENT_MARKERS = ["[upd", "[update", "event", "2x", "x2", "admin abuse"] as const;
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -69,7 +83,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     durability: 8,
   },
   collection: {
-    intervalMinutes: 30,
+    intervalMinutes: 60,
     country: process.env.ROBLOX_COUNTRY || "all",
     device: process.env.ROBLOX_DEVICE || "computer",
     charts: [...ROBLOX_DISCOVERY_CHARTS],
