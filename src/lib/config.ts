@@ -57,6 +57,7 @@ export const EXTERNAL_REQUEST_CONFIG = {
 
 export const SCHEDULER_CONFIG = {
   tickIntervalMinutes: 10,
+  frontierIntervalMinutes: 15,
   leaseDurationMinutes: 30,
   analysisIntervalMinutes: 4 * 60,
   dailyHourUtc: 5,
@@ -64,7 +65,109 @@ export const SCHEDULER_CONFIG = {
   maximumAnalysisAgeMinutes: 5 * 60,
 } as const;
 
-export const ROBLOX_EVENT_MARKERS = ["[upd", "[update", "event", "2x", "x2", "admin abuse"] as const;
+export const RISING_GAMES_CONFIG = {
+  minimumCurrentCcu: 1_000,
+  launchMaximumAgeDays: 90,
+  resurgenceMinimumAgeDays: 90,
+  resurgenceMinimumHistoryHours: 24,
+  rapidDiscoveryMaximumObservedHours: 6,
+  rapidDiscoveryFirstSeenToleranceHours: 1,
+  rapidDiscoveryMinimumCcu: 2_500,
+  riskPeakDrawdownPercent: 25,
+  confidence: {
+    verifiedHistoryHours: 24,
+    establishedHistoryHours: 72,
+  },
+  ccuMilestones: [1_000, 2_500, 5_000, 10_000, 25_000, 50_000, 100_000],
+  windows: {
+    1: { minimumGain: 250, minimumGrowthPercent: 20, toleranceHours: 1.5 },
+    3: { minimumGain: 500, minimumGrowthPercent: 30, toleranceHours: 2 },
+    6: { minimumGain: 750, minimumGrowthPercent: 40, toleranceHours: 3 },
+    24: { minimumGain: 1_000, minimumGrowthPercent: 25, toleranceHours: 6 },
+  },
+  resurgence: {
+    minimumGain6h: 500,
+    minimumGrowth6h: 35,
+    minimumGain24h: 500,
+    minimumGrowth24h: 50,
+    minimumMedianMultiple: 1.75,
+    minimumNewHighRatio: 1.1,
+    minimumNewHighGain: 500,
+    recentPeakExclusionHours: 6,
+    historicalLookbackDays: 30,
+  },
+  score: {
+    minimum: 55,
+    surging: 70,
+    explosive: 85,
+    weights: {
+      base: 28,
+      currentCcuLogMultiplier: 10,
+      currentCcuMaximum: 14,
+      gainLogMultiplier: 4.5,
+      gainMaximum: 18,
+      growthDivisor: 5,
+      growthMaximum: 18,
+      historyDivisor: 12,
+      historyMaximum: 8,
+      milestone: 10,
+      rapidDiscovery: 12,
+      discoveryChartEntry: 6,
+      resurgenceMedianMultiplier: 8,
+      resurgenceMedianMaximum: 12,
+      newHigh: 12,
+      riskPenalty: 5,
+    },
+  },
+  alerts: {
+    minimumScore: 70,
+    lookbackHours: 6,
+    maximumEntriesPerDelivery: 5,
+    maximumEventsPerDelivery: 100,
+  },
+  frontier: {
+    minimumStoredCcu: 100,
+    minimumCandidateCcu: 750,
+    immediateDiscoveryCcu: 1_000,
+    minimumGain1h: 200,
+    minimumGrowth1h: 20,
+    minimumGain3h: 400,
+    minimumGrowth3h: 30,
+    minimumGain6h: 600,
+    minimumGrowth6h: 40,
+    windowToleranceHours: 0.75,
+    minimumNewHighRatio: 1.1,
+    minimumNewHighGain: 200,
+    maximumHistoryHours: 8,
+    maximumCandidatesPerCollection: 30,
+    candidateFreshnessHours: 2,
+    scoreWeights: {
+      currentCcuLogMultiplier: 22,
+      currentCcuMaximum: 35,
+      gainLogMultiplier: 7,
+      gainMaximum: 25,
+      growthDivisor: 4,
+      growthMaximum: 25,
+      milestone: 10,
+      newHigh: 8,
+      immediateDiscovery: 10,
+    },
+  },
+  clusters: {
+    minimumGames: 2,
+  },
+} as const;
+
+export const ROBLOX_EVENT_MARKERS = [
+  "[upd",
+  "[update",
+  "[new",
+  "new map",
+  "event",
+  "2x",
+  "x2",
+  "admin abuse",
+] as const;
 
 export const DEFAULT_SETTINGS: AppSettings = {
   thresholds: {

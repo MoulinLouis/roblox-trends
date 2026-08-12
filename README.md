@@ -2,7 +2,7 @@
 
 Roblox Trend Radar is a growth-first market intelligence application for choosing a realistic next Roblox game concept. It tracks historical snapshots, scores momentum, detects multi-creator concept propagation and saturation, and turns promising signals into scoped game ideas.
 
-The application is one Next.js 16 service with one PostgreSQL-compatible database. Local development can use embedded PGlite. Production should use a persistent PostgreSQL provider such as Supabase, Neon, or another managed PostgreSQL instance. The application only displays data collected from live Roblox sources.
+The application is one Next.js 16 service with one PostgreSQL-compatible database. Local development can use embedded PGlite. Production uses persistent Neon PostgreSQL. The application only displays data collected from live Roblox sources.
 
 ## What it measures
 
@@ -11,6 +11,9 @@ The application is one Next.js 16 service with one PostgreSQL-compatible databas
 - Provisional discovery signals remain separate from durable momentum. Momentum compares 24-hour, 72-hour, or 7-day averages as enough history becomes available and exposes its history confidence.
 - Independent dimensions for core loop, progression, reward, social pressure, and theme.
 - Rising title words and two-word phrases, promoted only when several independent creators adopt them and recent frequency exceeds the older baseline.
+- Dedicated launch-breakout signals for games created within 90 days that rapidly reach 1,000+ CCU, cross meaningful CCU milestones, or accelerate over verified 1h/3h/6h/24h windows.
+- Dedicated resurgence signals for older games that move far above their recent median, establish a new tracked high, or post strong relative 6h/24h growth.
+- Hype clusters that aggregate the mechanics, progression patterns, rewards, social hooks, and themes shared by active launch breakouts and resurgences.
 - Trend breadth, creator diversity, combined demand, new entrants, growing share, and leader concentration.
 - Separate momentum, trend, saturation, and solo-developer opportunity scores with visible breakdowns.
 - Evidence-ranked ideas with title alternatives and recent-game breakout proof; deterministic generation works without a paid API, with optional OpenAI structured generation.
@@ -50,16 +53,16 @@ npm run tick
 
 The commands are intentionally separate:
 
-- `collect` reads 22 broad and genre-specific Roblox Charts, enriches games through the Games and Votes APIs, rotates through a bounded keyword-search window, explores recommendation results, optionally discovers extra candidates through Rolimon's, and writes idempotent snapshots. Previously resolved Rolimon's Place IDs are reused from the game catalog instead of calling Roblox again.
+- `collect` reads 22 broad and genre-specific Roblox Charts, enriches games through the Games and Votes APIs, rotates through a bounded keyword-search window, explores recommendation results, consumes candidates from the Rolimon's acceleration frontier, and writes idempotent snapshots. It immediately re-evaluates launch breakouts and resurgences after persistence. Previously resolved Rolimon's Place IDs are reused from the game catalog instead of calling Roblox again.
 - `analyze` updates game momentum, trend stages, saturation, opportunity scores, history, and deterministic ideas.
-- `brief` writes an agent-oriented Markdown and JSON decision dossier using only fully covered evidence windows.
+- `brief` writes an agent-oriented Markdown and JSON decision dossier using only fully covered evidence windows, including live rising games and their hype clusters.
 - `report` sends only unseen breakout, stage-change, and opportunity events to Discord.
 - `maintenance` aggregates hourly snapshots older than the configured retention into daily rows and removes the compacted hourly rows.
 - `tick` reconciles every scheduled job against durable leases and completed slots stored in PostgreSQL. It is the production scheduler entry point.
 
 The collection bucket is one hour. A retry inside the same bucket updates the matching `(universe, bucket, source, chart)` row instead of creating a duplicate. Every attempt and its per-source outcome are retained separately for diagnosis. Collection health is `healthy`, `degraded`, or `critical`; missing optional discovery remains degraded, while missing snapshots, insufficient chart coverage, or Games API failures are critical.
 
-The durable scheduler checks every fifteen minutes and writes at most one successful execution per logical slot. A PostgreSQL lease prevents scheduled and manual reconciliation from overlapping. Discord receives an immediate critical collection alert, an alert after two consecutive degraded attempts, and a recovery alert. Alert delivery failures are isolated from collection.
+The durable scheduler checks every fifteen minutes and writes at most one successful execution per logical slot. A lightweight Rolimon's frontier scan records sub-chart CCU movement before hourly enrichment, while collection remains hourly. A PostgreSQL lease prevents scheduled and manual reconciliation from overlapping. Discord receives an immediate critical collection alert, an alert after two consecutive degraded attempts, a recovery alert, and a bounded digest of the strongest new rising-game events. Alert delivery failures are isolated from collection.
 
 Games published in the last 90 days continue to receive direct snapshots after leaving a chart. Older games continue to be tracked while they have recorded at least 100 CCU during the last 30 days. This avoids mistaking a missing chart observation for stable demand or losing the decline after a breakout.
 
@@ -101,7 +104,7 @@ npm run brief
 | `ROBLOX_COUNTRY` | No | Charts country filter; defaults to `all`. |
 | `ROBLOX_DEVICE` | No | Charts device filter; defaults to `computer`. |
 | `ROLIMONS_ENABLED` | No | Enables the additional Rolimon's discovery source. |
-| `DISCORD_WEBHOOK_URL` | Reporting | Discord webhook for daily reports and collection-health alerts; it can alternatively be stored in Settings. |
+| `DISCORD_WEBHOOK_URL` | Reporting | Discord webhook for daily reports, rising-game digests, and collection-health alerts; it can alternatively be stored in Settings. |
 | `OPENAI_API_KEY` | No | Enables optional structured AI idea generation. |
 | `OPENAI_MODEL` | No | OpenAI model for ideas; defaults to `gpt-5-mini`. |
 

@@ -5,20 +5,30 @@ import {
   COLLECTION_DISCOVERY_CONFIG,
   DEFAULT_SETTINGS,
   LEGACY_ROBLOX_CHARTS,
+  RISING_GAMES_CONFIG,
 } from "@/lib/config";
 import type { AppSettings, CollectedGame, GameSnapshotPoint, GameTag } from "@/lib/types";
 import type { ScheduledJobName } from "@/lib/scheduler-types";
+import type {
+  DiscoveryFrontierState,
+  RisingGameEventType,
+  RisingGameSignalCandidate,
+  RisingGameTier,
+} from "@/lib/rising-game-types";
 import { getDatabase } from "./index";
 import {
   alertEvents,
   collectionAttempts,
   dailySnapshots,
+  discoveryFrontier,
   gameAnalyses,
   gameMetadataHistory,
   games,
   gameTags,
   generatedArtifacts,
   ideas,
+  risingGameEvents,
+  risingGameSignals,
   scheduledJobRuns,
   schedulerLocks,
   settings as settingsTable,
@@ -37,6 +47,9 @@ export type IdeaRow = typeof ideas.$inferSelect;
 export type SourceRunRow = typeof sourceRuns.$inferSelect;
 export type CollectionAttemptRow = typeof collectionAttempts.$inferSelect;
 export type ScheduledJobRunRow = typeof scheduledJobRuns.$inferSelect;
+export type RisingGameSignalRow = typeof risingGameSignals.$inferSelect;
+export type RisingGameEventRow = typeof risingGameEvents.$inferSelect;
+export type DiscoveryFrontierRow = typeof discoveryFrontier.$inferSelect;
 
 export interface GameDatasetItem {
   game: GameRow;
@@ -699,6 +712,207 @@ export async function recordAlertEvent(
   payload: Record<string, unknown>,
 ): Promise<void> {
   await getDatabase().insert(alertEvents).values({ eventKey, eventType, payload, sentAt: new Date() }).onConflictDoNothing();
+}
+
+export async function replaceRisingGameSignals(
+  candidates: RisingGameSignalCandidate[],
+  now = new Date(),
+): Promise<RisingGameEventRow[]> {
+  const database = getDatabase();
+  const existingRows = await database.select().from(risingGameSignals);
+  const existingByKey = new Map(
+    existingRows.map((row) => [`${row.universeId}:${row.signalType}`, row]),
+  );
+  const eventValues = candidates.flatMap((candidate) => {
+    const existing = existingByKey.get(`${candidate.universeId}:${candidate.signalType}`);
+    const events: Array<{ eventType: RisingGameEventType; marker: string }> = [];
+    if (!existing?.active) {
+      events.push({ eventType: "activated", marker: candidate.detectedAt.toISOString() });
+    } else if (tierRank(candidate.tier) > tierRank(existing.tier)) {
+      events.push({ eventType: "tier_up", marker: candidate.tier });
+    } else if (
+      candidate.metrics.crossedMilestone &&
+      candidate.metrics.crossedMilestone > (existing.metrics.crossedMilestone ?? 0)
+    ) {
+      events.push({ eventType: "milestone", marker: String(candidate.metrics.crossedMilestone) });
+    }
+    return events.map(({ eventType, marker }) => ({
+      id: [candidate.universeId, candidate.signalType, eventType, marker].join(":"),
+      universeId: candidate.universeId,
+      signalType: candidate.signalType,
+      eventType,
+      tier: candidate.tier,
+      score: candidate.score,
+      currentCcu: candidate.metrics.currentCcu,
+      payload: {
+        metrics: candidate.metrics,
+        reasons: candidate.reasons,
+        risks: candidate.risks,
+      },
+      detectedAt: candidate.detectedAt,
+      notifiedAt: null,
+    }));
+  });
+
+  return database.transaction(async (transaction) => {
+    await transaction
+      .update(risingGameSignals)
+      .set({ active: false, updatedAt: now })
+      .where(eq(risingGameSignals.active, true));
+
+    for (const candidate of candidates) {
+      await transaction
+        .insert(risingGameSignals)
+        .values({
+          universeId: candidate.universeId,
+          signalType: candidate.signalType,
+          score: candidate.score,
+          tier: candidate.tier,
+          confidence: candidate.confidence,
+          active: true,
+          currentCcu: candidate.metrics.currentCcu,
+          metrics: candidate.metrics,
+          reasons: candidate.reasons,
+          risks: candidate.risks,
+          firstDetectedAt: candidate.detectedAt,
+          lastDetectedAt: candidate.detectedAt,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [risingGameSignals.universeId, risingGameSignals.signalType],
+          set: {
+            score: candidate.score,
+            tier: candidate.tier,
+            confidence: candidate.confidence,
+            active: true,
+            currentCcu: candidate.metrics.currentCcu,
+            metrics: candidate.metrics,
+            reasons: candidate.reasons,
+            risks: candidate.risks,
+            lastDetectedAt: candidate.detectedAt,
+            updatedAt: now,
+          },
+        });
+    }
+
+    const insertedEvents: RisingGameEventRow[] = [];
+    for (const values of eventValues) {
+      const rows = await transaction
+        .insert(risingGameEvents)
+        .values(values)
+        .onConflictDoNothing()
+        .returning();
+      insertedEvents.push(...rows);
+    }
+    return insertedEvents;
+  });
+}
+
+export async function getActiveRisingGameSignals(limit = 100): Promise<RisingGameSignalRow[]> {
+  return getDatabase()
+    .select()
+    .from(risingGameSignals)
+    .where(eq(risingGameSignals.active, true))
+    .orderBy(desc(risingGameSignals.score), desc(risingGameSignals.currentCcu))
+    .limit(limit);
+}
+
+export async function getRisingGameSignal(universeId: string): Promise<RisingGameSignalRow | null> {
+  const [row] = await getDatabase()
+    .select()
+    .from(risingGameSignals)
+    .where(and(eq(risingGameSignals.universeId, universeId), eq(risingGameSignals.active, true)))
+    .orderBy(desc(risingGameSignals.score))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function getPendingRisingGameEvents(
+  since: Date,
+  minimumScore: number,
+  limit = 20,
+): Promise<RisingGameEventRow[]> {
+  return getDatabase()
+    .select()
+    .from(risingGameEvents)
+    .where(and(
+      sql`${risingGameEvents.notifiedAt} is null`,
+      gte(risingGameEvents.detectedAt, since),
+      gte(risingGameEvents.score, minimumScore),
+    ))
+    .orderBy(desc(risingGameEvents.score), asc(risingGameEvents.detectedAt))
+    .limit(limit);
+}
+
+export async function markRisingGameEventsNotified(ids: string[], notifiedAt: Date): Promise<void> {
+  if (!ids.length) return;
+  await getDatabase()
+    .update(risingGameEvents)
+    .set({ notifiedAt })
+    .where(inArray(risingGameEvents.id, ids));
+}
+
+export async function getDiscoveryFrontierStates(): Promise<DiscoveryFrontierRow[]> {
+  return getDatabase().select().from(discoveryFrontier);
+}
+
+export async function saveDiscoveryFrontierStates(states: DiscoveryFrontierState[]): Promise<void> {
+  if (!states.length) return;
+  const database = getDatabase();
+  const rows = states.map((state) => ({
+    placeId: state.placeId,
+    name: state.name,
+    thumbnailUrl: state.thumbnailUrl,
+    currentCcu: state.currentCcu,
+    previousCcu: state.previousCcu,
+    peakCcu: state.peakCcu,
+    score: state.score,
+    qualifies: state.qualifies,
+    history: state.history,
+    firstSeenAt: state.firstSeenAt,
+    lastSeenAt: state.lastSeenAt,
+    observations: state.observations,
+  }));
+  for (const values of chunked(rows, 250)) {
+    await database
+      .insert(discoveryFrontier)
+      .values(values)
+      .onConflictDoUpdate({
+        target: discoveryFrontier.placeId,
+        set: {
+          name: sql`excluded.name`,
+          thumbnailUrl: sql`excluded.thumbnail_url`,
+          currentCcu: sql`excluded.current_ccu`,
+          previousCcu: sql`excluded.previous_ccu`,
+          peakCcu: sql`excluded.peak_ccu`,
+          score: sql`excluded.score`,
+          qualifies: sql`excluded.qualifies`,
+          history: sql`excluded.history`,
+          lastSeenAt: sql`excluded.last_seen_at`,
+          observations: sql`excluded.observations`,
+        },
+      });
+  }
+}
+
+export async function getDiscoveryFrontierCandidatePlaceIds(
+  limit: number,
+  now = new Date(),
+): Promise<string[]> {
+  const freshnessCutoff = new Date(
+    now.getTime() - RISING_GAMES_CONFIG.frontier.candidateFreshnessHours * 60 * 60 * 1_000,
+  );
+  const rows = await getDatabase()
+    .select({ placeId: discoveryFrontier.placeId })
+    .from(discoveryFrontier)
+    .where(and(eq(discoveryFrontier.qualifies, true), gte(discoveryFrontier.lastSeenAt, freshnessCutoff)))
+    .orderBy(desc(discoveryFrontier.score), desc(discoveryFrontier.currentCcu))
+    .limit(limit);
+  return rows.map((row) => row.placeId);
+}
+
+function tierRank(tier: RisingGameTier): number {
+  return { rising: 1, surging: 2, explosive: 3 }[tier];
 }
 
 export async function runMaintenance(retentionDays: number): Promise<{ aggregated: number; removed: number }> {

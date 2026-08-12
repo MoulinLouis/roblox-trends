@@ -28,7 +28,7 @@ export function parseRolimonsResponse(value: unknown): RolimonsGame[] {
 export async function getRolimonsGames(): Promise<RolimonsGame[]> {
   const value = await fetchJson<unknown>("https://api.rolimons.com/games/v1/gamelist", {
     timeoutMs: 15_000,
-    cacheTtlMs: 30 * 60 * 1000,
+    cacheTtlMs: 5 * 60 * 1000,
   });
   return parseRolimonsResponse(value);
 }

@@ -1,12 +1,13 @@
 "use client";
 
-import { Gamepad2, LayoutDashboard, Lightbulb, Radar, Settings, TrendingUp } from "lucide-react";
+import { Flame, Gamepad2, LayoutDashboard, Lightbulb, Radar, Settings, TrendingUp } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const links = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/games", label: "Games", icon: Gamepad2 },
+  { href: "/rising", label: "Rising", icon: Flame },
   { href: "/trends", label: "Trends", icon: TrendingUp },
   { href: "/ideas", label: "Idea Lab", icon: Lightbulb },
   { href: "/settings", label: "Settings", icon: Settings },

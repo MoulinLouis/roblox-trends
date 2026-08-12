@@ -13,6 +13,15 @@ import {
 import type { AppSettings, GameMetrics, GameTag, ScorePart, TrendMetrics, TrendStage } from "@/lib/types";
 import type { CollectionAttemptStatus } from "@/lib/collection-health";
 import type { ScheduledJobName, ScheduledJobStatus } from "@/lib/scheduler-types";
+import type {
+  DiscoveryFrontierPoint,
+  RisingGameConfidence,
+  RisingGameEventPayload,
+  RisingGameEventType,
+  RisingGameMetrics,
+  RisingGameSignalType,
+  RisingGameTier,
+} from "@/lib/rising-game-types";
 
 export const games = pgTable(
   "games",
@@ -268,6 +277,76 @@ export const alertEvents = pgTable("alert_events", {
   payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
   sentAt: timestamp("sent_at", { withTimezone: true }).notNull(),
 });
+
+export const risingGameSignals = pgTable(
+  "rising_game_signals",
+  {
+    universeId: text("universe_id")
+      .notNull()
+      .references(() => games.universeId, { onDelete: "cascade" }),
+    signalType: text("signal_type").$type<RisingGameSignalType>().notNull(),
+    score: integer("score").notNull(),
+    tier: text("tier").$type<RisingGameTier>().notNull(),
+    confidence: text("confidence").$type<RisingGameConfidence>().notNull(),
+    active: boolean("active").notNull().default(true),
+    currentCcu: integer("current_ccu").notNull(),
+    metrics: jsonb("metrics").$type<RisingGameMetrics>().notNull(),
+    reasons: jsonb("reasons").$type<string[]>().notNull(),
+    risks: jsonb("risks").$type<string[]>().notNull(),
+    firstDetectedAt: timestamp("first_detected_at", { withTimezone: true }).notNull(),
+    lastDetectedAt: timestamp("last_detected_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.universeId, table.signalType] }),
+    index("rising_game_signals_active_score_idx").on(table.active, table.score),
+    index("rising_game_signals_detected_idx").on(table.lastDetectedAt),
+  ],
+);
+
+export const risingGameEvents = pgTable(
+  "rising_game_events",
+  {
+    id: text("id").primaryKey(),
+    universeId: text("universe_id")
+      .notNull()
+      .references(() => games.universeId, { onDelete: "cascade" }),
+    signalType: text("signal_type").$type<RisingGameSignalType>().notNull(),
+    eventType: text("event_type").$type<RisingGameEventType>().notNull(),
+    tier: text("tier").$type<RisingGameTier>().notNull(),
+    score: integer("score").notNull(),
+    currentCcu: integer("current_ccu").notNull(),
+    payload: jsonb("payload").$type<RisingGameEventPayload>().notNull(),
+    detectedAt: timestamp("detected_at", { withTimezone: true }).notNull(),
+    notifiedAt: timestamp("notified_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("rising_game_events_recent_idx").on(table.detectedAt),
+    index("rising_game_events_notification_idx").on(table.notifiedAt, table.detectedAt),
+  ],
+);
+
+export const discoveryFrontier = pgTable(
+  "discovery_frontier",
+  {
+    placeId: text("place_id").primaryKey(),
+    name: text("name").notNull(),
+    thumbnailUrl: text("thumbnail_url"),
+    currentCcu: integer("current_ccu").notNull(),
+    previousCcu: integer("previous_ccu").notNull(),
+    peakCcu: integer("peak_ccu").notNull(),
+    score: integer("score").notNull(),
+    qualifies: boolean("qualifies").notNull(),
+    history: jsonb("history").$type<DiscoveryFrontierPoint[]>().notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+    observations: integer("observations").notNull(),
+  },
+  (table) => [
+    index("discovery_frontier_candidates_idx").on(table.qualifies, table.score),
+    index("discovery_frontier_seen_idx").on(table.lastSeenAt),
+  ],
+);
 
 export const schedulerLocks = pgTable("scheduler_locks", {
   name: text("name").primaryKey(),

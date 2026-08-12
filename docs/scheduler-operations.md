@@ -6,6 +6,7 @@ The production scheduler reconciles desired jobs against state stored in Neon Po
 
 | Job | Logical cadence | Behavior after a missed trigger |
 | --- | --- | --- |
+| Discovery frontier | Every 15 minutes | Reconciles the latest public Rolimon's game list, retains a bounded eight-hour CCU history, and queues qualified accelerations for full Roblox enrichment. A source failure is logged as degraded without blocking collection. |
 | Collection | Hourly | Collects the current bucket at the next tick; snapshot writes remain idempotent. |
 | Analysis | Every four hours | Recomputes the latest complete state at the next tick. |
 | Agent brief | Daily after 05:00 UTC | Generates files for the active runner and persists the latest JSON and Markdown in Neon. |
@@ -27,7 +28,7 @@ The lease lasts 30 minutes. If a runner is terminated, another runner can resume
 
 1. Open **Settings → Secrets and variables → Actions** in `MoulinLouis/roblox-trends`.
 2. Store the direct connection string for the Neon production branch as the `DATABASE_URL` repository secret.
-3. Optionally store `DISCORD_WEBHOOK_URL` for daily reports and collection-health alerts.
+3. Optionally store `DISCORD_WEBHOOK_URL` for daily reports, rising-game digests, and collection-health alerts.
 4. Open **Actions → Scheduler** and make sure the workflow is enabled.
 5. Select **Run workflow**, run it from `main`, and confirm that the logs end with `Scheduler tick completed` and an empty `failures` array.
 
@@ -105,4 +106,22 @@ Retrieve the latest persisted agent brief from the authenticated application:
 ```text
 GET /api/agent-brief
 GET /api/agent-brief?format=markdown
+```
+
+Inspect active launch breakouts and resurgences:
+
+```sql
+select universe_id, signal_type, tier, score, current_ccu, last_detected_at
+from rising_game_signals
+where active = true
+order by score desc, current_ccu desc;
+```
+
+Inspect recent idempotent signal events and Discord delivery state:
+
+```sql
+select universe_id, signal_type, event_type, tier, score, current_ccu, detected_at, notified_at
+from rising_game_events
+order by detected_at desc
+limit 50;
 ```

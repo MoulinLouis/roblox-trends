@@ -1,5 +1,6 @@
 import {
   getIdeas,
+  getActiveRisingGameSignals,
   getRecentCollectionAttempts,
   getRecentSourceRuns,
   getSettings,
@@ -13,7 +14,7 @@ import { ensureAppReady } from "./app-ready";
 
 export async function loadApplicationData() {
   await ensureAppReady();
-  const [settings, dataset, trends, ideas, sourceRuns, collectionAttempts, links] = await Promise.all([
+  const [settings, dataset, trends, ideas, sourceRuns, collectionAttempts, links, risingSignals] = await Promise.all([
     getSettings(),
     loadGameDataset(),
     getTrends(),
@@ -21,6 +22,7 @@ export async function loadApplicationData() {
     getRecentSourceRuns(36),
     getRecentCollectionAttempts(),
     getTrendLinks(),
+    getActiveRisingGameSignals(),
   ]);
   const trendById = new Map(trends.map((trend) => [trend.id, trend]));
   const stagesByGame = new Map<string, Set<TrendStage>>();
@@ -31,7 +33,7 @@ export async function loadApplicationData() {
     stages.add(stage);
     stagesByGame.set(link.universeId, stages);
   }
-  return { settings, dataset, trends, ideas, sourceRuns, collectionAttempts, links, stagesByGame };
+  return { settings, dataset, trends, ideas, sourceRuns, collectionAttempts, links, stagesByGame, risingSignals };
 }
 
 export function currentPoint(item: GameDatasetItem) {

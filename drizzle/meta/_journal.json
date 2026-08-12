@@ -36,6 +36,13 @@
       "when": 1786535271822,
       "tag": "0004_equal_warbound",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786575175138,
+      "tag": "0005_curious_goliath",
+      "breakpoints": true
     }
   ]
 }
