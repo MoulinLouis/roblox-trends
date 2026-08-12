@@ -1,0 +1,23 @@
+services:
+  - type: cron
+    name: roblox-trends-scheduler
+    runtime: node
+    plan: starter
+    region: frankfurt
+    schedule: "*/10 * * * *"
+    buildCommand: npm ci
+    startCommand: npm run tick
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: NODE_VERSION
+        value: 20.19.2
+      - key: DATABASE_URL
+        sync: false
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
+      - key: ROBLOX_COUNTRY
+        value: all
+      - key: ROBLOX_DEVICE
+        value: computer
+      - key: ROLIMONS_ENABLED
+        value: "true"

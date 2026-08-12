@@ -12,6 +12,7 @@ import {
 } from "drizzle-orm/pg-core";
 import type { AppSettings, GameMetrics, GameTag, ScorePart, TrendMetrics, TrendStage } from "@/lib/types";
 import type { CollectionAttemptStatus } from "@/lib/collection-health";
+import type { ScheduledJobName, ScheduledJobStatus } from "@/lib/scheduler-types";
 
 export const games = pgTable(
   "games",
@@ -266,4 +267,40 @@ export const alertEvents = pgTable("alert_events", {
   eventType: text("event_type").notNull(),
   payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
   sentAt: timestamp("sent_at", { withTimezone: true }).notNull(),
+});
+
+export const schedulerLocks = pgTable("scheduler_locks", {
+  name: text("name").primaryKey(),
+  owner: text("owner").notNull(),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }).notNull(),
+  acquiredAt: timestamp("acquired_at", { withTimezone: true }).notNull(),
+});
+
+export const scheduledJobRuns = pgTable(
+  "scheduled_job_runs",
+  {
+    id: text("id").primaryKey(),
+    jobName: text("job_name").$type<ScheduledJobName>().notNull(),
+    scheduledFor: timestamp("scheduled_for", { withTimezone: true }).notNull(),
+    owner: text("owner").notNull(),
+    status: text("status").$type<ScheduledJobStatus>().notNull(),
+    attempt: integer("attempt").notNull().default(1),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }).notNull(),
+    details: jsonb("details").$type<Record<string, unknown>>().notNull().default({}),
+    error: text("error"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("scheduled_job_runs_slot_idx").on(table.jobName, table.scheduledFor),
+    index("scheduled_job_runs_recent_idx").on(table.jobName, table.startedAt),
+  ],
+);
+
+export const generatedArtifacts = pgTable("generated_artifacts", {
+  key: text("key").primaryKey(),
+  contentType: text("content_type").notNull(),
+  textContent: text("text_content"),
+  jsonContent: jsonb("json_content").$type<Record<string, unknown>>(),
+  generatedAt: timestamp("generated_at", { withTimezone: true }).notNull(),
 });

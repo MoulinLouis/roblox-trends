@@ -55,6 +55,15 @@ export const EXTERNAL_REQUEST_CONFIG = {
   } satisfies Record<string, number>,
 } as const;
 
+export const SCHEDULER_CONFIG = {
+  tickIntervalMinutes: 10,
+  leaseDurationMinutes: 30,
+  analysisIntervalMinutes: 4 * 60,
+  dailyHourUtc: 5,
+  maximumCollectionAgeMinutes: 75,
+  maximumAnalysisAgeMinutes: 5 * 60,
+} as const;
+
 export const ROBLOX_EVENT_MARKERS = ["[upd", "[update", "event", "2x", "x2", "admin abuse"] as const;
 
 export const DEFAULT_SETTINGS: AppSettings = {

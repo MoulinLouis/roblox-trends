@@ -7,6 +7,7 @@ import {
   LEGACY_ROBLOX_CHARTS,
 } from "@/lib/config";
 import type { AppSettings, CollectedGame, GameSnapshotPoint, GameTag } from "@/lib/types";
+import type { ScheduledJobName } from "@/lib/scheduler-types";
 import { getDatabase } from "./index";
 import {
   alertEvents,
@@ -16,7 +17,10 @@ import {
   gameMetadataHistory,
   games,
   gameTags,
+  generatedArtifacts,
   ideas,
+  scheduledJobRuns,
+  schedulerLocks,
   settings as settingsTable,
   snapshots,
   sourceRuns,
@@ -32,6 +36,7 @@ export type TrendRow = typeof trends.$inferSelect;
 export type IdeaRow = typeof ideas.$inferSelect;
 export type SourceRunRow = typeof sourceRuns.$inferSelect;
 export type CollectionAttemptRow = typeof collectionAttempts.$inferSelect;
+export type ScheduledJobRunRow = typeof scheduledJobRuns.$inferSelect;
 
 export interface GameDatasetItem {
   game: GameRow;
@@ -477,6 +482,159 @@ export async function hasUsableCollectionAttempt(bucketAt: Date): Promise<boolea
 
 export async function getRecentCollectionAttempts(limit = 6): Promise<CollectionAttemptRow[]> {
   return getDatabase().select().from(collectionAttempts).orderBy(desc(collectionAttempts.startedAt)).limit(limit);
+}
+
+export async function acquireSchedulerLock(input: {
+  name: string;
+  owner: string;
+  now: Date;
+  leaseUntil: Date;
+}): Promise<boolean> {
+  const result = await getDatabase().execute(sql`
+    insert into scheduler_locks (name, owner, lease_until, acquired_at)
+    values (${input.name}, ${input.owner}, ${input.leaseUntil}, ${input.now})
+    on conflict (name) do update set
+      owner = excluded.owner,
+      lease_until = excluded.lease_until,
+      acquired_at = excluded.acquired_at
+    where scheduler_locks.lease_until <= excluded.acquired_at
+    returning name
+  `);
+  return resultRows<{ name: string }>(result).length === 1;
+}
+
+export async function renewSchedulerLock(input: {
+  name: string;
+  owner: string;
+  leaseUntil: Date;
+}): Promise<boolean> {
+  const rows = await getDatabase()
+    .update(schedulerLocks)
+    .set({ leaseUntil: input.leaseUntil })
+    .where(and(eq(schedulerLocks.name, input.name), eq(schedulerLocks.owner, input.owner)))
+    .returning({ name: schedulerLocks.name });
+  return rows.length === 1;
+}
+
+export async function releaseSchedulerLock(name: string, owner: string): Promise<void> {
+  await getDatabase()
+    .delete(schedulerLocks)
+    .where(and(eq(schedulerLocks.name, name), eq(schedulerLocks.owner, owner)));
+}
+
+export async function acquireScheduledJob(input: {
+  id: string;
+  jobName: ScheduledJobName;
+  scheduledFor: Date;
+  owner: string;
+  now: Date;
+  leaseUntil: Date;
+}): Promise<{ id: string; attempt: number } | null> {
+  const result = await getDatabase().execute(sql`
+    insert into scheduled_job_runs (
+      id, job_name, scheduled_for, owner, status, attempt, lease_until, details, started_at
+    ) values (
+      ${input.id}, ${input.jobName}, ${input.scheduledFor}, ${input.owner}, 'running', 1,
+      ${input.leaseUntil}, '{}'::jsonb, ${input.now}
+    )
+    on conflict (job_name, scheduled_for) do update set
+      id = excluded.id,
+      owner = excluded.owner,
+      status = 'running',
+      attempt = scheduled_job_runs.attempt + 1,
+      lease_until = excluded.lease_until,
+      details = '{}'::jsonb,
+      error = null,
+      started_at = excluded.started_at,
+      finished_at = null
+    where scheduled_job_runs.status <> 'success'
+      and scheduled_job_runs.lease_until <= excluded.started_at
+    returning id, attempt
+  `);
+  const [row] = resultRows<{ id: string; attempt: number }>(result);
+  return row ? { id: row.id, attempt: Number(row.attempt) } : null;
+}
+
+export async function finishScheduledJob(input: {
+  id: string;
+  owner: string;
+  status: "success" | "failed";
+  now: Date;
+  details?: Record<string, unknown>;
+  error?: string | null;
+}): Promise<void> {
+  await getDatabase()
+    .update(scheduledJobRuns)
+    .set({
+      status: input.status,
+      leaseUntil: input.now,
+      details: input.details ?? {},
+      error: input.error ?? null,
+      finishedAt: input.now,
+    })
+    .where(and(eq(scheduledJobRuns.id, input.id), eq(scheduledJobRuns.owner, input.owner)));
+}
+
+export async function saveGeneratedArtifact(input: {
+  key: string;
+  contentType: string;
+  textContent?: string | null;
+  jsonContent?: Record<string, unknown> | null;
+  generatedAt: Date;
+}): Promise<void> {
+  await getDatabase()
+    .insert(generatedArtifacts)
+    .values(input)
+    .onConflictDoUpdate({
+      target: generatedArtifacts.key,
+      set: {
+        contentType: input.contentType,
+        textContent: input.textContent ?? null,
+        jsonContent: input.jsonContent ?? null,
+        generatedAt: input.generatedAt,
+      },
+    });
+}
+
+export async function getGeneratedArtifact(key: string): Promise<typeof generatedArtifacts.$inferSelect | null> {
+  const [row] = await getDatabase()
+    .select()
+    .from(generatedArtifacts)
+    .where(eq(generatedArtifacts.key, key))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function getDataFreshness(): Promise<{
+  latestCollectionAt: Date | null;
+  latestAnalysisAt: Date | null;
+  latestSchedulerCollectionAt: Date | null;
+}> {
+  const database = getDatabase();
+  const [collectionRows, analysisRows, schedulerRows] = await Promise.all([
+    database
+      .select({ at: collectionAttempts.startedAt })
+      .from(collectionAttempts)
+      .where(inArray(collectionAttempts.status, ["healthy", "degraded"]))
+      .orderBy(desc(collectionAttempts.startedAt))
+      .limit(1),
+    database
+      .select({ at: gameAnalyses.analyzedAt })
+      .from(gameAnalyses)
+      .orderBy(desc(gameAnalyses.analyzedAt))
+      .limit(1),
+    database
+      .select({ at: scheduledJobRuns.finishedAt })
+      .from(scheduledJobRuns)
+      .where(and(eq(scheduledJobRuns.jobName, "collect"), eq(scheduledJobRuns.status, "success")))
+      .orderBy(desc(scheduledJobRuns.finishedAt))
+      .limit(1),
+  ]);
+  return {
+    latestCollectionAt: collectionRows[0]?.at ?? null,
+    latestAnalysisAt: analysisRows[0]?.at ?? null,
+    latestSchedulerCollectionAt: schedulerRows[0]?.at ?? null,
+  };
 }
 
 export async function getRecentSourceRuns(limit = 12): Promise<SourceRunRow[]> {
