@@ -59,7 +59,7 @@ The commands are intentionally separate:
 
 The collection bucket is one hour. A retry inside the same bucket updates the matching `(universe, bucket, source, chart)` row instead of creating a duplicate. Every attempt and its per-source outcome are retained separately for diagnosis. Collection health is `healthy`, `degraded`, or `critical`; missing optional discovery remains degraded, while missing snapshots, insufficient chart coverage, or Games API failures are critical.
 
-The durable scheduler checks every ten minutes and writes at most one successful execution per logical slot. A PostgreSQL lease prevents Render, GitHub fallback, and manual reconciliation from overlapping. Discord receives an immediate critical collection alert, an alert after two consecutive degraded attempts, and a recovery alert. Alert delivery failures are isolated from collection.
+The durable scheduler checks every fifteen minutes and writes at most one successful execution per logical slot. A PostgreSQL lease prevents scheduled and manual reconciliation from overlapping. Discord receives an immediate critical collection alert, an alert after two consecutive degraded attempts, and a recovery alert. Alert delivery failures are isolated from collection.
 
 Games published in the last 90 days continue to receive direct snapshots after leaving a chart. Older games continue to be tracked while they have recorded at least 100 CCU during the last 30 days. This avoids mistaking a missing chart observation for stable demand or losing the decline after a breakout.
 
@@ -109,15 +109,15 @@ Settings persisted from the interface take precedence for collection thresholds,
 
 ## Automation
 
-GitHub Actions is no longer the primary production clock:
+GitHub Actions is the primary production clock:
 
 - `CI` runs linting, type checking, tests, and the production build on pushes and pull requests.
-- `Scheduler fallback` runs the durable reconciliation command once per hour as a secondary provider.
+- `Scheduler` runs the durable reconciliation command every fifteen minutes at staggered minutes to reduce start-of-hour delays.
 - `Collect Roblox data`, `Refresh analysis`, and `Analyze and report` remain manually dispatchable for operations and recovery.
 
-Scheduled workflows must receive a persistent `DATABASE_URL` repository secret; a runner-local PGlite database is intentionally not suitable because GitHub runners are ephemeral. Add `DISCORD_WEBHOOK_URL` as a secret for reports and alerts.
+Scheduled workflows must receive a persistent `DATABASE_URL` repository secret; a runner-local PGlite database is intentionally not suitable because GitHub runners are ephemeral. Add `DISCORD_WEBHOOK_URL` as a secret for reports and alerts. An optional `HEALTHCHECKS_PING_URL` secret enables independent heartbeat monitoring without deploying the web application or owning a domain.
 
-The primary scheduler is the Render cron service declared in `render.yaml`. It runs every ten minutes, uses Neon PostgreSQL for atomic leases and job history, retries expired or failed slots, and exits. Data freshness is exposed at `/api/health/data` for independent monitoring. Full setup and incident procedures are documented in [`docs/scheduler-operations.md`](docs/scheduler-operations.md).
+The scheduler uses Neon PostgreSQL for atomic leases and job history, retries expired or failed slots, and exits. Standard GitHub-hosted runners are free for this public repository. The optional paid Render cron declared in `render.yaml` can be added later as a second clock without causing duplicate work. Full setup and incident procedures are documented in [`docs/scheduler-operations.md`](docs/scheduler-operations.md).
 
 ## Deployment
 
@@ -127,8 +127,8 @@ For a typical deployment:
 2. Run `npm run db:migrate` against it.
 3. Deploy the Next.js application.
 4. Add `APP_PASSWORD` if the deployment is publicly reachable.
-5. Add the same `DATABASE_URL` to GitHub Actions secrets and keep the fallback workflow active.
-6. Apply `render.yaml` as a Render Blueprint, provide the Neon `DATABASE_URL`, and configure external monitoring for `/api/health/data`.
+5. Add the same `DATABASE_URL` to GitHub Actions secrets and keep the `Scheduler` workflow active.
+6. Add `HEALTHCHECKS_PING_URL` for domain-free scheduler monitoring, or monitor `/api/health/data` after deploying the web application.
 
 The included Dockerfile builds the standalone Next.js output. It expects a `public` directory and copies the migrations required at runtime. On a platform with a persistent disk, PGlite can be mounted at `PGLITE_DATA_DIR`, but hosted PostgreSQL is recommended for scheduled jobs.
 

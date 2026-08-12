@@ -1,3 +1,4 @@
+# Optional paid secondary clock. GitHub Actions is the primary scheduler.
 services:
   - type: cron
     name: roblox-trends-scheduler

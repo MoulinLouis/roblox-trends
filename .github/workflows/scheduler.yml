@@ -1,0 +1,71 @@
+name: Scheduler
+
+on:
+  schedule:
+    # Avoid the start-of-hour congestion window documented by GitHub.
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roblox-trend-scheduler
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20.19.2
+          cache: npm
+      - run: npm ci
+      - name: Verify persistent database configuration
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "DATABASE_URL secret is required for the scheduler."
+            exit 1
+          fi
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - name: Signal scheduler start
+        continue-on-error: true
+        run: |
+          if [ -n "$HEALTHCHECKS_PING_URL" ]; then
+            curl --fail --silent --show-error --max-time 10 --retry 3 --output /dev/null \
+              "${HEALTHCHECKS_PING_URL%/}/start"
+          fi
+        env:
+          HEALTHCHECKS_PING_URL: ${{ secrets.HEALTHCHECKS_PING_URL }}
+      - name: Reconcile scheduled jobs
+        run: npm run tick
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ROBLOX_COUNTRY: all
+          ROBLOX_DEVICE: computer
+          ROLIMONS_ENABLED: "true"
+      - name: Signal scheduler success
+        if: ${{ success() }}
+        continue-on-error: true
+        run: |
+          if [ -n "$HEALTHCHECKS_PING_URL" ]; then
+            curl --fail --silent --show-error --max-time 10 --retry 3 --output /dev/null \
+              "$HEALTHCHECKS_PING_URL"
+          fi
+        env:
+          HEALTHCHECKS_PING_URL: ${{ secrets.HEALTHCHECKS_PING_URL }}
+      - name: Signal scheduler failure
+        if: ${{ failure() }}
+        continue-on-error: true
+        run: |
+          if [ -n "$HEALTHCHECKS_PING_URL" ]; then
+            curl --fail --silent --show-error --max-time 10 --retry 3 --output /dev/null \
+              "${HEALTHCHECKS_PING_URL%/}/fail"
+          fi
+        env:
+          HEALTHCHECKS_PING_URL: ${{ secrets.HEALTHCHECKS_PING_URL }}

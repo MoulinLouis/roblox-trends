@@ -59,18 +59,26 @@ try {
       maintenance: async () => runMaintenance(settings.thresholds.hourlyRetentionDays),
     },
   });
+  const health = evaluateDataHealth(await getDataFreshness(), new Date());
 
   if (!result.acquired) {
-    logger.info("Scheduler tick skipped because another owner holds the lease", { owner });
+    logger.info("Scheduler tick skipped because another owner holds the lease", {
+      owner,
+      dataHealth: health.status,
+    });
   } else {
     logger.info("Scheduler tick completed", {
       owner,
       completed: result.completed.map((job) => job.jobName),
       skipped: result.skipped.map((job) => job.jobName),
       failures: result.failures,
+      dataHealth: health.status,
     });
   }
-  if (result.failures.length) process.exitCode = 1;
+  if (health.status === "critical") {
+    logger.error("Scheduler data freshness check failed", { checks: health.checks });
+  }
+  if (result.failures.length || health.status === "critical") process.exitCode = 1;
 } catch (error) {
   logger.error("Scheduler tick failed", { error: error instanceof Error ? error.message : String(error) });
   process.exitCode = 1;
