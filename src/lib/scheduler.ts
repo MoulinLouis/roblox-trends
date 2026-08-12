@@ -25,6 +25,7 @@ export interface SchedulerTickResult {
 export function buildScheduledJobSlots(now: Date, collectionIntervalMinutes: number): ScheduledJobSlot[] {
   const dailySlot = latestDailySlot(now, SCHEDULER_CONFIG.dailyHourUtc);
   return [
+    { jobName: "frontier", scheduledFor: floorToInterval(now, SCHEDULER_CONFIG.frontierIntervalMinutes) },
     { jobName: "collect", scheduledFor: floorToInterval(now, collectionIntervalMinutes) },
     { jobName: "analyze", scheduledFor: floorToInterval(now, SCHEDULER_CONFIG.analysisIntervalMinutes) },
     { jobName: "brief", scheduledFor: dailySlot },

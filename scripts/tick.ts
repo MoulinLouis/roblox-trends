@@ -6,6 +6,7 @@ import { generateAgentDecisionBrief } from "@/lib/agent-brief";
 import { analyzeTrends } from "@/lib/analysis";
 import { runCollectionJob } from "@/lib/collection-job";
 import { evaluateDataHealth } from "@/lib/data-health";
+import { scanDiscoveryFrontier } from "@/lib/discovery-frontier";
 import { logger } from "@/lib/logger";
 import { sendDailyReport } from "@/lib/report";
 import { runSchedulerTick } from "@/lib/scheduler";
@@ -20,6 +21,16 @@ try {
     now,
     collectionIntervalMinutes: settings.collection.intervalMinutes,
     actions: {
+      frontier: async () => {
+        try {
+          return await scanDiscoveryFrontier(new Date());
+        } catch (error) {
+          logger.warn("Discovery frontier scan failed without blocking collection", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return { status: "degraded", error: error instanceof Error ? error.message : String(error) };
+        }
+      },
       collect: async () => {
         const outcome = await runCollectionJob({
           settings,

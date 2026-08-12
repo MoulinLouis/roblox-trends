@@ -2,6 +2,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
   getRecentSourceRuns,
+  getActiveRisingGameSignals,
   getSettings,
   getTrendLinks,
   getTrends,
@@ -10,11 +11,13 @@ import {
   type GameDatasetItem,
   type SourceRunRow,
   type TrendRow,
+  type RisingGameSignalRow,
 } from "@/db/repository";
 import { protectedGrowth } from "./scoring";
 import { IDEA_EVIDENCE_CONFIG } from "./config";
 import { calculateDurabilityAssessment, type DurabilityAssessment } from "./idea-evidence";
 import type { AppSettings, GameSnapshotPoint, GameTag } from "./types";
+import { buildRisingGameClusters, type RisingGameCluster } from "./rising-game-clusters";
 
 const HOUR = 60 * 60 * 1000;
 const REPORT_DIRECTORY = ".data/reports";
@@ -87,7 +90,7 @@ interface TrendEvidence {
 }
 
 export interface AgentDecisionBrief {
-  schemaVersion: 1;
+  schemaVersion: 2;
   generatedAt: string;
   decisionReadiness: DecisionReadiness;
   dataQuality: {
@@ -122,6 +125,17 @@ export interface AgentDecisionBrief {
   combinations: TrendEvidence[];
   saturationWatch: TrendEvidence[];
   recentAlgorithmBreakouts: Array<GameEvidence & { evidence: WindowChange }>;
+  risingGames: Array<{
+    signalType: RisingGameSignalRow["signalType"];
+    tier: RisingGameSignalRow["tier"];
+    score: number;
+    confidence: RisingGameSignalRow["confidence"];
+    metrics: RisingGameSignalRow["metrics"];
+    reasons: string[];
+    risks: string[];
+    game: GameEvidence;
+  }>;
+  risingHypeClusters: RisingGameCluster[];
   verifiedMovers: Array<
     GameEvidence & { evidenceWindowHours: number; marketRelativeGrowth: number; evidence: WindowChange }
   >;
@@ -209,14 +223,15 @@ export async function generateAgentDecisionBrief(now = new Date()): Promise<{
   markdownPath: string;
   jsonPath: string;
 }> {
-  const [dataset, trendRows, trendLinks, sourceRuns, settings] = await Promise.all([
+  const [dataset, trendRows, trendLinks, sourceRuns, settings, risingSignals] = await Promise.all([
     loadGameDataset(),
     getTrends(),
     getTrendLinks(),
     getRecentSourceRuns(12),
     getSettings(),
+    getActiveRisingGameSignals(),
   ]);
-  const brief = buildAgentDecisionBrief(dataset, trendRows, trendLinks, sourceRuns, settings, now);
+  const brief = buildAgentDecisionBrief(dataset, trendRows, trendLinks, sourceRuns, settings, risingSignals, now);
   const directory = resolve(REPORT_DIRECTORY);
   const markdownPath = resolve(directory, "latest-agent-brief.md");
   const jsonPath = resolve(directory, "latest-agent-brief.json");
@@ -242,6 +257,7 @@ function buildAgentDecisionBrief(
   trendLinks: Array<{ trendId: string; universeId: string }>,
   sourceRuns: SourceRunRow[],
   settings: AppSettings,
+  risingSignals: RisingGameSignalRow[],
   now: Date,
 ): AgentDecisionBrief {
   const allPoints = dataset.flatMap((item) => item.snapshots);
@@ -294,7 +310,7 @@ function buildAgentDecisionBrief(
       : []),
   ];
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: now.toISOString(),
     decisionReadiness,
     dataQuality: {
@@ -333,6 +349,20 @@ function buildAgentDecisionBrief(
       .sort((a, b) => b.saturationScore - a.saturationScore)
       .slice(0, 12),
     recentAlgorithmBreakouts: buildRecentAlgorithmBreakouts([...gameEvidence.values()]),
+    risingGames: risingSignals.flatMap((signal) => {
+      const game = gameEvidence.get(signal.universeId);
+      return game ? [{
+        signalType: signal.signalType,
+        tier: signal.tier,
+        score: signal.score,
+        confidence: signal.confidence,
+        metrics: signal.metrics,
+        reasons: signal.reasons,
+        risks: signal.risks,
+        game,
+      }] : [];
+    }),
+    risingHypeClusters: buildRisingGameClusters(risingSignals, dataset).slice(0, 15),
     verifiedMovers: buildVerifiedMovers([...gameEvidence.values()], settings, marketWindows),
     humanReviewQuestions: [
       "Can a child understand the core action and objective from one thumbnail and the first ten seconds?",
@@ -595,6 +625,16 @@ export function renderAgentDecisionBrief(brief: AgentDecisionBrief): string {
     "",
     renderAlgorithmBreakoutTable(brief.recentAlgorithmBreakouts),
     "",
+    "## Live launch breakouts and resurgences",
+    "",
+    "These signals are re-evaluated after every collection. Launch breakouts combine recent game age, meaningful CCU, relative acceleration, and milestone crossings. Resurgences compare older games against their own tracked history.",
+    "",
+    renderRisingGameTable(brief.risingGames),
+    "",
+    "### Hype clusters among live movers",
+    "",
+    renderRisingClusterTable(brief.risingHypeClusters),
+    "",
     "## Verified movers",
     "",
     renderMoverTable(brief.verifiedMovers),
@@ -609,6 +649,31 @@ export function renderAgentDecisionBrief(brief: AgentDecisionBrief): string {
     "",
   ];
   return `${lines.join("\n")}\n`;
+}
+
+function renderRisingGameTable(games: AgentDecisionBrief["risingGames"]): string {
+  if (!games.length) return "No launch breakout or resurgence currently passes the strict live gate.";
+  return [
+    "| Game | Signal | Tier / score | CCU | Strongest move | Confidence | Main reason | Main risk |",
+    "| --- | --- | ---: | ---: | ---: | --- | --- | --- |",
+    ...games.map(({ game, ...signal }) => {
+      const movement = signal.metrics.strongestWindow
+        ? `${formatSigned(signal.metrics.strongestWindow.gain)} / ${formatPercent(signal.metrics.strongestWindow.growthPercent)} in ${signal.metrics.strongestWindow.actualHours}h`
+        : "Early discovery";
+      return `| [${escapeCell(game.name)}](${game.url}) | ${signal.signalType} | ${signal.tier} / ${signal.score} | ${formatNumber(signal.metrics.currentCcu)} | ${movement} | ${signal.confidence} | ${escapeCell(signal.reasons[0] ?? "Qualified live movement")} | ${escapeCell(signal.risks[0] ?? "No primary risk detected")} |`;
+    }),
+  ].join("\n");
+}
+
+function renderRisingClusterTable(clusters: AgentDecisionBrief["risingHypeClusters"]): string {
+  if (!clusters.length) return "No shared mechanic or theme cluster is visible among current movers yet.";
+  return [
+    "| Cluster | Dimension | Games | Combined CCU | Average score | Launch / resurgence |",
+    "| --- | --- | ---: | ---: | ---: | ---: |",
+    ...clusters.map((cluster) =>
+      `| ${escapeCell(cluster.tag)} | ${cluster.dimension} | ${cluster.gameCount} | ${formatNumber(cluster.totalCcu)} | ${cluster.averageScore} | ${cluster.launchBreakouts} / ${cluster.resurgences} |`,
+    ),
+  ].join("\n");
 }
 
 function renderAlgorithmBreakoutTable(games: AgentDecisionBrief["recentAlgorithmBreakouts"]): string {

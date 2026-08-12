@@ -7,6 +7,7 @@ import { sendCollectionHealthAlert } from "./collection-alert";
 import { detectCollectionHealthTransition } from "./collection-health";
 import { collectRobloxData, type CollectionResult } from "./collection";
 import { logger } from "./logger";
+import { runRisingGameDetection } from "./rising-game-job";
 import type { AppSettings } from "./types";
 
 export async function runCollectionJob(input: {
@@ -28,6 +29,14 @@ export async function runCollectionJob(input: {
   }
 
   const result = await collectRobloxData(input.settings, now, trigger);
+  try {
+    await runRisingGameDetection(input.settings, now);
+  } catch (error) {
+    logger.warn("Rising game detection failed without affecting collection", {
+      attemptId: result.attemptId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   try {
     const attempts = await getRecentCollectionAttempts(3);
     const transition = detectCollectionHealthTransition(attempts.map((attempt) => attempt.status));

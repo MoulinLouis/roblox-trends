@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getGame, getTrendIdsForGame, getTrends } from "@/db/repository";
+import { getGame, getRisingGameSignal, getTrendIdsForGame, getTrends } from "@/db/repository";
 import { TagEditor } from "@/components/TagEditor";
 import { AreaChart, formatCompact, formatDate, formatPercent, GameThumbnail, ScoreRing, StageBadge, TagList } from "@/components/ui";
 import { ensureAppReady } from "@/lib/app-ready";
@@ -19,13 +19,19 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
 export default async function GameDetailPage({ params }: { params: Promise<{ id: string }> }) {
   await ensureAppReady();
   const id = (await params).id;
-  const [item, trendIds, allTrends] = await Promise.all([getGame(id), getTrendIdsForGame(id), getTrends()]);
+  const [item, trendIds, allTrends, risingSignal] = await Promise.all([
+    getGame(id),
+    getTrendIdsForGame(id),
+    getTrends(),
+    getRisingGameSignal(id),
+  ]);
   if (!item) notFound();
   const relatedTrends = allTrends.filter((trend) => trendIds.includes(trend.id));
   const point = item.snapshots.at(-1);
   const metrics = item.analysis?.metrics;
   const algorithmEvidence = buildIdeaGameEvidence(item);
   return <div className="content"><div className="detail-hero"><GameThumbnail name={item.game.normalizedTitle} url={item.game.thumbnailUrl} large /><div className="detail-hero-copy"><p className="eyebrow">Game signal · Universe {item.game.universeId}</p><h1>{item.game.normalizedTitle}</h1><p className="page-subtitle">By {item.game.creatorName} · First seen {formatDate(item.game.firstSeenAt)}</p></div><ScoreRing score={item.analysis?.momentumScore ?? 0} large /><div className="detail-actions"><a className="button" href={`https://www.roblox.com/games/${item.game.rootPlaceId}`} target="_blank" rel="noreferrer">Open Roblox <ExternalLink size={14} /></a></div></div>
+    {risingSignal ? <div className="alert rising-proof"><div><strong>{risingSignal.signalType === "launch_breakout" ? "Launch breakout" : "Resurgence"} · {risingSignal.tier} · {risingSignal.score}/100</strong><br />{risingSignal.reasons.join(" · ")}{risingSignal.risks.length ? ` Caution: ${risingSignal.risks.join(" · ")}` : ""}</div></div> : null}
     {algorithmEvidence?.algorithmProof ? <div className="alert algorithm-proof"><div><strong>Recent discovery breakout · durability {algorithmEvidence.durabilityStatus} ({algorithmEvidence.durabilityConfidence}/100 confidence)</strong><br />Released {Math.round(algorithmEvidence.ageDays)} days ago, now at {formatCompact(algorithmEvidence.currentCcu)} CCU after gaining {formatCompact(algorithmEvidence.gain24h)} players ({formatPercent(algorithmEvidence.growth24h)}) in the verified 24-hour window. Only {Math.round(algorithmEvidence.historyHours)} hours are observed; medium-term durability requires at least 72 hours. {algorithmEvidence.eventRisk ? "An update or event marker creates additional temporary-spike risk." : ""}</div></div> : null}
     <div className="grid grid-4"><div className="card metric-card"><span className="metric-label">Current CCU</span><div className="metric-value">{formatCompact(point?.ccu ?? 0)}</div><span className="metric-detail">Rank {point?.rank ? `#${point.rank}` : "not charted"} · {metrics?.chartBreadth ?? 0} charts</span></div><div className="card metric-card"><span className="metric-label">Sustained growth</span><div className={`metric-value ${(metrics?.durableGrowth ?? 0) >= 0 ? "positive" : "negative"}`}>{formatPercent(metrics?.durableGrowth ?? 0)}</div><span className="metric-detail">{formatCompact(metrics?.durableGain ?? 0)} average CCU · {signalWindow(metrics?.durableWindowHours ?? 0)}</span></div><div className="card metric-card"><span className="metric-label">History confidence</span><div className="metric-value">{Math.round(metrics?.durabilityConfidence ?? 0)}%</div><span className="metric-detail">{Math.round(metrics?.historyHours ?? 0)}h observed · {Math.round(metrics?.peakDrawdown72h ?? 0)}% peak drawdown</span></div><div className="card metric-card"><span className="metric-label">Persistence</span><div className="metric-value">{Math.round(metrics?.persistence ?? 0)}%</div><span className="metric-detail">Daily periods still growing{metrics?.eventRisk ? " · spike risk" : ""}</span></div></div>
     <div className="grid grid-2 section"><div className="card chart-card"><div className="chart-header"><div><h2>CCU history</h2><span>Concurrent demand over time</span></div></div><AreaChart points={item.snapshots} value="ccu" /></div><div className="card chart-card"><div className="chart-header"><div><h2>Visit history</h2><span>{formatCompact(metrics?.newVisits24h ?? 0)} new visits in 24h</span></div></div><AreaChart points={item.snapshots} value="visits" color="var(--blue)" /></div><div className="card chart-card"><div className="chart-header"><div><h2>Favorite history</h2><span>{formatCompact(metrics?.newFavorites24h ?? 0)} new favorites in 24h</span></div></div><AreaChart points={item.snapshots} value="favorites" color="var(--purple)" /></div><div className="card chart-card"><div className="chart-header"><div><h2>Chart rank history</h2><span>{metrics?.rankMovement24h ?? 0} places gained in 24h</span></div></div><AreaChart points={item.snapshots} value="rank" color="var(--orange)" /></div></div>

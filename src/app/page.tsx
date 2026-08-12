@@ -9,7 +9,7 @@ import { latestCollectionTime, loadApplicationData } from "@/lib/view-data";
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const { dataset, trends, ideas, sourceRuns, collectionAttempts } = await loadApplicationData();
+  const { dataset, trends, ideas, sourceRuns, collectionAttempts, risingSignals } = await loadApplicationData();
   const latest = latestCollectionTime(dataset);
   const latestAttempt = collectionAttempts[0] ?? null;
   const latestSourceRuns = latestAttempt
@@ -37,7 +37,7 @@ export default async function DashboardPage() {
   return <div className="content"><PageHeading eyebrow="Daily command center" title="Catch the wave before the clones" subtitle="Momentum now prioritizes rolling-window growth, comparable chart movement, approval velocity, persistence, and spike resilience—not one strong 24-hour event." action={<Freshness date={latest} errors={healthIssueCount} />} />
     <div className="grid grid-4">
       <MetricCard label="Tracked demand" value={formatCompact(combinedCcu)} detail={`Across ${dataset.length} monitored games`} />
-      <MetricCard label="Discovery breakouts" value={String(breakouts.length)} detail="24h evidence; durability requires 72h" tone="blue" />
+      <MetricCard label="Rising games" value={String(risingSignals.length)} detail={`${risingSignals.filter((signal) => signal.signalType === "launch_breakout").length} launch · ${risingSignals.filter((signal) => signal.signalType === "resurgence").length} resurgence`} tone="blue" />
       <MetricCard label="Expanding signals" value={String(expanding.length)} detail="Multi-creator growth" tone="purple" />
       <MetricCard label="Saturated formats" value={String(saturated.length)} detail="Supply is outpacing demand" tone="orange" />
     </div>

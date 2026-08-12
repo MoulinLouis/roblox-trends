@@ -104,6 +104,7 @@ describe("scheduler persistence", () => {
   it("reconciles every due action once across repeated ticks", async () => {
     const calls: string[] = [];
     const actions = {
+      frontier: async () => { calls.push("frontier"); },
       collect: async () => { calls.push("collect"); },
       analyze: async () => { calls.push("analyze"); },
       brief: async () => { calls.push("brief"); },
@@ -120,14 +121,84 @@ describe("scheduler persistence", () => {
     });
     const second = await scheduler.runSchedulerTick({
       owner: "tick-two",
-      now: new Date("2026-09-01T12:20:00Z"),
+      now: new Date("2026-09-01T12:14:00Z"),
       collectionIntervalMinutes: 60,
       actions,
-      clock: () => new Date("2026-09-01T12:20:00Z"),
+      clock: () => new Date("2026-09-01T12:14:00Z"),
     });
-    expect(first.completed).toHaveLength(5);
+    expect(first.completed).toHaveLength(6);
     expect(second.completed).toHaveLength(0);
-    expect(second.skipped).toHaveLength(5);
-    expect(calls).toEqual(["collect", "analyze", "brief", "report", "maintenance"]);
+    expect(second.skipped).toHaveLength(6);
+    expect(calls).toEqual(["frontier", "collect", "analyze", "brief", "report", "maintenance"]);
+  });
+
+  it("persists rising signals and emits idempotent lifecycle events", async () => {
+    const detectedAt = new Date("2026-09-01T13:00:00Z");
+    const settings = await repository.getSettings();
+    await repository.saveCollectedGames([{
+      universeId: "rising-persistence-game",
+      rootPlaceId: "9001",
+      name: "Persistence Test",
+      description: "Test fixture",
+      creatorId: "creator",
+      creatorName: "Creator",
+      creatorType: "User",
+      createdAt: new Date("2026-08-25T00:00:00Z"),
+      updatedAt: detectedAt,
+      ccu: 1_500,
+      visits: 50_000,
+      favorites: 2_000,
+      upVotes: 1_000,
+      downVotes: 50,
+      isSponsored: false,
+      thumbnailUrl: null,
+      genre: null,
+      chart: "Test",
+      rank: 20,
+      source: "test",
+    }], detectedAt, settings);
+    const candidate = {
+      universeId: "rising-persistence-game",
+      signalType: "launch_breakout" as const,
+      score: 60,
+      tier: "rising" as const,
+      confidence: "early" as const,
+      detectedAt,
+      metrics: {
+        currentCcu: 1_500,
+        observedHours: 6,
+        ageDays: 7,
+        firstSeenHoursAgo: 6,
+        strongestWindow: null,
+        windows: {},
+        priorPeakCcu: 900,
+        historicalMedianCcu: 700,
+        medianMultiple: 2.1,
+        peakDrawdownPercent: 0,
+        crossedMilestone: 1_000,
+        newHighSinceTracking: false,
+        enteredDiscoveryChart: true,
+        chart: "Test",
+      },
+      reasons: ["Crossed 1,000 concurrent players"],
+      risks: [],
+    };
+
+    expect(await repository.replaceRisingGameSignals([candidate], detectedAt)).toHaveLength(1);
+    expect(await repository.replaceRisingGameSignals([candidate], detectedAt)).toHaveLength(0);
+    expect(await repository.getActiveRisingGameSignals()).toHaveLength(1);
+
+    const promoted = {
+      ...candidate,
+      score: 88,
+      tier: "explosive" as const,
+      metrics: { ...candidate.metrics, currentCcu: 5_200, crossedMilestone: 5_000 },
+    };
+    const promotionEvents = await repository.replaceRisingGameSignals([promoted], new Date("2026-09-01T14:00:00Z"));
+    expect(promotionEvents).toHaveLength(1);
+    expect(promotionEvents[0]?.eventType).toBe("tier_up");
+
+    await repository.replaceRisingGameSignals([], new Date("2026-09-01T15:00:00Z"));
+    expect(await repository.getActiveRisingGameSignals()).toHaveLength(0);
   });
 });

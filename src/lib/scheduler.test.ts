@@ -18,17 +18,19 @@ describe("durable scheduler slots", () => {
     );
   });
 
-  it("orders collection before analysis and daily work", () => {
+  it("orders frontier discovery before collection, analysis, and daily work", () => {
     const slots = buildScheduledJobSlots(new Date("2026-08-12T09:17:00Z"), 60);
     expect(slots.map((slot) => slot.jobName)).toEqual([
+      "frontier",
       "collect",
       "analyze",
       "brief",
       "report",
       "maintenance",
     ]);
-    expect(slots[0].scheduledFor).toEqual(new Date("2026-08-12T09:00:00Z"));
-    expect(slots[1].scheduledFor).toEqual(new Date("2026-08-12T08:00:00Z"));
-    expect(slots[2].scheduledFor).toEqual(new Date("2026-08-12T05:00:00Z"));
+    expect(slots[0].scheduledFor).toEqual(new Date("2026-08-12T09:15:00Z"));
+    expect(slots[1].scheduledFor).toEqual(new Date("2026-08-12T09:00:00Z"));
+    expect(slots[2].scheduledFor).toEqual(new Date("2026-08-12T08:00:00Z"));
+    expect(slots[3].scheduledFor).toEqual(new Date("2026-08-12T05:00:00Z"));
   });
 });

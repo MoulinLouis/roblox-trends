@@ -10,13 +10,14 @@ import {
 } from "./api/roblox";
 import { getRolimonsGames } from "./api/rolimons";
 import { errorMessage, logger } from "./logger";
-import { COLLECTION_DISCOVERY_CONFIG } from "./config";
+import { COLLECTION_DISCOVERY_CONFIG, RISING_GAMES_CONFIG } from "./config";
 import { classifyCollectionHealth, selectRotatingWindow, type CollectionHealth } from "./collection-health";
 import {
   createCollectionAttempt,
   finishCollectionAttempt,
   floorToBucket,
   getCollectionSearchKeywords,
+  getDiscoveryFrontierCandidatePlaceIds,
   getRecommendationSeedIds,
   getTrackableUniverseIds,
   getUniverseIdsByRootPlaceIds,
@@ -297,10 +298,22 @@ async function collectRolimonsDiscoveries(
   await startSourceRun(context, source);
   const knownPlaceIds = new Set(discoveries.map((item) => String(item.chartGame.rootPlaceId)));
   try {
-    const candidates = (await getRolimonsGames())
-      .filter((game) => !knownPlaceIds.has(game.placeId))
+    const available = (await getRolimonsGames())
+      .filter((game) => !knownPlaceIds.has(game.placeId));
+    const frontierPlaceIds = await getDiscoveryFrontierCandidatePlaceIds(
+      RISING_GAMES_CONFIG.frontier.maximumCandidatesPerCollection,
+    );
+    const availableByPlace = new Map(available.map((game) => [game.placeId, game]));
+    const frontierCandidates = frontierPlaceIds.flatMap((placeId) => {
+      const game = availableByPlace.get(placeId);
+      return game ? [game] : [];
+    });
+    const frontierSet = new Set(frontierCandidates.map((game) => game.placeId));
+    const highCcuCandidates = available
+      .filter((game) => !frontierSet.has(game.placeId))
       .sort((a, b) => b.ccu - a.ccu)
       .slice(0, candidateLimit);
+    const candidates = [...frontierCandidates, ...highCcuCandidates];
     const knownUniverseIds = await getUniverseIdsByRootPlaceIds(candidates.map((candidate) => candidate.placeId));
     let cached = 0;
     let resolved = 0;
