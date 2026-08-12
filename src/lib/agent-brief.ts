@@ -6,6 +6,7 @@ import {
   getTrendLinks,
   getTrends,
   loadGameDataset,
+  saveGeneratedArtifact,
   type GameDatasetItem,
   type SourceRunRow,
   type TrendRow,
@@ -219,9 +220,19 @@ export async function generateAgentDecisionBrief(now = new Date()): Promise<{
   const directory = resolve(REPORT_DIRECTORY);
   const markdownPath = resolve(directory, "latest-agent-brief.md");
   const jsonPath = resolve(directory, "latest-agent-brief.json");
+  const markdown = renderAgentDecisionBrief(brief);
   await mkdir(directory, { recursive: true });
-  await writeAtomically(jsonPath, `${JSON.stringify(brief, null, 2)}\n`);
-  await writeAtomically(markdownPath, renderAgentDecisionBrief(brief));
+  await Promise.all([
+    writeAtomically(jsonPath, `${JSON.stringify(brief, null, 2)}\n`),
+    writeAtomically(markdownPath, markdown),
+    saveGeneratedArtifact({
+      key: "agent-decision-brief",
+      contentType: "application/json",
+      textContent: markdown,
+      jsonContent: brief as unknown as Record<string, unknown>,
+      generatedAt: now,
+    }),
+  ]);
   return { brief, markdownPath, jsonPath };
 }
 

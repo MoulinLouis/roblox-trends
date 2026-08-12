@@ -19,6 +19,7 @@
     "brief": "tsx scripts/brief.ts",
     "report": "tsx scripts/report.ts",
     "maintenance": "tsx scripts/maintenance.ts",
+    "tick": "tsx scripts/tick.ts",
     "validate": "npm run lint && npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {

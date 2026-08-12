@@ -45,6 +45,7 @@ npm run analyze
 npm run brief
 npm run report
 npm run maintenance
+npm run tick
 ```
 
 The commands are intentionally separate:
@@ -54,10 +55,11 @@ The commands are intentionally separate:
 - `brief` writes an agent-oriented Markdown and JSON decision dossier using only fully covered evidence windows.
 - `report` sends only unseen breakout, stage-change, and opportunity events to Discord.
 - `maintenance` aggregates hourly snapshots older than the configured retention into daily rows and removes the compacted hourly rows.
+- `tick` reconciles every scheduled job against durable leases and completed slots stored in PostgreSQL. It is the production scheduler entry point.
 
 The collection bucket is one hour. A retry inside the same bucket updates the matching `(universe, bucket, source, chart)` row instead of creating a duplicate. Every attempt and its per-source outcome are retained separately for diagnosis. Collection health is `healthy`, `degraded`, or `critical`; missing optional discovery remains degraded, while missing snapshots, insufficient chart coverage, or Games API failures are critical.
 
-Scheduled collection has a primary run at minute 17 and a rescue run at minute 47. The rescue checks the database and exits immediately when the bucket already has a usable attempt, so normal operation does not duplicate external API traffic. Discord receives an immediate critical alert, an alert after two consecutive degraded attempts, and a recovery alert. Alert delivery failures are isolated from collection.
+The durable scheduler checks every ten minutes and writes at most one successful execution per logical slot. A PostgreSQL lease prevents Render, GitHub fallback, and manual reconciliation from overlapping. Discord receives an immediate critical collection alert, an alert after two consecutive degraded attempts, and a recovery alert. Alert delivery failures are isolated from collection.
 
 Games published in the last 90 days continue to receive direct snapshots after leaving a chart. Older games continue to be tracked while they have recorded at least 100 CCU during the last 30 days. This avoids mistaking a missing chart observation for stable demand or losing the decline after a breakout.
 
@@ -71,7 +73,7 @@ The import copies only live game metadata, tags, snapshots, daily aggregates, an
 
 ## Agent decision dossier
 
-Every scheduled analysis refreshes:
+Every daily brief refreshes:
 
 ```text
 .data/reports/latest-agent-brief.md
@@ -79,6 +81,8 @@ Every scheduled analysis refreshes:
 ```
 
 The dossier is the preferred input for AI-assisted decisions. It records data freshness, verified 1-hour/24-hour/72-hour/7-day coverage, source failures, confidence caps, broad format signals, theme signals, combinations, saturation risks, supporting Roblox games, and questions requiring human judgment. A short observation is never labeled as 24-hour or 72-hour growth in this export.
+
+The latest structured and Markdown versions are also persisted in Neon and exposed through the authenticated `/api/agent-brief` endpoint, so they survive an ephemeral scheduler filesystem.
 
 Generate it manually with:
 
@@ -105,14 +109,15 @@ Settings persisted from the interface take precedence for collection thresholds,
 
 ## Automation
 
-Four GitHub Actions workflows are included:
+GitHub Actions is no longer the primary production clock:
 
 - `CI` runs linting, type checking, tests, and the production build on pushes and pull requests.
-- `Collect Roblox data` runs a primary attempt at minute 17 and a database-aware rescue at minute 47.
-- `Refresh analysis` refreshes scores and trends at 01:20, 09:20, 13:20, 17:20, and 21:20 UTC.
-- `Analyze and report` completes the four-hour analysis cadence at 05:20 UTC, uploads the agent decision brief for 30 days, sends the Discord report, then compacts old snapshots.
+- `Scheduler fallback` runs the durable reconciliation command once per hour as a secondary provider.
+- `Collect Roblox data`, `Refresh analysis`, and `Analyze and report` remain manually dispatchable for operations and recovery.
 
-Every workflow supports manual dispatch. Scheduled workflows must receive a persistent `DATABASE_URL` repository secret; a runner-local PGlite database is intentionally not suitable because GitHub runners are ephemeral. Add `DISCORD_WEBHOOK_URL` as a secret for reports.
+Scheduled workflows must receive a persistent `DATABASE_URL` repository secret; a runner-local PGlite database is intentionally not suitable because GitHub runners are ephemeral. Add `DISCORD_WEBHOOK_URL` as a secret for reports and alerts.
+
+The primary scheduler is the Render cron service declared in `render.yaml`. It runs every ten minutes, uses Neon PostgreSQL for atomic leases and job history, retries expired or failed slots, and exits. Data freshness is exposed at `/api/health/data` for independent monitoring. Full setup and incident procedures are documented in [`docs/scheduler-operations.md`](docs/scheduler-operations.md).
 
 ## Deployment
 
@@ -122,7 +127,8 @@ For a typical deployment:
 2. Run `npm run db:migrate` against it.
 3. Deploy the Next.js application.
 4. Add `APP_PASSWORD` if the deployment is publicly reachable.
-5. Add the same `DATABASE_URL` to GitHub Actions secrets and enable the scheduled workflows.
+5. Add the same `DATABASE_URL` to GitHub Actions secrets and keep the fallback workflow active.
+6. Apply `render.yaml` as a Render Blueprint, provide the Neon `DATABASE_URL`, and configure external monitoring for `/api/health/data`.
 
 The included Dockerfile builds the standalone Next.js output. It expects a `public` directory and copies the migrations required at runtime. On a platform with a persistent disk, PGlite can be mounted at `PGLITE_DATA_DIR`, but hosted PostgreSQL is recommended for scheduled jobs.
 
