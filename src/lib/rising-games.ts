@@ -29,7 +29,7 @@ export function detectRisingGameSignal(
     (left, right) => left.collectedAt.getTime() - right.collectedAt.getTime(),
   );
   const current = points.at(-1);
-  if (!current || current.ccu < RISING_GAMES_CONFIG.minimumCurrentCcu) return null;
+  if (!current) return null;
 
   const first = points[0] ?? current;
   const observedHours = Math.max(0, (current.collectedAt.getTime() - first.collectedAt.getTime()) / HOUR);
@@ -73,12 +73,28 @@ export function detectRisingGameSignal(
       RISING_GAMES_CONFIG.rapidDiscoveryMaximumObservedHours +
         RISING_GAMES_CONFIG.rapidDiscoveryFirstSeenToleranceHours &&
     current.ccu >= RISING_GAMES_CONFIG.rapidDiscoveryMinimumCcu;
+  // Signal classification is anchored to Roblox's experience creation date.
+  // firstSeenAt only measures our observation coverage and can never make an old game a launch.
   const signalType = ageDays <= RISING_GAMES_CONFIG.launchMaximumAgeDays
     ? "launch_breakout"
-    : "resurgence";
+    : ageDays >= RISING_GAMES_CONFIG.resurgenceMinimumAgeDays
+      ? "resurgence"
+      : null;
+  if (!signalType) return null;
+  const minimumCurrentCcu = signalType === "launch_breakout"
+    ? RISING_GAMES_CONFIG.minimumCurrentCcu
+    : RISING_GAMES_CONFIG.resurgenceMinimumCurrentCcu;
+  if (current.ccu < minimumCurrentCcu) return null;
   const qualifies = signalType === "launch_breakout"
     ? rapidDiscovery || crossedMilestone !== null || hasQualifyingLaunchWindow(windows)
-    : qualifiesAsResurgence({ windows, medianMultiple, newHighSinceTracking, observedHours });
+    : qualifiesAsResurgence({
+        windows,
+        currentCcu: current.ccu,
+        historicalMedianCcu,
+        medianMultiple,
+        newHighSinceTracking,
+        observedHours,
+      });
   if (!qualifies) return null;
 
   const risks = detectRisks(input, current, peakDrawdownPercent);
@@ -98,6 +114,7 @@ export function detectRisingGameSignal(
 
   const metrics: RisingGameMetrics = {
     currentCcu: current.ccu,
+    createdAt: input.createdAt.toISOString(),
     observedHours: round(observedHours),
     ageDays: round(ageDays),
     firstSeenHoursAgo: round(firstSeenHoursAgo),
@@ -176,19 +193,25 @@ function hasQualifyingLaunchWindow(windows: RisingGameMetrics["windows"]): boole
 
 function qualifiesAsResurgence(input: {
   windows: RisingGameMetrics["windows"];
+  currentCcu: number;
+  historicalMedianCcu: number;
   medianMultiple: number;
   newHighSinceTracking: boolean;
   observedHours: number;
 }): boolean {
   if (input.observedHours < RISING_GAMES_CONFIG.resurgenceMinimumHistoryHours) return false;
-  const sixHours = input.windows["6"];
   const oneDay = input.windows["24"];
+  const historicalDislocation =
+    input.medianMultiple >= RISING_GAMES_CONFIG.resurgence.minimumMedianMultiple &&
+    input.currentCcu - input.historicalMedianCcu >= RISING_GAMES_CONFIG.resurgence.minimumMedianGain &&
+    Boolean(
+      oneDay &&
+        oneDay.gain >= RISING_GAMES_CONFIG.resurgence.minimumMedianConfirmationGain24h &&
+        oneDay.growthPercent >= RISING_GAMES_CONFIG.resurgence.minimumMedianConfirmationGrowth24h,
+    );
   return Boolean(
     input.newHighSinceTracking ||
-      input.medianMultiple >= RISING_GAMES_CONFIG.resurgence.minimumMedianMultiple ||
-      (sixHours &&
-        sixHours.gain >= RISING_GAMES_CONFIG.resurgence.minimumGain6h &&
-        sixHours.growthPercent >= RISING_GAMES_CONFIG.resurgence.minimumGrowth6h) ||
+      historicalDislocation ||
       (oneDay &&
         oneDay.gain >= RISING_GAMES_CONFIG.resurgence.minimumGain24h &&
         oneDay.growthPercent >= RISING_GAMES_CONFIG.resurgence.minimumGrowth24h),
@@ -239,6 +262,12 @@ function buildReasons(input: {
   rapidDiscovery: boolean;
 }): string[] {
   const reasons: string[] = [];
+  if (input.signalType === "launch_breakout") {
+    const freshness = input.metrics.ageDays <= RISING_GAMES_CONFIG.launchFreshAgeDays
+      ? "Fresh launch"
+      : "Recent launch";
+    reasons.push(`${freshness}: created ${formatAge(input.metrics.ageDays)} ago on Roblox`);
+  }
   const strongest = input.metrics.strongestWindow;
   if (strongest) {
     reasons.push(
@@ -330,4 +359,9 @@ function formatSigned(value: number): string {
 
 function formatNumber(value: number): string {
   return Math.round(value).toLocaleString("en-US");
+}
+
+function formatAge(ageDays: number): string {
+  if (ageDays < 1) return `${Math.max(1, Math.round(ageDays * 24))}h`;
+  return `${Math.round(ageDays)}d`;
 }

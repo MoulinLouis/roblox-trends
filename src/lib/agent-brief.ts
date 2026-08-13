@@ -627,7 +627,7 @@ export function renderAgentDecisionBrief(brief: AgentDecisionBrief): string {
     "",
     "## Live launch breakouts and resurgences",
     "",
-    "These signals are re-evaluated after every collection. Launch breakouts combine recent game age, meaningful CCU, relative acceleration, and milestone crossings. Resurgences compare older games against their own tracked history.",
+    "These signals are re-evaluated after every collection. Launch breakouts are strictly anchored to Roblox's experience creation timestamp, require an age of 30 days or less and at least 500 CCU, then combine relative acceleration and milestone evidence. Resurgences compare games older than 30 days against their own tracked history.",
     "",
     renderRisingGameTable(brief.risingGames),
     "",

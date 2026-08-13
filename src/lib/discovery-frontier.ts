@@ -66,8 +66,11 @@ export function evaluateDiscoveryFrontierGame(
       sixHours.gain >= RISING_GAMES_CONFIG.frontier.minimumGain6h &&
       sixHours.growth >= RISING_GAMES_CONFIG.frontier.minimumGrowth6h),
   );
+  const immediateDiscovery =
+    game.ccu >= RISING_GAMES_CONFIG.frontier.immediateDiscoveryCcu &&
+    (!existing || existing.observations <= 1);
   const qualifies =
-    game.ccu >= RISING_GAMES_CONFIG.frontier.immediateDiscoveryCcu ||
+    immediateDiscovery ||
     (game.ccu >= RISING_GAMES_CONFIG.frontier.minimumCandidateCcu &&
       (hasMomentum || crossedMilestone !== null || newHigh));
   const strongestGain = Math.max(0, oneHour?.gain ?? 0, threeHours?.gain ?? 0, sixHours?.gain ?? 0);
@@ -82,7 +85,7 @@ export function evaluateDiscoveryFrontierGame(
   score += Math.min(weights.growthMaximum, strongestGrowth / weights.growthDivisor);
   if (crossedMilestone) score += weights.milestone;
   if (newHigh) score += weights.newHigh;
-  if (game.ccu >= RISING_GAMES_CONFIG.frontier.immediateDiscoveryCcu) {
+  if (immediateDiscovery) {
     score += weights.immediateDiscovery;
   }
 
