@@ -15,9 +15,44 @@ describe("rising game detection", () => {
     }, NOW);
 
     expect(signal?.signalType).toBe("launch_breakout");
+    expect(signal?.metrics.createdAt).toBe(hoursBefore(48).toISOString());
+    expect(signal?.reasons[0]).toContain("Fresh launch");
     expect(signal?.metrics.crossedMilestone).toBe(1_000);
     expect(signal?.metrics.strongestWindow?.gain).toBeGreaterThanOrEqual(500);
     expect(signal?.reasons.join(" ")).toContain("Crossed 1,000");
+  });
+
+  it("detects a sub-1k fresh launch only when it has meaningful velocity", () => {
+    const signal = detectRisingGameSignal({
+      universeId: "fresh-500",
+      name: "Fresh Climber",
+      createdAt: hoursBefore(24 * 5),
+      firstSeenAt: hoursBefore(2),
+      snapshots: [point(2, 150), point(0, 620)],
+    }, NOW);
+
+    expect(signal?.signalType).toBe("launch_breakout");
+    expect(signal?.metrics.currentCcu).toBe(620);
+    expect(signal?.metrics.crossedMilestone).toBe(500);
+  });
+
+  it("never labels a game older than 30 real days as a launch", () => {
+    const signal = detectRisingGameSignal({
+      universeId: "merge-a-nuke",
+      name: "Merge a Nuke!",
+      createdAt: new Date("2026-05-21T00:00:00Z"),
+      firstSeenAt: hoursBefore(2),
+      snapshots: [
+        point(72, 9_000),
+        point(48, 9_500),
+        point(24, 12_000),
+        point(7, 14_648),
+        point(0, 25_512),
+      ],
+    }, NOW);
+
+    expect(signal?.metrics.ageDays).toBeGreaterThan(30);
+    expect(signal?.signalType).toBe("resurgence");
   });
 
   it("detects a game discovered at meaningful scale before a full baseline exists", () => {
@@ -63,6 +98,24 @@ describe("rising game detection", () => {
       createdAt: hoursBefore(24 * 1_000),
       firstSeenAt: hoursBefore(80),
       snapshots: [point(72, 8_000), point(48, 8_200), point(24, 7_900), point(6, 8_100), point(0, 8_250)],
+    }, NOW);
+
+    expect(signal).toBeNull();
+  });
+
+  it("does not mistake a normal intraday audience cycle for a resurgence", () => {
+    const signal = detectRisingGameSignal({
+      universeId: "daily-cycle",
+      name: "Established Evening Game",
+      createdAt: hoursBefore(24 * 1_000),
+      firstSeenAt: hoursBefore(80),
+      snapshots: [
+        point(72, 44_000),
+        point(48, 46_000),
+        point(24, 45_000),
+        point(7, 14_000),
+        point(0, 45_500),
+      ],
     }, NOW);
 
     expect(signal).toBeNull();

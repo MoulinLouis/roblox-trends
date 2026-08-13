@@ -26,10 +26,10 @@ describe("discovery frontier", () => {
   });
 
   it("keeps ordinary low-level games out of the enrichment queue", () => {
-    const state = evaluateDiscoveryFrontierGame(game(500), {
-      currentCcu: 480,
+    const state = evaluateDiscoveryFrontierGame(game(480), {
+      currentCcu: 460,
       peakCcu: 500,
-      history: [point(1, 480)],
+      history: [point(1, 460)],
       firstSeenAt: hoursBefore(4),
       observations: 4,
     }, NOW);

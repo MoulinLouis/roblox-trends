@@ -11,7 +11,7 @@ The application is one Next.js 16 service with one PostgreSQL-compatible databas
 - Provisional discovery signals remain separate from durable momentum. Momentum compares 24-hour, 72-hour, or 7-day averages as enough history becomes available and exposes its history confidence.
 - Independent dimensions for core loop, progression, reward, social pressure, and theme.
 - Rising title words and two-word phrases, promoted only when several independent creators adopt them and recent frequency exceeds the older baseline.
-- Dedicated launch-breakout signals for games created within 90 days that rapidly reach 1,000+ CCU, cross meaningful CCU milestones, or accelerate over verified 1h/3h/6h/24h windows.
+- Dedicated launch-breakout signals anchored to Roblox's real `created` timestamp: games must be at most 30 days old and reach 500+ CCU through rapid discovery, a milestone crossing, or verified 1h/3h/6h/24h acceleration. Games at most 14 days old are labeled as fresh launches.
 - Dedicated resurgence signals for older games that move far above their recent median, establish a new tracked high, or post strong relative 6h/24h growth.
 - Hype clusters that aggregate the mechanics, progression patterns, rewards, social hooks, and themes shared by active launch breakouts and resurgences.
 - Trend breadth, creator diversity, combined demand, new entrants, growing share, and leader concentration.

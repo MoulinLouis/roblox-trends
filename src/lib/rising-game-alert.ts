@@ -39,7 +39,9 @@ export async function sendPendingRisingGameAlerts(
     const movement = metrics.strongestWindow
       ? `+${formatNumber(metrics.strongestWindow.gain)} CCU / +${Math.round(metrics.strongestWindow.growthPercent)}% in ${metrics.strongestWindow.actualHours}h`
       : "discovered at meaningful scale";
-    const label = event.signalType === "launch_breakout" ? "LAUNCH" : "RESURGENCE";
+    const label = event.signalType === "launch_breakout"
+      ? metrics.ageDays <= RISING_GAMES_CONFIG.launchFreshAgeDays ? "FRESH LAUNCH" : "LAUNCH"
+      : "RESURGENCE";
     const trigger = event.eventType === "tier_up"
       ? `tier upgraded to ${event.tier}`
       : event.eventType === "milestone"
@@ -49,6 +51,7 @@ export async function sendPendingRisingGameAlerts(
       "",
       `**${label} · ${event.score}/100 · ${formatNumber(event.currentCcu)} CCU**`,
       `[${game.name}](https://www.roblox.com/games/${game.rootPlaceId}) — ${trigger}`,
+      `Created on Roblox: ${formatDate(game.createdAt)} · ${formatAge(metrics.ageDays)} old`,
       `${movement}${metrics.newHighSinceTracking ? " · new tracked high" : ""}`,
       event.payload.reasons[0] ?? "Relative demand is accelerating.",
       ...(event.payload.risks[0] ? [`Caution: ${event.payload.risks[0]}`] : []),
@@ -72,4 +75,18 @@ export async function sendPendingRisingGameAlerts(
 
 function formatNumber(value: number): string {
   return Math.round(value).toLocaleString("en-US");
+}
+
+function formatDate(value: Date): string {
+  return new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(value);
+}
+
+function formatAge(ageDays: number): string {
+  if (ageDays < 1) return `${Math.max(1, Math.round(ageDays * 24))}h`;
+  return `${Math.round(ageDays)}d`;
 }

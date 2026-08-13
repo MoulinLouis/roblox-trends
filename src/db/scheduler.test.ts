@@ -166,6 +166,7 @@ describe("scheduler persistence", () => {
       detectedAt,
       metrics: {
         currentCcu: 1_500,
+        createdAt: "2026-08-25T00:00:00.000Z",
         observedHours: 6,
         ageDays: 7,
         firstSeenHoursAgo: 6,

@@ -16,6 +16,7 @@ export interface RisingWindowEvidence {
 
 export interface RisingGameMetrics {
   currentCcu: number;
+  createdAt: string;
   observedHours: number;
   ageDays: number;
   firstSeenHoursAgo: number;

@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { EmptyState, formatCompact, GameThumbnail, MetricCard, PageHeading, ScoreRing, TagList } from "@/components/ui";
+import { EmptyState, formatCompact, formatDate, GameThumbnail, MetricCard, PageHeading, ScoreRing, TagList } from "@/components/ui";
 import { buildRisingGameClusters } from "@/lib/rising-game-clusters";
+import { RISING_GAMES_CONFIG } from "@/lib/config";
 import { loadApplicationData } from "@/lib/view-data";
 import type { RisingGameSignalType } from "@/lib/rising-game-types";
 
@@ -33,7 +34,7 @@ export default async function RisingGamesPage({ searchParams }: { searchParams: 
     <PageHeading eyebrow="Early demand radar" title="Rising games" subtitle="Launch breakouts find new games accelerating through meaningful CCU levels. Resurgences find older games moving far above their own recent baseline or setting a new tracked high." />
     <div className="grid grid-4">
       <MetricCard label="Active signals" value={String(risingSignals.length)} detail="Re-evaluated after every collection" />
-      <MetricCard label="Launch breakouts" value={String(launchCount)} detail="Games created within 90 days" tone="blue" />
+      <MetricCard label="Launch breakouts" value={String(launchCount)} detail="Games created within 30 real days" tone="blue" />
       <MetricCard label="Resurgences" value={String(resurgenceCount)} detail="Older games breaking their baseline" tone="purple" />
       <MetricCard label="Explosive" value={String(explosiveCount)} detail="Highest confidence-adjusted velocity" tone="orange" />
     </div>
@@ -56,7 +57,7 @@ export default async function RisingGamesPage({ searchParams }: { searchParams: 
           const item = gamesByUniverse.get(signal.universeId);
           if (!item) return null;
           const window = signal.metrics.strongestWindow;
-          return <tr key={`${signal.universeId}:${signal.signalType}`}><td><Link className="game-cell" href={`/games/${signal.universeId}`}><GameThumbnail name={item.game.name} url={item.game.thumbnailUrl} /><div><strong>{item.game.name}</strong><TagList tags={item.tags} limit={2} /></div></Link></td><td><span className={`badge signal-${signal.signalType}`}>{signalLabel(signal.signalType)}</span><span className={`signal-tier ${signal.tier}`}>{signal.tier}</span></td><td><ScoreRing score={signal.score} /></td><td><strong>{formatCompact(signal.currentCcu)}</strong>{signal.metrics.crossedMilestone ? <span className="algorithm-badge">Crossed {formatCompact(signal.metrics.crossedMilestone)}</span> : null}</td><td>{window ? <><strong className="positive">+{formatCompact(window.gain)}</strong><span className="table-subline">+{Math.round(window.growthPercent)}% in {window.actualHours}h</span></> : <span>Early discovery</span>}</td><td><span className="signal-reason">{signal.reasons[0]}</span>{signal.risks[0] ? <span className="table-subline warning">{signal.risks[0]}</span> : null}</td><td><span className="tag">{signal.confidence}</span>{signal.metrics.newHighSinceTracking ? <span className="algorithm-badge">New tracked high</span> : null}</td></tr>;
+          return <tr key={`${signal.universeId}:${signal.signalType}`}><td><Link className="game-cell" href={`/games/${signal.universeId}`}><GameThumbnail name={item.game.name} url={item.game.thumbnailUrl} /><div><strong>{item.game.name}</strong><span className="table-subline">Created {formatDate(item.game.createdAt)} · {Math.round(signal.metrics.ageDays)}d old</span><TagList tags={item.tags} limit={2} /></div></Link></td><td><span className={`badge signal-${signal.signalType}`}>{signalLabel(signal.signalType, signal.metrics.ageDays)}</span><span className={`signal-tier ${signal.tier}`}>{signal.tier}</span></td><td><ScoreRing score={signal.score} /></td><td><strong>{formatCompact(signal.currentCcu)}</strong>{signal.metrics.crossedMilestone ? <span className="algorithm-badge">Crossed {formatCompact(signal.metrics.crossedMilestone)}</span> : null}</td><td>{window ? <><strong className="positive">+{formatCompact(window.gain)}</strong><span className="table-subline">+{Math.round(window.growthPercent)}% in {window.actualHours}h</span></> : <span>Early discovery</span>}</td><td><span className="signal-reason">{signal.reasons[0]}</span>{signal.risks[0] ? <span className="table-subline warning">{signal.risks[0]}</span> : null}</td><td><span className="tag">{signal.confidence}</span>{signal.metrics.newHighSinceTracking ? <span className="algorithm-badge">New tracked high</span> : null}</td></tr>;
         })}</tbody></table></div> : <EmptyState>No active rising game matches these filters yet. The detector stays strict until both CCU scale and relative movement are credible.</EmptyState>}
       </div>
       <p className="trend-meta" style={{ marginTop: 12 }}>{signals.length} active signals shown. A signal is removed from this view when it no longer satisfies the live thresholds; its activation events remain idempotently recorded.</p>
@@ -64,6 +65,7 @@ export default async function RisingGamesPage({ searchParams }: { searchParams: 
   </div>;
 }
 
-function signalLabel(type: RisingGameSignalType): string {
-  return type === "launch_breakout" ? "Launch breakout" : "Resurgence";
+function signalLabel(type: RisingGameSignalType, ageDays: number): string {
+  if (type === "resurgence") return "Resurgence";
+  return ageDays <= RISING_GAMES_CONFIG.launchFreshAgeDays ? "Fresh launch" : "Launch breakout";
 }
