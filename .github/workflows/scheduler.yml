@@ -32,6 +32,15 @@ jobs:
           fi
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - name: Identify PostgreSQL provider
+        run: |
+          node -e '
+            const hostname = new URL(process.env.DATABASE_URL).hostname;
+            const providerDomain = hostname.split(".").slice(-2).join(".");
+            console.log(`PostgreSQL provider domain: ${providerDomain}`);
+          '
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
       - name: Signal scheduler start
         continue-on-error: true
         run: |
