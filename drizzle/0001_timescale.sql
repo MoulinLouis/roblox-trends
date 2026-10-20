@@ -16,17 +16,18 @@ ALTER TABLE vote_observations SET (timescaledb.compress, timescaledb.compress_se
 --> statement-breakpoint
 ALTER TABLE chart_placements SET (timescaledb.compress, timescaledb.compress_segmentby = 'universe_id', timescaledb.compress_orderby = 'sort_id, observed_at DESC');
 --> statement-breakpoint
-SELECT add_compression_policy('game_observations', INTERVAL '7 days');
+-- Every policy starts 5 minutes after migrating, so test databases can pause jobs before any of them runs.
+SELECT add_compression_policy('game_observations', INTERVAL '7 days', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
-SELECT add_compression_policy('census_observations', INTERVAL '7 days');
+SELECT add_compression_policy('census_observations', INTERVAL '7 days', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
-SELECT add_compression_policy('vote_observations', INTERVAL '30 days');
+SELECT add_compression_policy('vote_observations', INTERVAL '30 days', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
-SELECT add_compression_policy('chart_placements', INTERVAL '30 days');
+SELECT add_compression_policy('chart_placements', INTERVAL '30 days', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
-SELECT add_retention_policy('game_observations', INTERVAL '365 days');
+SELECT add_retention_policy('game_observations', INTERVAL '365 days', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
-SELECT add_retention_policy('census_observations', INTERVAL '365 days');
+SELECT add_retention_policy('census_observations', INTERVAL '365 days', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
 CREATE MATERIALIZED VIEW game_hourly
 WITH (timescaledb.continuous, timescaledb.materialized_only = false) AS
@@ -72,19 +73,19 @@ FROM census_observations
 GROUP BY place_id, bucket
 WITH NO DATA;
 --> statement-breakpoint
-SELECT add_continuous_aggregate_policy('game_hourly', start_offset => INTERVAL '3 days', end_offset => INTERVAL '1 hour', schedule_interval => INTERVAL '15 minutes');
+SELECT add_continuous_aggregate_policy('game_hourly', start_offset => INTERVAL '3 days', end_offset => INTERVAL '1 hour', schedule_interval => INTERVAL '15 minutes', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
-SELECT add_continuous_aggregate_policy('game_daily', start_offset => INTERVAL '7 days', end_offset => INTERVAL '1 hour', schedule_interval => INTERVAL '1 hour');
+SELECT add_continuous_aggregate_policy('game_daily', start_offset => INTERVAL '7 days', end_offset => INTERVAL '1 hour', schedule_interval => INTERVAL '1 hour', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
-SELECT add_continuous_aggregate_policy('census_hourly', start_offset => INTERVAL '3 days', end_offset => INTERVAL '1 hour', schedule_interval => INTERVAL '15 minutes');
+SELECT add_continuous_aggregate_policy('census_hourly', start_offset => INTERVAL '3 days', end_offset => INTERVAL '1 hour', schedule_interval => INTERVAL '15 minutes', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
 ALTER MATERIALIZED VIEW game_hourly SET (timescaledb.compress = true);
 --> statement-breakpoint
 ALTER MATERIALIZED VIEW census_hourly SET (timescaledb.compress = true);
 --> statement-breakpoint
-SELECT add_compression_policy('game_hourly', compress_after => INTERVAL '30 days');
+SELECT add_compression_policy('game_hourly', compress_after => INTERVAL '30 days', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
-SELECT add_compression_policy('census_hourly', compress_after => INTERVAL '30 days');
+SELECT add_compression_policy('census_hourly', compress_after => INTERVAL '30 days', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
 CREATE VIEW game_daily_all AS
 SELECT universe_id, bucket AS day, ccu_avg, ccu_peak, visits_max AS visits, favorites_last AS favorites, 'observed'::text AS origin
