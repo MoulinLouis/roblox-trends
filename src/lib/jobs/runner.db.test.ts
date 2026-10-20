@@ -61,8 +61,23 @@ describe.skipIf(!hasTestDatabase)("executeJob", () => {
     expect(pingUrls()).toEqual([
       `${pingBase}/radar-poll/start?create=1&rid=${run.id}`,
       `${pingBase}/radar-poll?create=1&rid=${run.id}`,
+      `${pingBase}/radar-poll-quality?create=1&rid=${run.id}`,
     ]);
     expect(JSON.parse(String(pingBody(1)))).toEqual({ games: 3, status: "success" });
+  });
+
+  it("records a degraded run without pinging the quality check", async () => {
+    const status = await executeJob(
+      { name: "census", intervalMinutes: 60, timeoutMs: 1_000, run: async () => ({ status: "degraded", stats: { listed: 0 } }) },
+      database.db,
+    );
+    expect(status).toBe("degraded");
+    const run = await onlyRun("census");
+    expect(run.status).toBe("degraded");
+    expect(pingUrls()).toEqual([
+      `${pingBase}/radar-census/start?create=1&rid=${run.id}`,
+      `${pingBase}/radar-census?create=1&rid=${run.id}`,
+    ]);
   });
 
   it("reports the run status even when a stat has the same name", async () => {

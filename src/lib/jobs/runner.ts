@@ -3,7 +3,7 @@ import type { Database } from "@/db/client";
 import { finishJobRun, startJobRun } from "@/db/job-runs";
 import { errorMessage, logger } from "@/lib/logger";
 import { floorToSlot } from "@/lib/time-slots";
-import { jobSlug, sendPing } from "./healthchecks";
+import { jobSlug, qualitySlug, sendPing } from "./healthchecks";
 import type { JobName, JobStatus } from "./types";
 
 export interface JobContext {
@@ -25,8 +25,8 @@ export interface JobDefinition {
   run(context: JobContext): Promise<JobResult>;
 }
 
-// A degraded run still sends a success ping: the heartbeat means "the job ran";
-// data quality is tracked in job_runs and excluded from analysis there.
+// A degraded run still pings the heartbeat check, which means "the job ran". Only a fully successful run
+// pings the quality check, so a degradation that lasts longer than that check's period raises an alert.
 export async function executeJob(
   definition: JobDefinition,
   db: Database,
@@ -48,6 +48,7 @@ export async function executeJob(
       stats: result.stats,
     });
     await sendPing(slug, "success", runId, JSON.stringify({ ...result.stats, status: result.status }));
+    if (result.status === "success") await sendPing(qualitySlug(definition.name), "success", runId);
     logger.info("Job completed", { ...result.stats, job: definition.name, status: result.status });
     return result.status;
   } catch (error) {
