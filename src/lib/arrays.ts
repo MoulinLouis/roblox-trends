@@ -5,6 +5,7 @@ export function chunk<T>(items: readonly T[], size: number): T[][] {
   return groups;
 }
 
+// The first occurrence of each key wins; callers order items so the preferred one comes first.
 export function uniqueBy<T>(items: readonly T[], key: (item: T) => string | number): T[] {
   const seen = new Set<string | number>();
   const unique: T[] = [];

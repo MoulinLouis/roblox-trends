@@ -17,4 +17,12 @@ describe("floorToSlot", () => {
   it("rejects a non-positive slot size", () => {
     expect(() => floorToSlot(new Date(), 0)).toThrow();
   });
+
+  it("rejects a fractional slot size", () => {
+    expect(() => floorToSlot(new Date(), 2.5)).toThrow();
+  });
+
+  it("rejects an invalid date", () => {
+    expect(() => floorToSlot(new Date("not a date"), 5)).toThrow();
+  });
 });

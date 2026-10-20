@@ -6,17 +6,17 @@ function sha1(value: string): string {
 }
 
 function normalizeText(value: string): string {
-  return value.normalize("NFKC").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+  return value.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-// Changes on any visible edit, including seasonal markers such as [🎃].
+// Changes on any byte-level edit, including seasonal markers such as [🎃].
 export function rawFingerprint(name: string, description: string): string {
   return sha1(`${name}\u0000${description}`);
 }
 
 // Changes only when the concept text changes; used to decide reclassification.
 export function contentFingerprint(name: string, description: string): string {
-  return sha1(`${normalizeTitle(name).toLocaleLowerCase()}\u0000${normalizeText(description)}`);
+  return sha1(`${normalizeTitle(name).toLowerCase()}\u0000${normalizeText(description)}`);
 }
 
 export function urlFingerprint(url: string): string {
