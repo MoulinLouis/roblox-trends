@@ -23,7 +23,7 @@ export async function createTestDatabase(options: { migrate?: boolean } = {}): P
   const name = `radar_test_${randomUUID().replaceAll("-", "")}`;
   await runAdminQuery(`CREATE DATABASE "${name}"`);
   const url = withDatabaseName(adminUrl, name);
-  const { db, pool } = createDatabase(url, 3);
+  const { db, pool } = createDatabase(url, { maxConnections: 3, applicationName: "radar-test" });
   if (options.migrate !== false) await migrateDatabase(db);
   return {
     db,
