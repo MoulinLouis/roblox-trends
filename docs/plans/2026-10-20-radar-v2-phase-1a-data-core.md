@@ -4102,6 +4102,8 @@ Expected: CI green with every database suite executed.
 - `.gitignore` ignores `.env*.local`; local database tests read `TEST_DATABASE_URL` from `.env.test.local`.
 - `normalizeTitle` strips bracketed markers only on whole words, and leading markers only when followed by punctuation or written in capitals, so real titles such as "New York Roleplay" or "[Alphabet Lore] Morphs" keep their words.
 - CI health check uses TCP (`pg_isready -h 127.0.0.1`), and the job has a 15-minute timeout, read-only permissions and a concurrency group.
+- Before phase 2 classifies from `contentFingerprint`, finish `normalizeTitle`: let `update`/`upd` swallow a version token (`UPDATE 2!`, `UPD 2.5`), handle trailing markers after `|` or ` - `, repeat the leading rule up to three times, and fall back to the emoji-free title when markers leave it empty.
+- If phase 1b adds deployment to CI, the concurrency group must not cancel runs on the deploy branch.
 
 ## Out of scope for this plan (phase 1b)
 
