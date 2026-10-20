@@ -620,7 +620,7 @@ Stored fingerprints must not depend on the host locale (under tr-TR, V8 lowercas
 
 ```js
   {
-    files: ["src/**/*.ts", "scripts/**/*.ts"],
+    files: ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts"],
     rules: {
       "no-restricted-properties": [
         "error",
@@ -1208,7 +1208,7 @@ describe.skipIf(!hasTestDatabase)("v2 schema migrations", () => {
 **Step 10: Run tests and validation**
 
 Run: `npx vitest run src/db/schema.db.test.ts`
-Expected locally without `TEST_DATABASE_URL`: 4 skipped. With it: 4 passed.
+Expected locally without `TEST_DATABASE_URL`: 5 skipped. With it: 5 passed.
 
 Run: `npm run typecheck && npm run lint`
 Expected: PASS.
