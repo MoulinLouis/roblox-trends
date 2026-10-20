@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDatabase } from "@/db/client";
@@ -132,6 +133,30 @@ describe.skipIf(!hasTestDatabase)("executeJob", () => {
     expect(status).toBe("success");
     expect((await onlyRun("poll")).status).toBe("success");
     expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it("abandons runs of the same job left running past their timeout", async () => {
+    const [stale, recent, otherJob] = [randomUUID(), randomUUID(), randomUUID()];
+    const leftOver = (id: string, job: JobName, startedAgoMs: number) => {
+      const startedAt = new Date(Date.now() - startedAgoMs);
+      return { id, job, slot: startedAt, startedAt, status: "running" as const };
+    };
+    // With a 1 s timeout, the cutoff is 61 s ago: only the two-hour-old poll run is abandoned.
+    await database.db.insert(jobRuns).values([
+      leftOver(stale, "poll", 2 * 60 * 60_000),
+      leftOver(recent, "poll", 30_000),
+      leftOver(otherJob, "votes", 2 * 60 * 60_000),
+    ]);
+    const status = await executeJob(
+      { name: "poll", intervalMinutes: 5, timeoutMs: 1_000, run: async () => ({ status: "success", stats: {} }) },
+      database.db,
+    );
+    expect(status).toBe("success");
+    const runs = new Map((await database.db.select().from(jobRuns)).map((run) => [run.id, run]));
+    expect(runs.size).toBe(4);
+    expect(runs.get(stale)).toMatchObject({ status: "failed", error: "abandoned" });
+    expect(runs.get(recent)?.status).toBe("running");
+    expect(runs.get(otherJob)?.status).toBe("running");
   });
 
   it("pings a failure when the run cannot even be recorded", async () => {
