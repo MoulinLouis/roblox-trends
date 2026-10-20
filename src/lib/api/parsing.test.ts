@@ -59,14 +59,55 @@ describe("Roblox API response parsing", () => {
     expect(games).toEqual([{ universeId: 101, rootPlaceId: 202, name: "Search result", playerCount: 75 }]);
   });
 
-  it("keeps the first completed 16:9 game thumbnail per universe", () => {
+  it("maps a completed 16:9 game thumbnail to its image and media id", () => {
+    const thumbnails = parseGameThumbnailsResponse({
+      data: [{ universeId: 101, error: null, thumbnails: [{ targetId: 9, state: "Completed", imageUrl: "https://tr.rbxcdn.com/a/768/432/Image/Png", version: "TN3" }] }],
+    });
+    expect([...thumbnails]).toEqual([["101", { imageUrl: "https://tr.rbxcdn.com/a/768/432/Image/Png", mediaId: 9 }]]);
+  });
+
+  it("records games without custom thumbnails as null", () => {
     const thumbnails = parseGameThumbnailsResponse({
       data: [
-        { universeId: 101, error: null, thumbnails: [{ targetId: 9, state: "Completed", imageUrl: "https://tr.rbxcdn.com/a/768/432/Image/Png", version: "TN3" }] },
-        { universeId: 102, error: null, thumbnails: [{ targetId: 10, state: "Pending", imageUrl: null }] },
+        { universeId: 101, error: null, thumbnails: null },
+        { universeId: 102, error: null, thumbnails: [] },
       ],
     });
-    expect([...thumbnails]).toEqual([["101", "https://tr.rbxcdn.com/a/768/432/Image/Png"]]);
+    expect([...thumbnails]).toEqual([["101", null], ["102", null]]);
+  });
+
+  it("leaves blocked thumbnails unknown", () => {
+    const thumbnails = parseGameThumbnailsResponse({
+      data: [{ universeId: 101, error: null, thumbnails: [{ targetId: 0, state: "Blocked", imageUrl: "https://t2.rbxcdn.com/UnapprovedImage", version: "TN3" }] }],
+    });
+    expect(thumbnails.size).toBe(0);
+  });
+
+  it("leaves universes reported with an error unknown", () => {
+    const thumbnails = parseGameThumbnailsResponse({
+      data: [{ universeId: 101, error: { code: 1, message: "Unavailable" }, thumbnails: [{ targetId: 9, state: "Completed", imageUrl: "https://tr.rbxcdn.com/a/768/432/Image/Png" }] }],
+    });
+    expect(thumbnails.size).toBe(0);
+  });
+
+  it("skips a malformed thumbnail item without dropping the others", () => {
+    const thumbnails = parseGameThumbnailsResponse({
+      data: [
+        { universeId: 101, error: null, thumbnails: "x" },
+        { universeId: 102, error: null, thumbnails: [{ targetId: 10, state: "Completed", imageUrl: "https://tr.rbxcdn.com/b/768/432/Image/Png" }] },
+      ],
+    });
+    expect([...thumbnails]).toEqual([["102", { imageUrl: "https://tr.rbxcdn.com/b/768/432/Image/Png", mediaId: 10 }]]);
+  });
+
+  it("keeps the first completed thumbnail when earlier ones are not ready", () => {
+    const thumbnails = parseGameThumbnailsResponse({
+      data: [{ universeId: 101, thumbnails: [
+        { targetId: 9, state: "Pending", imageUrl: null },
+        { state: "Completed", imageUrl: "https://tr.rbxcdn.com/c/768/432/Image/Png" },
+      ] }],
+    });
+    expect([...thumbnails]).toEqual([["101", { imageUrl: "https://tr.rbxcdn.com/c/768/432/Image/Png", mediaId: null }]]);
   });
 });
 

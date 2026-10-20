@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { errorMessage, logger } from "@/lib/logger";
 import { fetchJson } from "./http";
 
 const chartGameSchema = z.object({
@@ -89,19 +90,26 @@ const thumbnailsResponseSchema = z.object({
     }),
   ),
 });
-const gameThumbnailsResponseSchema = z.object({
-  data: z.array(
-    z.object({
-      universeId: z.number(),
-      thumbnails: z.array(z.object({ state: z.string(), imageUrl: z.string().nullable() })).default([]),
-    }),
-  ),
+// Items are validated one by one so that a single malformed universe cannot discard the whole batch.
+const gameThumbnailsResponseSchema = z.object({ data: z.array(z.unknown()) });
+const gameThumbnailItemSchema = z.object({
+  universeId: z.number(),
+  error: z.unknown().optional(),
+  thumbnails: z
+    .array(z.object({ targetId: z.number().nullish(), state: z.string(), imageUrl: z.string().nullish() }))
+    .nullish(),
 });
 
 export type RobloxChartGame = z.infer<typeof chartGameSchema>;
 export type RobloxSort = z.infer<typeof sortSchema>;
 export type RobloxGameDetail = z.infer<typeof gameDetailSchema>;
 export type RobloxGameVote = z.infer<typeof gameVotesResponseSchema>["data"][number];
+
+export interface GameThumbnail {
+  imageUrl: string;
+  // The thumbnail's targetId: the id of the game media asset shown.
+  mediaId: number | null;
+}
 
 export function parseSortsResponse(value: unknown): RobloxSort[] {
   return sortsResponseSchema.parse(value).sorts.filter((sort) => sort.contentType === "Games" || sort.games.length > 0);
@@ -147,11 +155,21 @@ export function parseSearchResponse(value: unknown): RobloxChartGame[] {
     }));
 }
 
-export function parseGameThumbnailsResponse(value: unknown): Map<string, string> {
-  const thumbnails = new Map<string, string>();
-  for (const item of gameThumbnailsResponseSchema.parse(value).data) {
-    const completed = item.thumbnails.find((thumbnail) => thumbnail.state === "Completed" && thumbnail.imageUrl);
-    if (completed?.imageUrl) thumbnails.set(String(item.universeId), completed.imageUrl);
+// A null entry means Roblox reports no custom thumbnail. A universe without an entry is unknown: its item was
+// malformed or carried an error, or no thumbnail is ready yet (pending, blocked, in review).
+export function parseGameThumbnailsResponse(value: unknown): Map<string, GameThumbnail | null> {
+  const thumbnails = new Map<string, GameThumbnail | null>();
+  for (const raw of gameThumbnailsResponseSchema.parse(value).data) {
+    const item = gameThumbnailItemSchema.safeParse(raw);
+    if (!item.success || item.data.error != null) continue;
+    const universeId = String(item.data.universeId);
+    const candidates = item.data.thumbnails ?? [];
+    if (candidates.length === 0) {
+      thumbnails.set(universeId, null);
+      continue;
+    }
+    const completed = candidates.find((thumbnail) => thumbnail.state === "Completed" && thumbnail.imageUrl);
+    if (completed?.imageUrl) thumbnails.set(universeId, { imageUrl: completed.imageUrl, mediaId: completed.targetId ?? null });
   }
   return thumbnails;
 }
@@ -164,7 +182,7 @@ export interface RobloxApi {
   searchGames(query: string): Promise<RobloxChartGame[]>;
   resolveUniverseId(placeId: string): Promise<string>;
   getThumbnails(universeIds: string[]): Promise<Map<string, string>>;
-  getGameThumbnails(universeIds: string[]): Promise<Map<string, string>>;
+  getGameThumbnails(universeIds: string[]): Promise<Map<string, GameThumbnail | null>>;
 }
 
 export class RobloxClient implements RobloxApi {
@@ -253,18 +271,30 @@ export class RobloxClient implements RobloxApi {
     return thumbnails;
   }
 
-  async getGameThumbnails(universeIds: string[]): Promise<Map<string, string>> {
-    const thumbnails = new Map<string, string>();
+  // Without defaults, games that have no media of their own return no thumbnail instead of a shared generic image.
+  async getGameThumbnails(universeIds: string[]): Promise<Map<string, GameThumbnail | null>> {
+    const thumbnails = new Map<string, GameThumbnail | null>();
     for (let index = 0; index < universeIds.length; index += 50) {
+      const chunk = universeIds.slice(index, index + 50);
       const url = new URL("https://thumbnails.roblox.com/v1/games/multiget/thumbnails");
-      url.searchParams.set("universeIds", universeIds.slice(index, index + 50).join(","));
+      url.searchParams.set("universeIds", chunk.join(","));
       url.searchParams.set("countPerUniverse", "1");
-      url.searchParams.set("defaults", "true");
+      url.searchParams.set("defaults", "false");
       url.searchParams.set("size", "768x432");
       url.searchParams.set("format", "Png");
       url.searchParams.set("isCircular", "false");
-      const parsed = parseGameThumbnailsResponse(await fetchJson(url.toString(), { cacheTtlMs: 60 * 60 * 1000 }));
-      for (const [universeId, imageUrl] of parsed) thumbnails.set(universeId, imageUrl);
+      let response: unknown;
+      try {
+        response = await fetchJson(url.toString(), { cacheTtlMs: 60 * 60 * 1000 });
+      } catch (error) {
+        logger.warn("Game thumbnail batch failed; its universes stay unknown", {
+          universes: chunk.length,
+          firstUniverseId: chunk[0],
+          error: errorMessage(error),
+        });
+        continue;
+      }
+      for (const [universeId, thumbnail] of parseGameThumbnailsResponse(response)) thumbnails.set(universeId, thumbnail);
     }
     return thumbnails;
   }
