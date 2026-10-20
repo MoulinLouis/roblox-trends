@@ -2312,7 +2312,8 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
         listed.map((game) => ({ placeId: Number(game.placeId), observedAt: slot, ccu: Math.round(game.ccu) })),
       );
       // Baseline: the latest fully successful run of the last hours, so one truncated list never becomes the reference.
-      const baselineSince = new Date(now.getTime() - config.baselineMaxAgeHours * 60 * 60 * 1000);
+      // started_at is wall-clock time, so the window uses the clock, not the injectable `now`.
+      const baselineSince = new Date(clock() - config.baselineMaxAgeHours * 60 * 60 * 1000);
       const previous = await latestSuccessfulRun(db, "census", baselineSince);
       const previousListed = typeof previous?.stats.listed === "number" ? previous.stats.listed : null;
       const status = evaluateCensusQuality(listed.length, previousListed, config.maximumListSizeChange);
@@ -2426,6 +2427,17 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
     expect(await database.db.select().from(discoverySources)).toEqual([
       expect.objectContaining({ universeId: 1_001, source: "rolimons", detail: "" }),
     ]);
+  });
+
+  it("marks a run degraded when the list shrinks sharply against the last successful run", async () => {
+    const job = createCensusJob({
+      fetchGames: async () => [{ placeId: "1", name: "Big", ccu: 500, thumbnailUrl: "" }],
+      roblox: {
+        resolveUniverseId: async (placeId) => String(Number(placeId) + 1_000),
+        getGameDetails: async (universeIds) => universeIds.map((universeId) => gameDetail(Number(universeId))),
+      },
+    });
+    expect(await executeJob(job, database.db, new Date("2026-10-20T14:23:00Z"))).toBe("degraded");
   });
 });
 ```
@@ -4318,7 +4330,8 @@ Expected: CI green with every database suite executed.
 ## Out of scope for this plan (phase 1b)
 
 - Deploy from the `radar-v2` branch until cutover: merging it into `main` removes the v1 scheduler workflow.
-- Provision Healthchecks checks through the management API (`POST /api/v3/checks/` with `unique: ["slug"]`) for every job and every `-quality` check, with the real period and a grace near `timeoutMs`, derived from `JOB_CONFIG`. Auto-created checks default to a 1-day period and would alert about 25 hours late.
+- Provision Healthchecks checks through the management API (`POST /api/v3/checks/` with `unique: ["slug"]`), derived from `JOB_CONFIG`: each job check uses the job's real period with a grace near `timeoutMs`; each `-quality` check uses the job's period with a grace equal to the tolerated degradation (about 60 minutes; add `qualityGraceMinutes` per job), which must stay below the census `baselineMaxAgeHours`. Auto-created checks default to a 1-day period and would alert about 25 hours late.
+- PostgreSQL tuning sets `client_connection_check_interval` (about 10 s) so statements of a killed job process stop server-side.
 - systemd units set `RADAR_REQUIRE_HEALTHCHECKS=1` and an `OnFailure=` unit that sends the fail ping for process deaths the code cannot report.
 - Provisioning creates both checks per job before the first run and sends one test ping to prove the ping key works; with `create=1` alone, a wrong key or a job degraded from its first run would never create its check.
 - Stagger the systemd timers so jobs sharing a Roblox host do not start in the same minute (HTTP spacing is per process).
