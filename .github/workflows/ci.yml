@@ -2,18 +2,33 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, radar-v2]
   pull_request:
   workflow_dispatch:
 
 jobs:
   validate:
     runs-on: ubuntu-latest
+    services:
+      timescale:
+        image: timescale/timescaledb:2.30.2-pg18
+        env:
+          POSTGRES_PASSWORD: postgres
+          TIMESCALEDB_TELEMETRY: "off"
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 20.19.2
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run lint

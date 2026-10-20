@@ -1,17 +1,10 @@
 "use client";
 
-import { Flame, Gamepad2, LayoutDashboard, Lightbulb, Radar, Settings, TrendingUp } from "lucide-react";
+import { LayoutDashboard, Radar } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const links = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/games", label: "Games", icon: Gamepad2 },
-  { href: "/rising", label: "Rising", icon: Flame },
-  { href: "/trends", label: "Trends", icon: TrendingUp },
-  { href: "/ideas", label: "Idea Lab", icon: Lightbulb },
-  { href: "/settings", label: "Settings", icon: Settings },
-];
+const links = [{ href: "/", label: "Overview", icon: LayoutDashboard }];
 
 export function Navigation() {
   const pathname = usePathname();
@@ -27,7 +20,7 @@ export function Navigation() {
           return <Link key={href} href={href} className={`nav-link ${active ? "active" : ""}`}><Icon size={18} /><span>{label}</span></Link>;
         })}
       </nav>
-      <div className="sidebar-footer"><strong>Signal over size</strong><span>Scores prioritize velocity, freshness, acceleration, and propagation.</span></div>
+      <div className="sidebar-footer"><strong>Radar v2</strong><span>Collection is being rebuilt. The dashboard returns in phase 4.</span></div>
     </aside>
   );
 }

@@ -1,5 +1,3 @@
-import type { AppSettings } from "./types";
-
 export const ROBLOX_DISCOVERY_CHARTS = [
   "top-trending",
   "up-and-coming",
@@ -25,21 +23,7 @@ export const ROBLOX_DISCOVERY_CHARTS = [
   "top-earning",
 ] as const;
 
-export const LEGACY_ROBLOX_CHARTS = ["top-trending", "up-and-coming", "top-playing-now"] as const;
-
-export const COLLECTION_DISCOVERY_CONFIG = {
-  recentGameTrackingDays: 90,
-  activeGameTrackingDays: 30,
-  activeGameMinimumCcu: 100,
-  maximumTrackedGames: 3_000,
-  maximumSearchKeywords: 6,
-  searchKeywordsPerRun: 2,
-  maximumRecommendationSeeds: 5,
-  searchResultsPerKeyword: 40,
-  recommendationsPerSeed: 20,
-  minimumChartCoverageRatio: 0.8,
-  minimumGameDetailCoverageRatio: 0.8,
-} as const;
+export type RobloxDiscoveryChart = (typeof ROBLOX_DISCOVERY_CHARTS)[number];
 
 export const EXTERNAL_REQUEST_CONFIG = {
   defaultTimeoutMs: 10_000,
@@ -55,267 +39,69 @@ export const EXTERNAL_REQUEST_CONFIG = {
   } satisfies Record<string, number>,
 } as const;
 
-export const SCHEDULER_CONFIG = {
-  tickIntervalMinutes: 10,
-  frontierIntervalMinutes: 15,
-  leaseDurationMinutes: 30,
-  analysisIntervalMinutes: 4 * 60,
-  dailyHourUtc: 5,
-  maximumCollectionAgeMinutes: 75,
-  maximumAnalysisAgeMinutes: 5 * 60,
+export const ROBLOX_REGION = {
+  country: process.env.ROBLOX_COUNTRY || "all",
+  device: process.env.ROBLOX_DEVICE || "computer",
 } as const;
 
-export const RISING_GAMES_CONFIG = {
-  minimumCurrentCcu: 500,
-  resurgenceMinimumCurrentCcu: 1_000,
-  launchFreshAgeDays: 14,
-  launchMaximumAgeDays: 30,
-  resurgenceMinimumAgeDays: 30,
-  resurgenceMinimumHistoryHours: 24,
-  rapidDiscoveryMaximumObservedHours: 6,
-  rapidDiscoveryFirstSeenToleranceHours: 1,
-  rapidDiscoveryMinimumCcu: 500,
-  riskPeakDrawdownPercent: 25,
-  confidence: {
-    verifiedHistoryHours: 24,
-    establishedHistoryHours: 72,
+// Intervals must match the systemd timers installed in phase 1b.
+export const JOB_CONFIG = {
+  census: {
+    intervalMinutes: 10,
+    timeoutMs: 9 * 60_000,
+    promotionMinimumCcu: 100,
+    resolutionBudgetMs: 150_000,
+    resolutionRetryDays: 7,
+    maximumListSizeChange: 0.3,
   },
-  ccuMilestones: [500, 1_000, 2_500, 5_000, 10_000, 25_000, 50_000, 100_000],
-  windows: {
-    1: { minimumGain: 150, minimumGrowthPercent: 25, toleranceHours: 1.5 },
-    3: { minimumGain: 250, minimumGrowthPercent: 30, toleranceHours: 2 },
-    6: { minimumGain: 400, minimumGrowthPercent: 40, toleranceHours: 3 },
-    24: { minimumGain: 500, minimumGrowthPercent: 35, toleranceHours: 6 },
+  poll: {
+    intervalMinutes: 5,
+    timeoutMs: 270_000,
+    deadlineMs: 240_000,
+    batchSize: 50,
+    minimumReturnedShare: 0.95,
+    maximumSkippedShare: 0.1,
   },
-  resurgence: {
-    minimumGain24h: 500,
-    minimumGrowth24h: 50,
-    minimumMedianMultiple: 1.75,
-    minimumMedianGain: 500,
-    minimumMedianConfirmationGain24h: 250,
-    minimumMedianConfirmationGrowth24h: 15,
-    minimumNewHighRatio: 1.1,
-    minimumNewHighGain: 500,
-    recentPeakExclusionHours: 6,
-    historicalLookbackDays: 30,
-  },
-  score: {
-    minimum: 55,
-    surging: 70,
-    explosive: 85,
-    weights: {
-      base: 28,
-      currentCcuLogMultiplier: 10,
-      currentCcuMaximum: 14,
-      gainLogMultiplier: 4.5,
-      gainMaximum: 18,
-      growthDivisor: 5,
-      growthMaximum: 18,
-      historyDivisor: 12,
-      historyMaximum: 8,
-      milestone: 10,
-      rapidDiscovery: 24,
-      discoveryChartEntry: 6,
-      resurgenceMedianMultiplier: 8,
-      resurgenceMedianMaximum: 12,
-      newHigh: 12,
-      riskPenalty: 5,
-    },
-  },
-  alerts: {
-    minimumScore: 70,
-    lookbackHours: 6,
-    maximumEntriesPerDelivery: 5,
-    maximumEventsPerDelivery: 100,
-  },
-  frontier: {
-    minimumStoredCcu: 100,
-    minimumCandidateCcu: 400,
-    immediateDiscoveryCcu: 500,
-    minimumGain1h: 125,
-    minimumGrowth1h: 25,
-    minimumGain3h: 250,
-    minimumGrowth3h: 30,
-    minimumGain6h: 400,
-    minimumGrowth6h: 40,
-    windowToleranceHours: 0.75,
-    minimumNewHighRatio: 1.1,
-    minimumNewHighGain: 200,
-    maximumHistoryHours: 8,
-    maximumCandidatesPerCollection: 30,
-    candidateFreshnessHours: 2,
-    scoreWeights: {
-      currentCcuLogMultiplier: 22,
-      currentCcuMaximum: 35,
-      gainLogMultiplier: 7,
-      gainMaximum: 25,
-      growthDivisor: 4,
-      growthMaximum: 25,
-      milestone: 10,
-      newHigh: 8,
-      immediateDiscovery: 10,
-    },
-  },
-  clusters: {
-    minimumGames: 2,
-  },
-} as const;
-
-export const ROBLOX_EVENT_MARKERS = [
-  "[upd",
-  "[update",
-  "[new",
-  "new map",
-  "event",
-  "2x",
-  "x2",
-  "admin abuse",
-] as const;
-
-export const DEFAULT_SETTINGS: AppSettings = {
-  thresholds: {
-    minimumBaselineCcu: 25,
-    minimumAbsoluteGain: 50,
-    breakoutMomentum: 68,
-    saturationMinGames: 6,
-    saturationNewGames7d: 3,
-    saturationFlatGrowth: 12,
-    hourlyRetentionDays: 30,
-  },
-  momentumWeights: {
-    ccuGrowth: 28,
-    acceleration: 14,
-    absoluteGain: 18,
-    visitGrowth: 10,
-    rankImprovement: 10,
-    freshness: 10,
-    persistence: 10,
-  },
-  opportunityWeights: {
-    trendStrength: 24,
-    differentiation: 16,
-    feasibility: 18,
-    mobileClarity: 10,
-    reusePotential: 12,
-    retention: 12,
-    durability: 8,
-  },
-  collection: {
+  votes: {
     intervalMinutes: 60,
-    country: process.env.ROBLOX_COUNTRY || "all",
-    device: process.env.ROBLOX_DEVICE || "computer",
-    charts: [...ROBLOX_DISCOVERY_CHARTS],
-    rolimonsEnabled: process.env.ROLIMONS_ENABLED !== "false",
-    rolimonsCandidates: 20,
+    timeoutMs: 30 * 60_000,
+    deadlineMs: 25 * 60_000,
+    batchSize: 50,
+    minimumReturnedShare: 0.95,
+    maximumSkippedShare: 0.1,
   },
-  taxonomy: {
-    coreLoop: [
-      { tag: "Idle", aliases: ["idle", "afk"] },
-      { tag: "Tycoon", aliases: ["tycoon", "factory"] },
-      { tag: "Obby", aliases: ["obby", "escape", "parkour", "tower"] },
-      { tag: "Survival", aliases: ["survival", "survive"] },
-      { tag: "Collection", aliases: ["collect", "collection", "collector"] },
-      { tag: "Combat", aliases: ["combat", "battle", "fighter", "battleground"] },
-      { tag: "RNG", aliases: ["rng", "random"] },
-      { tag: "Steal", aliases: ["steal", "theft", "rob"] },
-      { tag: "Defense", aliases: ["defense", "defence", "tower defense"] },
-    ],
-    progression: [
-      { tag: "+1 per second", aliases: ["+1", "per second", "every second"] },
-      { tag: "Training", aliases: ["training", "train", "workout"] },
-      { tag: "Grow", aliases: ["grow", "growing", "garden"] },
-      { tag: "Upgrade", aliases: ["upgrade", "level up"] },
-      { tag: "Rebirth", aliases: ["rebirth", "prestige"] },
-      { tag: "Merge", aliases: ["merge", "combine"] },
-    ],
-    reward: [
-      { tag: "Lucky Block", aliases: ["lucky block", "luck block"] },
-      { tag: "Egg", aliases: ["egg", "hatch"] },
-      { tag: "Chest", aliases: ["chest", "crate"] },
-      { tag: "Roll", aliases: ["roll", "spin"] },
-      { tag: "Mutation", aliases: ["mutation", "mutate", "mutant"] },
-    ],
-    social: [
-      { tag: "Tsunami", aliases: ["tsunami", "flood", "wave"] },
-      { tag: "Raid", aliases: ["raid", "boss"] },
-      { tag: "Theft", aliases: ["steal", "theft", "rob"] },
-      { tag: "Race", aliases: ["race", "racing"] },
-      { tag: "Defense", aliases: ["defense", "defence", "protect"] },
-      { tag: "Cooperation", aliases: ["co-op", "coop", "together", "team up"] },
-    ],
-    theme: [
-      { tag: "Monkey", aliases: ["monkey", "ape", "gorilla"] },
-      { tag: "Kitty", aliases: ["kitty", "kitten", "cat"] },
-      { tag: "Brainrot", aliases: ["brainrot", "brain rot", "skibidi"] },
-      { tag: "Anime", aliases: ["anime", "manga", "ninja"] },
-      { tag: "Kawaii", aliases: ["kawaii", "cute", "pastel"] },
-      { tag: "Horror", aliases: ["horror", "scary", "nightmare", "backrooms"] },
-      { tag: "Animals", aliases: ["animal", "pet", "zoo"] },
-    ],
+  charts: {
+    intervalMinutes: 60,
+    timeoutMs: 30 * 60_000,
+    minimumSortShare: 0.8,
   },
-  developerProfile: {
-    teamSize: 1,
-    robloxExperience: "recent",
-    webProductSkill: 5,
-    uiUxSkill: 5,
-    budget: "limited",
-    preferredWeeksMin: 2,
-    preferredWeeksMax: 4,
-    mobileFirst: true,
-    prefersClearLoops: true,
-    reusableSystems: ["simulator", "tycoon"],
+  explore: {
+    intervalMinutes: 60,
+    timeoutMs: 30 * 60_000,
+    seedCount: 10,
+    seedMaximumAgeDays: 60,
+    recommendationsPerSeed: 20,
+    searchTermCount: 4,
+    minimumDiscoveryCcu: 50,
   },
-  discordWebhook: process.env.DISCORD_WEBHOOK_URL || "",
-};
-
-export const STAGE_LABELS = {
-  spark: "Spark",
-  emerging: "Emerging",
-  expanding: "Expanding",
-  copy_wave: "Copy wave",
-  saturated: "Saturated",
-  declining: "Declining",
+  thumbnails: {
+    intervalMinutes: 60,
+    timeoutMs: 30 * 60_000,
+    refreshHours: 24,
+    refreshMinimumCcu: 50,
+    maximumGamesPerRun: 4_000,
+  },
 } as const;
 
-export const IDEA_EVIDENCE_CONFIG = {
-  recentGameMaxAgeDays: 90,
-  minimumHistoryHours: 20,
-  minimumCurrentCcu: 5_000,
-  minimumGain24h: 1_000,
-  minimumGrowth24h: 15,
-  minimumNewVisits24h: 100_000,
-  strongGrowth24h: 100,
-  strongGain24h: 6_000,
-  strongNewVisits24h: 1_000_000,
-  strongRankMovement24h: 20,
-  maximumSupportingGames: 4,
-  durability: {
-    minimumHours: 72,
-    strongHours: 168,
-    dailyWindowToleranceHours: 3,
-    minimumPositiveDailyWindows: 2,
-    minimumDailyGain: 500,
-    minimumDailyGrowth: 5,
-    durableMaximumPeakDrawdown: 25,
-    fragilePeakDrawdown: 35,
-    fragileDailyReversal: -20,
-    eventMarkers: ROBLOX_EVENT_MARKERS,
-  },
-  evidenceWeights: {
-    momentum: 25,
-    freshness: 15,
-    growth24h: 20,
-    gain24h: 15,
-    newVisits24h: 10,
-    rankMovement24h: 10,
-    persistence: 5,
-  },
-  recommendationWeights: {
-    algorithmEvidence: 30,
-    durability: 15,
-    proofBreadth: 15,
-    trendOpportunity: 15,
-    lowSaturation: 10,
-    soloFit: 15,
-  },
+export const ACTIVE_SET_CONFIG = {
+  minimumCcu: 50,
+  lookbackHours: 24,
+  censusLookbackMinutes: 30,
+  recentGameMaximumAgeDays: 90,
+  recentGameActivityDays: 7,
+} as const;
+
+export const STATUS_CONFIG = {
+  coverageMinimumCcu: 100,
+  trackedWithinMinutes: 15,
 } as const;
