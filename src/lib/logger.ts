@@ -19,6 +19,27 @@ export const logger = {
   error: (message: string, details?: LogDetails) => write("error", message, details),
 };
 
+const maximumCauseDepth = 5;
+
+// Wrapping errors such as "fetch failed" keep the actionable detail in their cause chain.
 export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (!(error instanceof Error)) return String(error);
+  const parts = [describeError(error)];
+  let cause = error.cause;
+  for (let depth = 0; depth < maximumCauseDepth && cause != null; depth += 1) {
+    if (!(cause instanceof Error)) {
+      parts.push(String(cause));
+      break;
+    }
+    parts.push(describeError(cause));
+    cause = cause.cause;
+  }
+  return parts.join(": ");
+}
+
+// Node reports some connection failures as an AggregateError with an empty message and only a code.
+function describeError(error: Error): string {
+  if (error.message) return error.message;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : error.name;
 }
