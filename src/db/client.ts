@@ -17,6 +17,9 @@ export interface DatabaseOptions {
   maxConnections?: number;
   // Shown in pg_stat_activity, to tell the dashboard, each job and analysis sessions apart.
   applicationName?: string;
+  // Sent as session settings when the connection opens, so a stuck query cannot outlive its job.
+  statementTimeoutMs?: number;
+  lockTimeoutMs?: number;
 }
 
 export function createDatabase(connectionString: string, options: DatabaseOptions = {}): { db: Database; pool: Pool } {
@@ -25,6 +28,8 @@ export function createDatabase(connectionString: string, options: DatabaseOption
     max: options.maxConnections ?? 5,
     connectionTimeoutMillis: 10_000,
     application_name: options.applicationName ?? "radar",
+    statement_timeout: options.statementTimeoutMs,
+    lock_timeout: options.lockTimeoutMs,
   });
   // Idle clients report errors (for example a server restart) on the pool; unhandled, they crash the process.
   pool.on("error", (error) => logger.warn("Idle PostgreSQL client error", { error: errorMessage(error) }));
@@ -33,11 +38,11 @@ export function createDatabase(connectionString: string, options: DatabaseOption
 
 let shared: { db: Database; pool: Pool } | null = null;
 
-export function getDatabase(applicationName = "radar"): Database {
+export function getDatabase(applicationName = "radar", options: Omit<DatabaseOptions, "applicationName"> = {}): Database {
   if (shared) return shared.db;
   const connectionString = process.env.DATABASE_URL?.trim();
   if (!connectionString) throw new Error("DATABASE_URL is required");
-  shared = createDatabase(connectionString, { applicationName });
+  shared = createDatabase(connectionString, { ...options, applicationName });
   return shared.db;
 }
 
