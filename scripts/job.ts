@@ -38,6 +38,8 @@ try {
 }
 
 // A query left running by a timed-out job keeps its client checked out, and closing the pool waits for it.
+// The timer stays referenced: if closing never settles and nothing else keeps the event loop alive, Node
+// would otherwise exit with code 13 (unsettled top-level await) before reaching process.exit below.
 const closed = await Promise.race([
   closeDatabase().then(
     () => true,
@@ -46,7 +48,7 @@ const closed = await Promise.race([
       return true;
     },
   ),
-  new Promise<false>((resolve) => setTimeout(() => resolve(false), 5_000).unref()),
+  new Promise<false>((resolve) => setTimeout(() => resolve(false), 5_000)),
 ]);
 if (!closed) logger.warn("Database connections did not close within 5 s", { job: definition.name });
 process.exit(exitCode);
