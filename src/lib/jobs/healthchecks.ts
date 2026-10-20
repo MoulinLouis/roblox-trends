@@ -29,7 +29,7 @@ export async function sendPing(slug: string, kind: PingKind, runId: string, body
     const response = await fetch(buildPingUrl(base, slug, kind, runId), {
       method: "POST",
       body: body?.slice(0, 10_000),
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(5_000),
     });
     if (!response.ok) logger.warn("Healthchecks ping rejected", { slug, kind, status: response.status });
   } catch (error) {
