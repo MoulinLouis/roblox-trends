@@ -1,6 +1,17 @@
 import { errorMessage, logger } from "@/lib/logger";
+import type { JobName } from "./types";
 
 export type PingKind = "start" | "success" | "fail";
+
+// The heartbeat check answers "did the job run"; it also receives degraded runs.
+export function jobSlug(name: JobName): string {
+  return `radar-${name}`;
+}
+
+// The quality check only receives fully successful runs, so a sustained degradation outlasts its period.
+export function qualitySlug(name: JobName): string {
+  return `radar-${name}-quality`;
+}
 
 export function buildPingUrl(base: string, slug: string, kind: PingKind, runId: string): string {
   const suffix = kind === "success" ? "" : `/${kind}`;

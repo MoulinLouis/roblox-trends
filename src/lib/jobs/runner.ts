@@ -3,7 +3,7 @@ import type { Database } from "@/db/client";
 import { finishJobRun, startJobRun } from "@/db/job-runs";
 import { errorMessage, logger } from "@/lib/logger";
 import { floorToSlot } from "@/lib/time-slots";
-import { sendPing } from "./healthchecks";
+import { jobSlug, sendPing } from "./healthchecks";
 import type { JobName, JobStatus } from "./types";
 
 export interface JobContext {
@@ -33,7 +33,7 @@ export async function executeJob(
   now = new Date(),
 ): Promise<Exclude<JobStatus, "running">> {
   const runId = randomUUID();
-  const slug = `radar-${definition.name}`;
+  const slug = jobSlug(definition.name);
   const slot = floorToSlot(now, definition.intervalMinutes);
   const startedMs = Date.now();
   await startJobRun(db, { id: runId, job: definition.name, slot, startedAt: new Date(startedMs) });
