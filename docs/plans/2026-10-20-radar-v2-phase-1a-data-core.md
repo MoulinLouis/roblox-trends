@@ -614,6 +614,25 @@ git commit -m "feat: add slot, fingerprint and array helpers"
 - Generate: `drizzle/0000_core_schema.sql`, `drizzle/0001_timescale.sql`, `drizzle/meta/*`
 - Modify: `package.json`
 
+**Step 0: Guard against locale-dependent casing**
+
+Stored fingerprints must not depend on the host locale (under tr-TR, V8 lowercases "I" to "ı" in non-Latin-1 strings), and CI runs under the default locale, so a test alone cannot catch a regression. In `eslint.config.mjs`, add this entry to the `defineConfig([...])` array, after `...nextTypeScript`:
+
+```js
+  {
+    files: ["src/**/*.ts", "scripts/**/*.ts"],
+    rules: {
+      "no-restricted-properties": [
+        "error",
+        { property: "toLocaleLowerCase", message: "Use toLowerCase(): stored values must not depend on the host locale." },
+        { property: "toLocaleUpperCase", message: "Use toUpperCase(): stored values must not depend on the host locale." },
+      ],
+    },
+  },
+```
+
+Run `npm run lint` (expected: PASS, since no code uses these methods), then commit: `git add eslint.config.mjs && git commit -m "chore(lint): forbid locale-dependent casing in source"`.
+
 **Step 1: Create `src/lib/jobs/types.ts`**
 
 ```ts
@@ -1710,72 +1729,76 @@ export async function upsertGameDetails(db: Database, details: RobloxGameDetail[
   const inserted: number[] = [];
   const metadataChanged: number[] = [];
   for (const part of chunk(uniqueBy(details, (detail) => detail.id), CHUNK_SIZE)) {
-    // PostgreSQL 18 exposes the pre-update row through RETURNING old.*; it is null for inserted rows.
-    // Comparing with the current fingerprint (not all history) records reverts such as X → [🎃] X → X.
-    const rows = await db
-      .insert(games)
-      .values(part.map((detail) => toGameRow(detail, observedAt)))
-      .onConflictDoUpdate({
-        target: games.universeId,
-        set: {
-          rootPlaceId: sql`excluded.root_place_id`,
-          name: sql`excluded.name`,
-          description: sql`excluded.description`,
-          creatorId: sql`excluded.creator_id`,
-          creatorName: sql`excluded.creator_name`,
-          creatorType: sql`excluded.creator_type`,
-          genre: sql`excluded.genre`,
-          robloxCreatedAt: sql`excluded.roblox_created_at`,
-          robloxUpdatedAt: sql`excluded.roblox_updated_at`,
-          lastObservedAt: sql`greatest(${games.lastObservedAt}, excluded.last_observed_at)`,
-          lastCcu: sql`excluded.last_ccu`,
-          lastCcuAt: sql`excluded.last_ccu_at`,
-          metadataFingerprint: sql`excluded.metadata_fingerprint`,
-          contentFingerprint: sql`excluded.content_fingerprint`,
-        },
-      })
-      .returning({
-        universeId: games.universeId,
-        previousFingerprint: sql<string | null>`old.metadata_fingerprint`,
-        currentFingerprint: games.metadataFingerprint,
-      });
-    const versioned = new Set<number>();
-    for (const row of rows) {
-      if (row.previousFingerprint === null) {
-        inserted.push(row.universeId);
-        versioned.add(row.universeId);
-      } else if (row.previousFingerprint !== row.currentFingerprint) {
-        metadataChanged.push(row.universeId);
-        versioned.add(row.universeId);
-      }
-    }
-
-    const versions = part
-      .filter((detail) => versioned.has(detail.id))
-      .map((detail) => ({
-        universeId: detail.id,
-        kind: "metadata" as const,
-        rawFingerprint: rawFingerprint(detail.name, detail.description),
-        contentFingerprint: contentFingerprint(detail.name, detail.description),
-        name: detail.name,
-        description: detail.description,
-        robloxUpdatedAt: detail.updated,
-        observedAt,
-      }));
-    if (versions.length) {
-      await db
-        .insert(gameVersions)
-        .values(versions)
-        .onConflictDoNothing({
-          target: [gameVersions.universeId, gameVersions.kind, gameVersions.rawFingerprint, gameVersions.observedAt],
+    // One transaction per chunk: if the version insert fails after games stored the new fingerprint,
+    // a retry would see no change and the version would be lost.
+    await db.transaction(async (transaction) => {
+      // PostgreSQL 18 exposes the pre-update row through RETURNING old.*; it is null for inserted rows.
+      // Comparing with the current fingerprint (not all history) records reverts such as X → [🎃] X → X.
+      const rows = await transaction
+        .insert(games)
+        .values(part.map((detail) => toGameRow(detail, observedAt)))
+        .onConflictDoUpdate({
+          target: games.universeId,
+          set: {
+            rootPlaceId: sql`excluded.root_place_id`,
+            name: sql`excluded.name`,
+            description: sql`excluded.description`,
+            creatorId: sql`excluded.creator_id`,
+            creatorName: sql`excluded.creator_name`,
+            creatorType: sql`excluded.creator_type`,
+            genre: sql`excluded.genre`,
+            robloxCreatedAt: sql`excluded.roblox_created_at`,
+            robloxUpdatedAt: sql`excluded.roblox_updated_at`,
+            lastObservedAt: sql`greatest(${games.lastObservedAt}, excluded.last_observed_at)`,
+            lastCcu: sql`excluded.last_ccu`,
+            lastCcuAt: sql`excluded.last_ccu_at`,
+            metadataFingerprint: sql`excluded.metadata_fingerprint`,
+            contentFingerprint: sql`excluded.content_fingerprint`,
+          },
+        })
+        .returning({
+          universeId: games.universeId,
+          previousFingerprint: sql<string | null>`old.metadata_fingerprint`,
+          currentFingerprint: games.metadataFingerprint,
         });
-    }
+      const versioned = new Set<number>();
+      for (const row of rows) {
+        if (row.previousFingerprint === null) {
+          inserted.push(row.universeId);
+          versioned.add(row.universeId);
+        } else if (row.previousFingerprint !== row.currentFingerprint) {
+          metadataChanged.push(row.universeId);
+          versioned.add(row.universeId);
+        }
+      }
 
-    // Every detail reveals its root place mapping, which saves census resolutions later.
-    await db
-      .insert(places)
-      .values(part.map((detail) => ({ placeId: detail.rootPlaceId, universeId: detail.id, resolvedAt: observedAt, error: null })))
-      .onConflictDoNothing();
+      const versions = part
+        .filter((detail) => versioned.has(detail.id))
+        .map((detail) => ({
+          universeId: detail.id,
+          kind: "metadata" as const,
+          rawFingerprint: rawFingerprint(detail.name, detail.description),
+          contentFingerprint: contentFingerprint(detail.name, detail.description),
+          name: detail.name,
+          description: detail.description,
+          robloxUpdatedAt: detail.updated,
+          observedAt,
+        }));
+      if (versions.length) {
+        await transaction
+          .insert(gameVersions)
+          .values(versions)
+          .onConflictDoNothing({
+            target: [gameVersions.universeId, gameVersions.kind, gameVersions.rawFingerprint, gameVersions.observedAt],
+          });
+      }
+
+      // Every detail reveals its root place mapping, which saves census resolutions later.
+      await transaction
+        .insert(places)
+        .values(part.map((detail) => ({ placeId: detail.rootPlaceId, universeId: detail.id, resolvedAt: observedAt, error: null })))
+        .onConflictDoNothing();
+    });
   }
   return { inserted, metadataChanged };
 }
