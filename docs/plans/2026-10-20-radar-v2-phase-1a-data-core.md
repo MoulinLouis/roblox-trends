@@ -2176,7 +2176,11 @@ git push && gh run watch --exit-status
 
 **Files:**
 - Create: `src/lib/jobs/promotion.ts`, `src/lib/jobs/census.ts`, `src/lib/jobs/census.test.ts`, `src/lib/jobs/census.db.test.ts`
-- Modify: `src/lib/jobs/registry.ts`
+- Modify: `src/lib/jobs/registry.ts`, `src/lib/config.ts`
+
+**Step 0: Add the census baseline window to `src/lib/config.ts`**
+
+In `JOB_CONFIG.census`, add `baselineMaxAgeHours: 6,` after `maximumListSizeChange: 0.3,`. Without a recent successful run, there is no baseline and the run is accepted, so a legitimate permanent change in the list size recovers after six hours.
 
 **Step 1: Write the failing pure tests**
 
@@ -2266,7 +2270,7 @@ export async function promoteUniverses(
 
 ```ts
 import { savePlaceResolution, placesToSkip, unpromotedUniverses } from "@/db/places";
-import { latestCompletedRun } from "@/db/job-runs";
+import { latestSuccessfulRun } from "@/db/job-runs";
 import { writeCensusObservations } from "@/db/observations";
 import { HttpError } from "@/lib/api/http";
 import type { RobloxApi } from "@/lib/api/roblox";
@@ -2307,7 +2311,9 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
         db,
         listed.map((game) => ({ placeId: Number(game.placeId), observedAt: slot, ccu: Math.round(game.ccu) })),
       );
-      const previous = await latestCompletedRun(db, "census");
+      // Baseline: the latest fully successful run of the last hours, so one truncated list never becomes the reference.
+      const baselineSince = new Date(now.getTime() - config.baselineMaxAgeHours * 60 * 60 * 1000);
+      const previous = await latestSuccessfulRun(db, "census", baselineSince);
       const previousListed = typeof previous?.stats.listed === "number" ? previous.stats.listed : null;
       const status = evaluateCensusQuality(listed.length, previousListed, config.maximumListSizeChange);
 
@@ -4236,6 +4242,9 @@ LEGACY_DATABASE_URL=
 # Healthchecks.io ping base, for example https://hc-ping.com/<ping-key>. Checks are auto-created by slug.
 HEALTHCHECKS_PING_BASE=
 
+# Set to 1 in production units: jobs then refuse to run without HEALTHCHECKS_PING_BASE.
+RADAR_REQUIRE_HEALTHCHECKS=
+
 # Roblox Charts filters.
 ROBLOX_COUNTRY=all
 ROBLOX_DEVICE=computer
@@ -4299,6 +4308,8 @@ Expected: CI green with every database suite executed.
 - If phase 1b adds deployment to CI, the concurrency group must not cancel runs on the deploy branch.
 - After Task 2 review: fingerprints use `toLowerCase()` (never locale-dependent casing) and tests pin their exact values. Metadata versions compare against `games.metadata_fingerprint` through PostgreSQL 18 `RETURNING old.*`, so reverts are recorded; the `game_versions` unique key includes `observed_at` to keep retries and imports idempotent.
 - After Task 3 review: raw retention is 365 days; aggregates keep min/avg/max CCU and visits as a maximum; `game_hourly` and `census_hourly` compress after 30 days; `chart_placements` is segmented by game. Test databases are created from `template0` (so `CREATE EXTENSION` runs as in production) and pause TimescaleDB jobs after migrating. The pool logs idle-client errors, times out connections after 10 s and sets `application_name`. Jobs and `collect` refuse to run against a database holding v1 tables. The legacy import never re-imports raw rows older than the retention window. `@next/env` is a direct dependency, pinned to the installed `next` version.
+- After Task 4 review: `executeJob` pings start before touching the database and abandons stale `running` rows; `scripts/job.ts` sends a fail ping when a job cannot even start, refuses to run without `HEALTHCHECKS_PING_BASE` when `RADAR_REQUIRE_HEALTHCHECKS=1`, sets `statement_timeout`/`lock_timeout`, and bounds the final pool close. A fully successful run also pings `radar-<job>-quality`, so sustained degradation alerts through that check's period. `latestSuccessfulRun(db, job, since)` replaces `latestCompletedRun`; the census baseline is the latest successful run of the last 6 hours. `errorMessage` includes the `cause` chain.
+- Before phase 3: analysis must exclude every slot whose run was not `success` (failed runs can leave partial writes), not only degraded ones.
 - Before phase 3: raw SQL over aggregates returns `int8`, `numeric` and `timestamptz` as strings; convert with `Number()`/`new Date()` or declare the views with `pgView(...).existing()`. Exclude the partial current UTC day from daily analysis; `game_daily` computes it in real time.
 - Before phase 4: cache the dashboard database instance on `globalThis` so Next dev hot reloads do not open new pools.
 - Task 17: update design section 2 (separate `vote_observations`, 365-day raw retention, aggregate columns).
@@ -4307,6 +4318,9 @@ Expected: CI green with every database suite executed.
 ## Out of scope for this plan (phase 1b)
 
 - Deploy from the `radar-v2` branch until cutover: merging it into `main` removes the v1 scheduler workflow.
+- Provision Healthchecks checks through the management API (`POST /api/v3/checks/` with `unique: ["slug"]`) for every job and every `-quality` check, with the real period and a grace near `timeoutMs`, derived from `JOB_CONFIG`. Auto-created checks default to a 1-day period and would alert about 25 hours late.
+- systemd units set `RADAR_REQUIRE_HEALTHCHECKS=1` and an `OnFailure=` unit that sends the fail ping for process deaths the code cannot report.
+- Provisioning creates both checks per job before the first run and sends one test ping to prove the ping key works; with `create=1` alone, a wrong key or a job degraded from its first run would never create its check.
 - Stagger the systemd timers so jobs sharing a Roblox host do not start in the same minute (HTTP spacing is per process).
 - Server provisioning script, PostgreSQL roles (application owner, read-only analysis role), TimescaleDB tuning, Node 24 LTS.
 - systemd units and timers per job, a pull-based deploy timer, the web service behind `tailscale serve`.
