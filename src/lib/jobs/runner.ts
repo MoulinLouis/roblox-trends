@@ -34,11 +34,12 @@ export async function executeJob(
 ): Promise<Exclude<JobStatus, "running">> {
   const runId = randomUUID();
   const slug = jobSlug(definition.name);
-  const slot = floorToSlot(now, definition.intervalMinutes);
   const startedMs = Date.now();
-  await startJobRun(db, { id: runId, job: definition.name, slot, startedAt: new Date(startedMs) });
+  // Ping first and record inside the try: a run that cannot even be recorded must still report a failure.
   await sendPing(slug, "start", runId);
   try {
+    const slot = floorToSlot(now, definition.intervalMinutes);
+    await startJobRun(db, { id: runId, job: definition.name, slot, startedAt: new Date(startedMs) });
     const result = await withTimeout(definition.run({ db, now, slot, runId }), definition.timeoutMs, definition.name);
     await finishJobRun(db, runId, {
       status: result.status,
