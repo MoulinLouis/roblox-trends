@@ -26,6 +26,18 @@ describe("errorMessage", () => {
     expect(errorMessage(new Error("fetch failed", { cause }))).toBe("fetch failed: ECONNREFUSED");
   });
 
+  it("caps a long message and says how much was cut", () => {
+    expect(errorMessage(new Error("x".repeat(10_000)))).toBe(`${"x".repeat(2_000)}…(8000 more characters)`);
+    expect(errorMessage("y".repeat(5_000))).toBe(`${"y".repeat(2_000)}…(3000 more characters)`);
+  });
+
+  it("keeps the cause visible when the outer message is huge", () => {
+    const error = new Error(`Failed query: ${"x".repeat(10_000)}`, { cause: new Error("deadlock detected") });
+    const message = errorMessage(error);
+    expect(message).toMatch(/…\(\d+ more characters\): deadlock detected$/);
+    expect(message.length).toBeLessThanOrEqual(2_000);
+  });
+
   it("follows at most five causes", () => {
     let error = new Error("level 7");
     for (let level = 6; level >= 0; level -= 1) error = new Error(`level ${level}`, { cause: error });

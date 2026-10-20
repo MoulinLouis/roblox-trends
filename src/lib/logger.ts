@@ -20,10 +20,18 @@ export const logger = {
 };
 
 const maximumCauseDepth = 5;
+// Messages end up in job_runs, journald and Healthchecks; a validation report on a large payload can reach megabytes.
+const maximumMessageLength = 2_000;
 
 // Wrapping errors such as "fetch failed" keep the actionable detail in their cause chain.
 export function errorMessage(error: unknown): string {
-  if (!(error instanceof Error)) return String(error);
+  const parts = error instanceof Error ? causeChain(error) : [String(error)];
+  // An equal share per part, so a huge outer message (a failed bulk query) cannot crowd out the cause.
+  const share = Math.floor(maximumMessageLength / parts.length);
+  return parts.map((part) => truncate(part, share)).join(": ");
+}
+
+function causeChain(error: Error): string[] {
   const parts = [describeError(error)];
   let cause = error.cause;
   for (let depth = 0; depth < maximumCauseDepth && cause != null; depth += 1) {
@@ -34,7 +42,11 @@ export function errorMessage(error: unknown): string {
     parts.push(describeError(cause));
     cause = cause.cause;
   }
-  return parts.join(": ");
+  return parts;
+}
+
+function truncate(text: string, limit: number): string {
+  return text.length <= limit ? text : `${text.slice(0, limit)}…(${text.length - limit} more characters)`;
 }
 
 // Node reports some connection failures as an AggregateError with an empty message and only a code.
