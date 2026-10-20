@@ -35,7 +35,7 @@ const BRACKET_MARKERS = [...PROMOTIONAL_MARKERS, ...SEASONAL_MARKERS];
 const BRACKETED_TEXT = /[\[({【][^\])}】]{0,48}[\])}】]/g;
 
 const LEADING_MARKER = new RegExp(
-  `^(${PROMOTIONAL_MARKERS.map(escapeRegExp).join("|")})(\\s*[!:-]+\\s*|\\s+(?=\\S))`,
+  `^(${PROMOTIONAL_MARKERS.map(escapeRegExp).join("|")})(\\s*[!:]+\\s*|\\s+-+\\s+|\\s+(?=\\S))`,
   "i",
 );
 
@@ -44,15 +44,22 @@ export function normalizeTitle(title: string): string {
   normalized = normalized.replace(BRACKETED_TEXT, (marker) =>
     containsWholeMarker(marker.slice(1, -1), BRACKET_MARKERS) ? " " : marker,
   );
-  normalized = normalized.replace(LEADING_MARKER, (match, marker: string, separator: string) => {
-    const punctuated = /[!:-]/.test(separator);
-    const capitalized = marker === marker.toUpperCase();
-    return punctuated || capitalized ? "" : match;
-  });
+  normalized = stripLeadingMarker(normalized.trimStart());
   return normalized
     .replace(/[^\p{L}\p{N}+'-]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function stripLeadingMarker(text: string): string {
+  const match = LEADING_MARKER.exec(text);
+  if (!match) return text;
+  const [prefix, marker, separator] = match;
+  const rest = text.slice(prefix.length);
+  const punctuated = /[!:-]/.test(separator);
+  // Capitals mark a promotion only when the rest of the title is not written in capitals too.
+  const capitalized = marker === marker.toUpperCase() && /\p{Ll}/u.test(rest);
+  return punctuated || capitalized ? rest : text;
 }
 
 function containsWholeMarker(text: string, markers: readonly string[]): boolean {

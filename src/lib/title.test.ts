@@ -19,6 +19,9 @@ describe("normalizeTitle", () => {
     ["Alpha Strike", "Alpha Strike"],
     ["Code Breakers", "Code Breakers"],
     ["Release the Kraken", "Release the Kraken"],
+    ["New-Gen Tycoon", "New-Gen Tycoon"],
+    ["NEW YORK ROLEPLAY", "NEW YORK ROLEPLAY"],
+    ["CODE BREAKERS", "CODE BREAKERS"],
   ])("keeps a leading marker word that belongs to the name: %s", (title, expected) => {
     expect(normalizeTitle(title)).toBe(expected);
   });
@@ -44,6 +47,9 @@ describe("normalizeTitle", () => {
     ["UPDATE! Swing For Eggs", "Swing For Eggs"],
     ["NEW: Pet Sim", "Pet Sim"],
     ["UPD Build a PC", "Build a PC"],
+    ["🔥UPDATE! Swing For Eggs", "Swing For Eggs"],
+    ["[UPD] NEW: Pet Sim", "Pet Sim"],
+    ["UPDATE - Swing For Eggs", "Swing For Eggs"],
   ])("strips a leading marker followed by punctuation or written in capitals: %s", (title, expected) => {
     expect(normalizeTitle(title)).toBe(expected);
   });
