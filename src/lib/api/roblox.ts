@@ -89,6 +89,14 @@ const thumbnailsResponseSchema = z.object({
     }),
   ),
 });
+const gameThumbnailsResponseSchema = z.object({
+  data: z.array(
+    z.object({
+      universeId: z.number(),
+      thumbnails: z.array(z.object({ state: z.string(), imageUrl: z.string().nullable() })).default([]),
+    }),
+  ),
+});
 
 export type RobloxChartGame = z.infer<typeof chartGameSchema>;
 export type RobloxSort = z.infer<typeof sortSchema>;
@@ -139,7 +147,27 @@ export function parseSearchResponse(value: unknown): RobloxChartGame[] {
     }));
 }
 
-export class RobloxClient {
+export function parseGameThumbnailsResponse(value: unknown): Map<string, string> {
+  const thumbnails = new Map<string, string>();
+  for (const item of gameThumbnailsResponseSchema.parse(value).data) {
+    const completed = item.thumbnails.find((thumbnail) => thumbnail.state === "Completed" && thumbnail.imageUrl);
+    if (completed?.imageUrl) thumbnails.set(String(item.universeId), completed.imageUrl);
+  }
+  return thumbnails;
+}
+
+export interface RobloxApi {
+  getSortContent(sortId: string): Promise<RobloxSort>;
+  getGameDetails(universeIds: string[]): Promise<RobloxGameDetail[]>;
+  getGameVotes(universeIds: string[]): Promise<RobloxGameVote[]>;
+  getRecommendations(universeId: string, maximumRows?: number): Promise<RobloxChartGame[]>;
+  searchGames(query: string): Promise<RobloxChartGame[]>;
+  resolveUniverseId(placeId: string): Promise<string>;
+  getThumbnails(universeIds: string[]): Promise<Map<string, string>>;
+  getGameThumbnails(universeIds: string[]): Promise<Map<string, string>>;
+}
+
+export class RobloxClient implements RobloxApi {
   private readonly sessionId = randomUUID();
 
   constructor(
@@ -221,6 +249,22 @@ export class RobloxClient {
       url.searchParams.set("isCircular", "false");
       const parsed = thumbnailsResponseSchema.parse(await fetchJson(url.toString(), { cacheTtlMs: 60 * 60 * 1000 }));
       for (const item of parsed.data) if (item.imageUrl) thumbnails.set(String(item.targetId), item.imageUrl);
+    }
+    return thumbnails;
+  }
+
+  async getGameThumbnails(universeIds: string[]): Promise<Map<string, string>> {
+    const thumbnails = new Map<string, string>();
+    for (let index = 0; index < universeIds.length; index += 50) {
+      const url = new URL("https://thumbnails.roblox.com/v1/games/multiget/thumbnails");
+      url.searchParams.set("universeIds", universeIds.slice(index, index + 50).join(","));
+      url.searchParams.set("countPerUniverse", "1");
+      url.searchParams.set("defaults", "true");
+      url.searchParams.set("size", "768x432");
+      url.searchParams.set("format", "Png");
+      url.searchParams.set("isCircular", "false");
+      const parsed = parseGameThumbnailsResponse(await fetchJson(url.toString(), { cacheTtlMs: 60 * 60 * 1000 }));
+      for (const [universeId, imageUrl] of parsed) thumbnails.set(universeId, imageUrl);
     }
     return thumbnails;
   }

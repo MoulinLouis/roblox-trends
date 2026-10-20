@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   parseGameDetailsResponse,
+  parseGameThumbnailsResponse,
   parseGameVotesResponse,
   parseRecommendationsResponse,
   parseSearchResponse,
@@ -56,6 +57,16 @@ describe("Roblox API response parsing", () => {
       { contentType: "Avatar", universeId: 303, rootPlaceId: 404, name: "Ignored", playerCount: 0 },
     ] }] });
     expect(games).toEqual([{ universeId: 101, rootPlaceId: 202, name: "Search result", playerCount: 75 }]);
+  });
+
+  it("keeps the first completed 16:9 game thumbnail per universe", () => {
+    const thumbnails = parseGameThumbnailsResponse({
+      data: [
+        { universeId: 101, error: null, thumbnails: [{ targetId: 9, state: "Completed", imageUrl: "https://tr.rbxcdn.com/a/768/432/Image/Png", version: "TN3" }] },
+        { universeId: 102, error: null, thumbnails: [{ targetId: 10, state: "Pending", imageUrl: null }] },
+      ],
+    });
+    expect([...thumbnails]).toEqual([["101", "https://tr.rbxcdn.com/a/768/432/Image/Png"]]);
   });
 });
 
