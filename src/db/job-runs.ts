@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, gte } from "drizzle-orm";
 import type { JobName, JobStatus } from "@/lib/jobs/types";
 import type { Database } from "./client";
 import { jobRuns } from "./schema";
@@ -33,14 +33,16 @@ export async function finishJobRun(
     .where(eq(jobRuns.id, id));
 }
 
-export async function latestCompletedRun(
+// Degraded runs are excluded: a baseline must come from a run whose data passed its quality checks.
+export async function latestSuccessfulRun(
   db: Database,
   job: JobName,
+  since: Date,
 ): Promise<{ slot: Date; stats: Record<string, unknown> } | null> {
   const [run] = await db
     .select({ slot: jobRuns.slot, stats: jobRuns.stats })
     .from(jobRuns)
-    .where(and(eq(jobRuns.job, job), inArray(jobRuns.status, ["success", "degraded"])))
+    .where(and(eq(jobRuns.job, job), eq(jobRuns.status, "success"), gte(jobRuns.startedAt, since)))
     .orderBy(desc(jobRuns.startedAt))
     .limit(1);
   return run ?? null;
