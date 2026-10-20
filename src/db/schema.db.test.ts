@@ -40,10 +40,10 @@ describe.skipIf(!hasTestDatabase)("v2 schema migrations", () => {
         (1, '2026-10-20T14:05:00Z', 300, 1100, 11),
         (1, '2026-10-20T14:10:00Z', 200, 1200, 12)
     `);
-    const result = await database.db.execute<{ ccu_min: number; ccu_max: number; samples: string; visits_last: string }>(
-      sql`select ccu_min, ccu_max, samples, visits_last from game_hourly where universe_id = 1`,
+    const result = await database.db.execute<{ ccu_min: number; ccu_max: number; samples: string; visits_max: string }>(
+      sql`select ccu_min, ccu_max, samples, visits_max from game_hourly where universe_id = 1`,
     );
-    expect(result.rows).toEqual([{ ccu_min: 100, ccu_max: 300, samples: "3", visits_last: "1200" }]);
+    expect(result.rows).toEqual([{ ccu_min: 100, ccu_max: 300, samples: "3", visits_max: "1200" }]);
   });
 
   it("refuses to migrate a database that still holds v1 tables", async () => {
