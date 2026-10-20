@@ -21,9 +21,14 @@ export function buildPingUrl(base: string, slug: string, kind: PingKind, runId: 
   return url.toString();
 }
 
+// The single reading of the setting, so the job script's check and the pings cannot disagree.
+export function healthchecksPingBase(): string | undefined {
+  return process.env.HEALTHCHECKS_PING_BASE?.trim() || undefined;
+}
+
 // Pings are best effort: a monitoring outage must never fail a collection.
 export async function sendPing(slug: string, kind: PingKind, runId: string, body?: string): Promise<void> {
-  const base = process.env.HEALTHCHECKS_PING_BASE?.trim();
+  const base = healthchecksPingBase();
   if (!base) return;
   try {
     const response = await fetch(buildPingUrl(base, slug, kind, runId), {
