@@ -46,6 +46,22 @@ describe.skipIf(!hasTestDatabase)("v2 schema migrations", () => {
     expect(result.rows).toEqual([{ ccu_min: 100, ccu_max: 300, samples: "3", visits_max: "1200" }]);
   });
 
+  it("schedules compression, retention and refresh policies", async () => {
+    const result = await database.db.execute<{ proc_name: string; jobs: number }>(sql`
+      select proc_name, count(*)::int as jobs from timescaledb_information.jobs
+      where job_id >= 1000 group by proc_name order by proc_name
+    `);
+    expect(result.rows).toEqual([
+      { proc_name: "policy_compression", jobs: 6 },
+      { proc_name: "policy_refresh_continuous_aggregate", jobs: 3 },
+      { proc_name: "policy_retention", jobs: 2 },
+    ]);
+    const retention = await database.db.execute<{ drop_after: string }>(sql`
+      select distinct config->>'drop_after' as drop_after from timescaledb_information.jobs where proc_name = 'policy_retention'
+    `);
+    expect(retention.rows).toEqual([{ drop_after: "365 days" }]);
+  });
+
   it("refuses to migrate a database that still holds v1 tables", async () => {
     const legacy = await createTestDatabase({ migrate: false });
     try {
