@@ -47,8 +47,8 @@ export async function executeJob(
       durationMs: Date.now() - startedMs,
       stats: result.stats,
     });
-    await sendPing(slug, "success", runId, JSON.stringify({ status: result.status, ...result.stats }));
-    logger.info("Job completed", { job: definition.name, status: result.status, ...result.stats });
+    await sendPing(slug, "success", runId, JSON.stringify({ ...result.stats, status: result.status }));
+    logger.info("Job completed", { ...result.stats, job: definition.name, status: result.status });
     return result.status;
   } catch (error) {
     const message = errorMessage(error);

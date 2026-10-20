@@ -65,6 +65,14 @@ describe.skipIf(!hasTestDatabase)("executeJob", () => {
     expect(JSON.parse(String(pingBody(1)))).toEqual({ games: 3, status: "success" });
   });
 
+  it("reports the run status even when a stat has the same name", async () => {
+    await executeJob(
+      { name: "poll", intervalMinutes: 5, timeoutMs: 1_000, run: async () => ({ status: "degraded", stats: { status: "fine" } }) },
+      database.db,
+    );
+    expect(JSON.parse(String(pingBody(1)))).toEqual({ status: "degraded" });
+  });
+
   it("records a failed run with its error", async () => {
     const status = await executeJob(
       { name: "votes", intervalMinutes: 60, timeoutMs: 1_000, run: async () => { throw new Error("boom"); } },
