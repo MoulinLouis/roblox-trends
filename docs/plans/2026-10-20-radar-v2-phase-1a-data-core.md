@@ -17,7 +17,7 @@
 - Work in the worktree `/home/playfade/dev/roblox-trends/.worktrees/radar-v2` on branch `radar-v2`. The v1 collector keeps running from `main`; never push to `main` from this plan.
 - `.env.local` in the worktree contains `LEGACY_DATABASE_URL` (the v1 Aiven production database). Never rename it back to `DATABASE_URL`. `src/db/migrate.ts` refuses to migrate a database that holds v1 tables, as a second safety net.
 - All code, comments, tests and docs are in English. Commits follow Conventional Commits.
-- **Database tests.** Files named `*.db.test.ts` run only when `TEST_DATABASE_URL` points to a PostgreSQL 18 + TimescaleDB server where the user can create databases. Each test file creates and drops its own database. CI provides this server. Locally, without it, these suites are reported as skipped. In that case, push the branch after each database task and confirm in CI: `git push origin radar-v2 && gh run watch --exit-status`.
+- **Database tests.** Files named `*.db.test.ts` run only when `TEST_DATABASE_URL` points to a PostgreSQL 18 + TimescaleDB server where the user can create databases. Each test file creates and drops its own database. CI provides this server, and `src/db/test-database.ts` fails the run in CI if the variable is missing. Locally, put the variable in `.env.test.local`: `@next/env` skips `.env.local` when `NODE_ENV=test`, which Vitest sets. Never copy `LEGACY_DATABASE_URL` into `.env.test.local`. Without a local server these suites are reported as skipped. In that case, push the branch after each database task and confirm in CI: `git push origin radar-v2 && gh run watch --exit-status`.
 - Fixtures (fake games) are written only into these disposable test databases, never into an application database.
 - Before the final handoff: `npm run lint && npm run typecheck && npm run test && npm run build`.
 
@@ -35,7 +35,7 @@ sudo pg_ctlcluster 18 main restart
 sudo -u postgres psql -p 5433 -c "ALTER USER postgres PASSWORD 'postgres';"
 ```
 
-PostgreSQL 16 already listens on 5432, so the new cluster listens on 5433. Then add to the worktree `.env.local`:
+PostgreSQL 16 already listens on 5432, so the new cluster listens on 5433. Then create the worktree file `.env.test.local` (git-ignored by the `.env*.local` rule) containing only:
 
 ```bash
 TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5433/postgres
@@ -996,6 +996,11 @@ import { createDatabase, type Database } from "./client";
 import { migrateDatabase } from "./migrate";
 
 const adminUrl = process.env.TEST_DATABASE_URL?.trim() ?? "";
+
+// A missing variable in CI must fail loudly instead of silently skipping every database suite.
+if (process.env.CI && !adminUrl) {
+  throw new Error("TEST_DATABASE_URL must be set in CI");
+}
 
 // Database suites run only against a disposable PostgreSQL + TimescaleDB server.
 export const hasTestDatabase = adminUrl.length > 0;
@@ -4028,7 +4033,8 @@ git push && gh run watch --exit-status
 # v2 PostgreSQL 18 + TimescaleDB database (required).
 DATABASE_URL=
 
-# Disposable PostgreSQL + TimescaleDB server for *.db.test.ts suites (optional locally; CI provides one).
+# Disposable PostgreSQL + TimescaleDB server for *.db.test.ts suites. Set it in .env.test.local:
+# Vitest runs with NODE_ENV=test, and @next/env does not read .env.local in that mode. CI provides one.
 TEST_DATABASE_URL=
 
 # v1 Aiven database, read only by `npm run import:legacy`.
@@ -4090,9 +4096,18 @@ Expected: CI green with every database suite executed.
 
 ---
 
+## Execution notes (changes made after Task 1 review)
+
+- CI runs Node 24 LTS (bundles npm 11, like the developer machine); `package.json` declares `engines.npm >= 11` so an npm 10 install warns. npm 10 and npm 11 disagree on optional nested lockfile entries.
+- `.gitignore` ignores `.env*.local`; local database tests read `TEST_DATABASE_URL` from `.env.test.local`.
+- `normalizeTitle` strips bracketed markers only on whole words, and leading markers only when followed by punctuation or written in capitals, so real titles such as "New York Roleplay" or "[Alphabet Lore] Morphs" keep their words.
+- CI health check uses TCP (`pg_isready -h 127.0.0.1`), and the job has a 15-minute timeout, read-only permissions and a concurrency group.
+
 ## Out of scope for this plan (phase 1b)
 
-- Server provisioning script, PostgreSQL roles (application owner, read-only analysis role), TimescaleDB tuning.
+- Deploy from the `radar-v2` branch until cutover: merging it into `main` removes the v1 scheduler workflow.
+- Stagger the systemd timers so jobs sharing a Roblox host do not start in the same minute (HTTP spacing is per process).
+- Server provisioning script, PostgreSQL roles (application owner, read-only analysis role), TimescaleDB tuning, Node 24 LTS.
 - systemd units and timers per job, a pull-based deploy timer, the web service behind `tailscale serve`.
 - pgBackRest archiving to R2 or B2, the weekly restore test, disk monitoring, Healthchecks periods and grace times.
 - First production run: `npm run db:migrate`, `npm run import:legacy`, enabling timers, a 24-hour observation period.
