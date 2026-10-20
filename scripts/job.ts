@@ -26,7 +26,8 @@ if (!definition) {
 const slug = jobSlug(definition.name);
 let exitCode = 1;
 try {
-  const database = getDatabase(slug);
+  // No single statement may outlive the job, and a blocked lock fails fast instead of stalling the run.
+  const database = getDatabase(slug, { statementTimeoutMs: definition.timeoutMs, lockTimeoutMs: 30_000 });
   await assertNotLegacyDatabase(database);
   exitCode = (await executeJob(definition, database)) === "failed" ? 1 : 0;
 } catch (error) {
