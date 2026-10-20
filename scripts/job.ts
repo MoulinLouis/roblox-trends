@@ -1,9 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { closeDatabase, getDatabase } from "@/db/client";
 import { assertNotLegacyDatabase } from "@/db/legacy-guard";
-import { healthchecksPingBase } from "@/lib/jobs/healthchecks";
+import { healthchecksPingBase, jobSlug, sendPing } from "@/lib/jobs/healthchecks";
 import { createJobs } from "@/lib/jobs/registry";
 import { executeJob } from "@/lib/jobs/runner";
-import { logger } from "@/lib/logger";
+import { errorMessage, logger } from "@/lib/logger";
 
 // Production units set RADAR_REQUIRE_HEALTHCHECKS=1, so a missing ping URL cannot silently disable monitoring.
 if (!healthchecksPingBase()) {
@@ -22,8 +23,18 @@ if (!definition) {
   process.exit(2);
 }
 
-const database = getDatabase(`radar-${definition.name}`);
-await assertNotLegacyDatabase(database);
-const status = await executeJob(definition, database);
+const slug = jobSlug(definition.name);
+let exitCode = 1;
+try {
+  const database = getDatabase(slug);
+  await assertNotLegacyDatabase(database);
+  exitCode = (await executeJob(definition, database)) === "failed" ? 1 : 0;
+} catch (error) {
+  const message = errorMessage(error);
+  logger.error("Job could not start", { job: definition.name, error: message });
+  // No run was recorded, so the failure ping carries a run id of its own.
+  await sendPing(slug, "fail", randomUUID(), message);
+}
+
 await closeDatabase();
-process.exit(status === "failed" ? 1 : 0);
+process.exit(exitCode);
