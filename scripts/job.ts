@@ -37,5 +37,16 @@ try {
   await sendPing(slug, "fail", randomUUID(), message);
 }
 
-await closeDatabase();
+// A query left running by a timed-out job keeps its client checked out, and closing the pool waits for it.
+const closed = await Promise.race([
+  closeDatabase().then(
+    () => true,
+    (error: unknown) => {
+      logger.warn("Could not close the database", { job: definition.name, error: errorMessage(error) });
+      return true;
+    },
+  ),
+  new Promise<false>((resolve) => setTimeout(() => resolve(false), 5_000).unref()),
+]);
+if (!closed) logger.warn("Database connections did not close within 5 s", { job: definition.name });
 process.exit(exitCode);
