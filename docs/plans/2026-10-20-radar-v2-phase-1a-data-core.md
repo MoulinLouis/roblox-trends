@@ -863,17 +863,18 @@ ALTER TABLE vote_observations SET (timescaledb.compress, timescaledb.compress_se
 --> statement-breakpoint
 ALTER TABLE chart_placements SET (timescaledb.compress, timescaledb.compress_segmentby = 'universe_id', timescaledb.compress_orderby = 'sort_id, observed_at DESC');
 --> statement-breakpoint
-SELECT add_compression_policy('game_observations', INTERVAL '7 days');
+-- Every policy starts 5 minutes after migrating, so test databases can pause jobs before any of them runs.
+SELECT add_compression_policy('game_observations', INTERVAL '7 days', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
-SELECT add_compression_policy('census_observations', INTERVAL '7 days');
+SELECT add_compression_policy('census_observations', INTERVAL '7 days', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
-SELECT add_compression_policy('vote_observations', INTERVAL '30 days');
+SELECT add_compression_policy('vote_observations', INTERVAL '30 days', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
-SELECT add_compression_policy('chart_placements', INTERVAL '30 days');
+SELECT add_compression_policy('chart_placements', INTERVAL '30 days', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
-SELECT add_retention_policy('game_observations', INTERVAL '365 days');
+SELECT add_retention_policy('game_observations', INTERVAL '365 days', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
-SELECT add_retention_policy('census_observations', INTERVAL '365 days');
+SELECT add_retention_policy('census_observations', INTERVAL '365 days', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
 CREATE MATERIALIZED VIEW game_hourly
 WITH (timescaledb.continuous, timescaledb.materialized_only = false) AS
@@ -919,19 +920,19 @@ FROM census_observations
 GROUP BY place_id, bucket
 WITH NO DATA;
 --> statement-breakpoint
-SELECT add_continuous_aggregate_policy('game_hourly', start_offset => INTERVAL '3 days', end_offset => INTERVAL '1 hour', schedule_interval => INTERVAL '15 minutes');
+SELECT add_continuous_aggregate_policy('game_hourly', start_offset => INTERVAL '3 days', end_offset => INTERVAL '1 hour', schedule_interval => INTERVAL '15 minutes', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
-SELECT add_continuous_aggregate_policy('game_daily', start_offset => INTERVAL '7 days', end_offset => INTERVAL '1 hour', schedule_interval => INTERVAL '1 hour');
+SELECT add_continuous_aggregate_policy('game_daily', start_offset => INTERVAL '7 days', end_offset => INTERVAL '1 hour', schedule_interval => INTERVAL '1 hour', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
-SELECT add_continuous_aggregate_policy('census_hourly', start_offset => INTERVAL '3 days', end_offset => INTERVAL '1 hour', schedule_interval => INTERVAL '15 minutes');
+SELECT add_continuous_aggregate_policy('census_hourly', start_offset => INTERVAL '3 days', end_offset => INTERVAL '1 hour', schedule_interval => INTERVAL '15 minutes', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
 ALTER MATERIALIZED VIEW game_hourly SET (timescaledb.compress = true);
 --> statement-breakpoint
 ALTER MATERIALIZED VIEW census_hourly SET (timescaledb.compress = true);
 --> statement-breakpoint
-SELECT add_compression_policy('game_hourly', compress_after => INTERVAL '30 days');
+SELECT add_compression_policy('game_hourly', compress_after => INTERVAL '30 days', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
-SELECT add_compression_policy('census_hourly', compress_after => INTERVAL '30 days');
+SELECT add_compression_policy('census_hourly', compress_after => INTERVAL '30 days', initial_start => now() + INTERVAL '5 minutes');
 --> statement-breakpoint
 CREATE VIEW game_daily_all AS
 SELECT universe_id, bucket AS day, ccu_avg, ccu_peak, visits_max AS visits, favorites_last AS favorites, 'observed'::text AS origin
@@ -1003,11 +1004,23 @@ export async function closeDatabase(): Promise<void> {
 
 ```ts
 import { fileURLToPath } from "node:url";
-import { sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import type { Database } from "./client";
+import { assertNotLegacyDatabase } from "./legacy-guard";
 
 const MIGRATIONS_FOLDER = fileURLToPath(new URL("../../drizzle", import.meta.url));
+
+export async function migrateDatabase(db: Database): Promise<void> {
+  await assertNotLegacyDatabase(db);
+  await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
+}
+```
+
+Create `src/db/legacy-guard.ts` (its own module, so app code can import the guard without pulling in the migrations folder reference):
+
+```ts
+import { sql } from "drizzle-orm";
+import type { Database } from "./client";
 
 // v1 and v2 both read DATABASE_URL; nothing v2 may run against the v1 production schema.
 export async function assertNotLegacyDatabase(db: Database): Promise<void> {
@@ -1015,11 +1028,6 @@ export async function assertNotLegacyDatabase(db: Database): Promise<void> {
   if (legacy.rows[0]?.found) {
     throw new Error("Refusing to run: this database still holds v1 radar tables");
   }
-}
-
-export async function migrateDatabase(db: Database): Promise<void> {
-  await assertNotLegacyDatabase(db);
-  await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
 }
 ```
 
@@ -1099,7 +1107,7 @@ async function pauseBackgroundJobs(db: Database): Promise<void> {
   await db.execute(sql`select alter_job(job_id, scheduled => false) from timescaledb_information.jobs where job_id >= 1000`);
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const result = await db.execute<{ running: number }>(
-      sql`select count(*)::int as running from timescaledb_information.job_stats where job_status = 'Running'`,
+      sql`select count(*)::int as running from timescaledb_information.job_stats where job_id >= 1000 and job_status = 'Running'`,
     );
     if (!result.rows[0]?.running) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -1191,6 +1199,10 @@ describe.skipIf(!hasTestDatabase)("v2 schema migrations", () => {
       select distinct config->>'drop_after' as drop_after from timescaledb_information.jobs where proc_name = 'policy_retention'
     `);
     expect(retention.rows).toEqual([{ drop_after: "365 days" }]);
+    const paused = await database.db.execute<{ paused: boolean }>(
+      sql`select bool_and(not scheduled) as paused from timescaledb_information.jobs where job_id >= 1000`,
+    );
+    expect(paused.rows).toEqual([{ paused: true }]);
   });
 
   it("refuses to migrate a database that still holds v1 tables", async () => {
@@ -1507,7 +1519,7 @@ export function createJobs(): JobDefinition[] {
 
 ```ts
 import { closeDatabase, getDatabase } from "@/db/client";
-import { assertNotLegacyDatabase } from "@/db/migrate";
+import { assertNotLegacyDatabase } from "@/db/legacy-guard";
 import { createJobs } from "@/lib/jobs/registry";
 import { executeJob } from "@/lib/jobs/runner";
 import { logger } from "@/lib/logger";
@@ -3487,7 +3499,7 @@ git push && gh run watch --exit-status
 
 ```ts
 import { closeDatabase, getDatabase } from "@/db/client";
-import { assertNotLegacyDatabase } from "@/db/migrate";
+import { assertNotLegacyDatabase } from "@/db/legacy-guard";
 import { createJobs } from "@/lib/jobs/registry";
 import { executeJob } from "@/lib/jobs/runner";
 import type { JobName } from "@/lib/jobs/types";
@@ -3652,11 +3664,9 @@ export async function importLegacyHistory(target: Database, source: Pool, option
   stats.discoveries = await importDiscoveries(target, source, imported);
 
   const retentionStart = await rawRetentionStart(target, options.now ?? new Date());
-  const requested = options.since ?? new Date(0);
-  const start = requested > retentionStart ? requested : retentionStart;
   const range = await source.query<{ first: Date | null; last: Date | null }>(
     "select min(bucket_at) as first, max(bucket_at) as last from snapshots where bucket_at >= $1",
-    [start],
+    [options.since ?? new Date(0)],
   );
   const first = range.rows[0]?.first;
   const last = range.rows[0]?.last;
@@ -3666,12 +3676,16 @@ export async function importLegacyHistory(target: Database, source: Pool, option
     const windowMs = (options.windowHours ?? 24) * HOUR;
     for (let start = first.getTime(); start <= last.getTime(); start += windowMs) {
       const window = { from: new Date(start), to: new Date(start + windowMs) };
-      stats.observations += await importObservations(target, source, window);
+      // Only game_observations has retention (and feeds the aggregates); votes and placements are permanent.
+      if (window.to > retentionStart) {
+        const from = window.from > retentionStart ? window.from : retentionStart;
+        stats.observations += await importObservations(target, source, { from, to: window.to });
+      }
       stats.votes += await importVotes(target, source, window);
       stats.placements += await importPlacements(target, source, window);
       logger.info("Legacy window imported", { from: window.from.toISOString() });
     }
-    await refreshAggregates(target, first, last);
+    if (last >= retentionStart) await refreshAggregates(target, first > retentionStart ? first : retentionStart, last);
   }
   await backfillLastCcu(target);
   return stats;
@@ -3915,6 +3929,9 @@ const LEGACY_ROWS = `
     values ('10765298801', '2026-09-01T00:00:00Z', 800, 1200, 100000, 100);
 `;
 
+// Fixed clock: the import skips raw rows older than the retention window, so the real date would age the fixtures out.
+const FIXTURE_NOW = new Date("2026-10-21T00:00:00Z");
+
 describe.skipIf(!hasTestDatabase)("importLegacyHistory", () => {
   let target: TestDatabase;
   let legacy: TestDatabase;
@@ -3935,7 +3952,7 @@ describe.skipIf(!hasTestDatabase)("importLegacyHistory", () => {
   });
 
   it("imports games, versions, deduplicated observations, placements, votes, discoveries and daily rows", async () => {
-    const stats = await importLegacyHistory(target.db, legacyPool);
+    const stats = await importLegacyHistory(target.db, legacyPool, { now: FIXTURE_NOW });
     expect(stats).toMatchObject({ games: 1, versions: 1, observations: 1, votes: 1, placements: 1, dailyRows: 1 });
 
     const [game] = await target.db.select().from(games);
@@ -3958,16 +3975,16 @@ describe.skipIf(!hasTestDatabase)("importLegacyHistory", () => {
   });
 
   it("is idempotent", async () => {
-    await importLegacyHistory(target.db, legacyPool);
+    await importLegacyHistory(target.db, legacyPool, { now: FIXTURE_NOW });
     expect(await target.db.select().from(gameObservations)).toHaveLength(1);
     expect(await target.db.select().from(games)).toHaveLength(1);
   });
 
-  it("skips raw history older than the retention window", async () => {
+  it("skips raw observations older than the retention window but keeps permanent tables", async () => {
     const late = await createTestDatabase();
     try {
       const stats = await importLegacyHistory(late.db, legacyPool, { now: new Date("2027-12-01T00:00:00Z") });
-      expect(stats).toMatchObject({ games: 1, observations: 0, placements: 0, dailyRows: 1 });
+      expect(stats).toMatchObject({ games: 1, observations: 0, votes: 1, placements: 1, dailyRows: 1 });
       expect(await late.db.select().from(gameObservations)).toHaveLength(0);
     } finally {
       await late.drop();
