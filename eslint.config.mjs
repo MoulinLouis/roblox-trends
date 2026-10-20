@@ -6,7 +6,7 @@ export default defineConfig([
   ...nextVitals,
   ...nextTypeScript,
   {
-    files: ["src/**/*.ts", "scripts/**/*.ts"],
+    files: ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts"],
     rules: {
       "no-restricted-properties": [
         "error",
