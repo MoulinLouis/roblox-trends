@@ -60,6 +60,10 @@ describe.skipIf(!hasTestDatabase)("v2 schema migrations", () => {
       select distinct config->>'drop_after' as drop_after from timescaledb_information.jobs where proc_name = 'policy_retention'
     `);
     expect(retention.rows).toEqual([{ drop_after: "365 days" }]);
+    const paused = await database.db.execute<{ paused: boolean }>(
+      sql`select bool_and(not scheduled) as paused from timescaledb_information.jobs where job_id >= 1000`,
+    );
+    expect(paused.rows).toEqual([{ paused: true }]);
   });
 
   it("refuses to migrate a database that still holds v1 tables", async () => {

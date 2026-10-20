@@ -51,7 +51,7 @@ async function pauseBackgroundJobs(db: Database): Promise<void> {
   await db.execute(sql`select alter_job(job_id, scheduled => false) from timescaledb_information.jobs where job_id >= 1000`);
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const result = await db.execute<{ running: number }>(
-      sql`select count(*)::int as running from timescaledb_information.job_stats where job_status = 'Running'`,
+      sql`select count(*)::int as running from timescaledb_information.job_stats where job_id >= 1000 and job_status = 'Running'`,
     );
     if (!result.rows[0]?.running) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
