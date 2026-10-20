@@ -575,7 +575,7 @@ function sha1(value: string): string {
 }
 
 function normalizeText(value: string): string {
-  return value.normalize("NFKC").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+  return value.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 // Changes on any visible edit, including seasonal markers such as [🎃].
@@ -585,7 +585,7 @@ export function rawFingerprint(name: string, description: string): string {
 
 // Changes only when the concept text changes; used to decide reclassification.
 export function contentFingerprint(name: string, description: string): string {
-  return sha1(`${normalizeTitle(name).toLocaleLowerCase()}\u0000${normalizeText(description)}`);
+  return sha1(`${normalizeTitle(name).toLowerCase()}\u0000${normalizeText(description)}`);
 }
 
 export function urlFingerprint(url: string): string {
@@ -663,6 +663,8 @@ export const games = pgTable(
     lastObservedAt: timestamptz("last_observed_at").notNull(),
     lastCcu: integer("last_ccu").notNull().default(0),
     lastCcuAt: timestamptz("last_ccu_at"),
+    // Raw fingerprint of the current name + description; a version is recorded whenever it changes.
+    metadataFingerprint: text("metadata_fingerprint").notNull(),
     contentFingerprint: text("content_fingerprint").notNull(),
     thumbnailUrl: text("thumbnail_url"),
     iconUrl: text("icon_url"),
@@ -701,8 +703,10 @@ export const gameVersions = pgTable(
     robloxUpdatedAt: timestamptz("roblox_updated_at"),
     observedAt: timestamptz("observed_at").notNull(),
   },
+  // Versions are compared with the game's current state, not with all history, so a title or
+  // thumbnail that reverts (X → [🎃] X → X) records the return. The unique key keeps imports idempotent.
   (table) => [
-    uniqueIndex("game_versions_unique_idx").on(table.universeId, table.kind, table.rawFingerprint),
+    uniqueIndex("game_versions_unique_idx").on(table.universeId, table.kind, table.rawFingerprint, table.observedAt),
     index("game_versions_game_time_idx").on(table.universeId, table.observedAt),
   ],
 );
@@ -1630,6 +1634,25 @@ describe.skipIf(!hasTestDatabase)("game repositories", () => {
     expect(await database.db.select().from(gameVersions).where(eq(gameVersions.universeId, 1))).toHaveLength(2);
   });
 
+  it("records a revert to an earlier title", async () => {
+    const third = new Date("2026-10-20T14:10:00Z");
+    const result = await upsertGameDetails(database.db, [gameDetail(1, { name: "+1 Stone Skipping" })], third);
+    expect(result.metadataChanged).toEqual([1]);
+    const versions = await database.db
+      .select()
+      .from(gameVersions)
+      .where(eq(gameVersions.universeId, 1))
+      .orderBy(gameVersions.observedAt);
+    expect(versions.map((version) => version.name)).toEqual(["+1 Stone Skipping", "[🎃] +1 Stone Skipping", "+1 Stone Skipping"]);
+  });
+
+  it("does not duplicate a version when the same slot is retried", async () => {
+    const third = new Date("2026-10-20T14:10:00Z");
+    const result = await upsertGameDetails(database.db, [gameDetail(1, { name: "+1 Stone Skipping" })], third);
+    expect(result.metadataChanged).toEqual([]);
+    expect(await database.db.select().from(gameVersions).where(eq(gameVersions.universeId, 1))).toHaveLength(3);
+  });
+
   it("deduplicates repeated details within one call", async () => {
     const result = await upsertGameDetails(database.db, [gameDetail(2), gameDetail(2)], first);
     expect(result.inserted).toEqual([2]);
@@ -1687,6 +1710,8 @@ export async function upsertGameDetails(db: Database, details: RobloxGameDetail[
   const inserted: number[] = [];
   const metadataChanged: number[] = [];
   for (const part of chunk(uniqueBy(details, (detail) => detail.id), CHUNK_SIZE)) {
+    // PostgreSQL 18 exposes the pre-update row through RETURNING old.*; it is null for inserted rows.
+    // Comparing with the current fingerprint (not all history) records reverts such as X → [🎃] X → X.
     const rows = await db
       .insert(games)
       .values(part.map((detail) => toGameRow(detail, observedAt)))
@@ -1705,30 +1730,46 @@ export async function upsertGameDetails(db: Database, details: RobloxGameDetail[
           lastObservedAt: sql`greatest(${games.lastObservedAt}, excluded.last_observed_at)`,
           lastCcu: sql`excluded.last_ccu`,
           lastCcuAt: sql`excluded.last_ccu_at`,
+          metadataFingerprint: sql`excluded.metadata_fingerprint`,
           contentFingerprint: sql`excluded.content_fingerprint`,
         },
       })
-      .returning({ universeId: games.universeId, inserted: sql<boolean>`(xmax = 0)` });
-    const insertedIds = new Set(rows.filter((row) => row.inserted).map((row) => row.universeId));
-    inserted.push(...insertedIds);
+      .returning({
+        universeId: games.universeId,
+        previousFingerprint: sql<string | null>`old.metadata_fingerprint`,
+        currentFingerprint: games.metadataFingerprint,
+      });
+    const versioned = new Set<number>();
+    for (const row of rows) {
+      if (row.previousFingerprint === null) {
+        inserted.push(row.universeId);
+        versioned.add(row.universeId);
+      } else if (row.previousFingerprint !== row.currentFingerprint) {
+        metadataChanged.push(row.universeId);
+        versioned.add(row.universeId);
+      }
+    }
 
-    const versions = await db
-      .insert(gameVersions)
-      .values(
-        part.map((detail) => ({
-          universeId: detail.id,
-          kind: "metadata" as const,
-          rawFingerprint: rawFingerprint(detail.name, detail.description),
-          contentFingerprint: contentFingerprint(detail.name, detail.description),
-          name: detail.name,
-          description: detail.description,
-          robloxUpdatedAt: detail.updated,
-          observedAt,
-        })),
-      )
-      .onConflictDoNothing({ target: [gameVersions.universeId, gameVersions.kind, gameVersions.rawFingerprint] })
-      .returning({ universeId: gameVersions.universeId });
-    metadataChanged.push(...versions.map((row) => row.universeId).filter((universeId) => !insertedIds.has(universeId)));
+    const versions = part
+      .filter((detail) => versioned.has(detail.id))
+      .map((detail) => ({
+        universeId: detail.id,
+        kind: "metadata" as const,
+        rawFingerprint: rawFingerprint(detail.name, detail.description),
+        contentFingerprint: contentFingerprint(detail.name, detail.description),
+        name: detail.name,
+        description: detail.description,
+        robloxUpdatedAt: detail.updated,
+        observedAt,
+      }));
+    if (versions.length) {
+      await db
+        .insert(gameVersions)
+        .values(versions)
+        .onConflictDoNothing({
+          target: [gameVersions.universeId, gameVersions.kind, gameVersions.rawFingerprint, gameVersions.observedAt],
+        });
+    }
 
     // Every detail reveals its root place mapping, which saves census resolutions later.
     await db
@@ -1764,6 +1805,7 @@ function toGameRow(detail: RobloxGameDetail, observedAt: Date): typeof games.$in
     lastObservedAt: observedAt,
     lastCcu: Math.round(detail.playing),
     lastCcuAt: observedAt,
+    metadataFingerprint: rawFingerprint(detail.name, detail.description),
     contentFingerprint: contentFingerprint(detail.name, detail.description),
   };
 }
@@ -1855,7 +1897,7 @@ export async function recordDiscoveries(db: Database, records: DiscoveryRecord[]
 **Step 5: Run tests and typecheck**
 
 Run: `npx vitest run src/db/games.db.test.ts && npm run typecheck`
-Expected: 7 passed with a test database (skipped otherwise); typecheck passes.
+Expected: 9 passed with a test database (skipped otherwise); typecheck passes.
 
 **Step 6: Commit and confirm in CI**
 
@@ -3023,7 +3065,7 @@ export function selectSearchTerms(titles: string[], count: number): string[] {
   for (const title of titles) {
     const tokens = new Set(
       normalizeTitle(title)
-        .toLocaleLowerCase()
+        .toLowerCase()
         .split(/\s+/)
         .map((token) => token.replace(/^['+-]+|['+-]+$/g, ""))
         .filter((token) => token.length >= 3 && /\p{L}/u.test(token) && !SEARCH_STOP_WORDS.has(token)),
@@ -3275,7 +3317,9 @@ export async function saveThumbnails(
             thumbnailUrl,
             observedAt: checkedAt,
           })
-          .onConflictDoNothing({ target: [gameVersions.universeId, gameVersions.kind, gameVersions.rawFingerprint] });
+          .onConflictDoNothing({
+            target: [gameVersions.universeId, gameVersions.kind, gameVersions.rawFingerprint, gameVersions.observedAt],
+          });
         changed += 1;
       }
     }
@@ -3436,7 +3480,7 @@ const DISCOVERY_CHARTS: ReadonlySet<string> = new Set(ROBLOX_DISCOVERY_CHARTS);
 
 export function sortIdFromLegacyChartLabel(label: string): RobloxDiscoveryChart | null {
   const slug = label
-    .toLocaleLowerCase()
+    .toLowerCase()
     .replaceAll("&", "and")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
@@ -3554,6 +3598,7 @@ async function importGames(target: Database, source: Pool): Promise<number> {
       robloxUpdatedAt: row.updated_at,
       firstObservedAt: row.first_seen_at,
       lastObservedAt: row.last_seen_at,
+      metadataFingerprint: rawFingerprint(row.name, row.description),
       contentFingerprint: contentFingerprint(row.name, row.description),
       iconUrl: row.thumbnail_url,
     }));
@@ -3594,7 +3639,7 @@ async function importVersions(target: Database, source: Pool, imported: Set<numb
     }));
   for (const part of chunk(rows, 1_000)) {
     await target.insert(gameVersions).values(part).onConflictDoNothing({
-      target: [gameVersions.universeId, gameVersions.kind, gameVersions.rawFingerprint],
+      target: [gameVersions.universeId, gameVersions.kind, gameVersions.rawFingerprint, gameVersions.observedAt],
     });
   }
   return rows.length;
@@ -4104,6 +4149,8 @@ Expected: CI green with every database suite executed.
 - CI health check uses TCP (`pg_isready -h 127.0.0.1`), and the job has a 15-minute timeout, read-only permissions and a concurrency group.
 - Before phase 2 classifies from `contentFingerprint`, finish `normalizeTitle`: let `update`/`upd` swallow a version token (`UPDATE 2!`, `UPD 2.5`), handle trailing markers after `|` or ` - `, repeat the leading rule up to three times, and fall back to the emoji-free title when markers leave it empty.
 - If phase 1b adds deployment to CI, the concurrency group must not cancel runs on the deploy branch.
+- After Task 2 review: fingerprints use `toLowerCase()` (never locale-dependent casing) and tests pin their exact values. Metadata versions compare against `games.metadata_fingerprint` through PostgreSQL 18 `RETURNING old.*`, so reverts are recorded; the `game_versions` unique key includes `observed_at` to keep retries and imports idempotent.
+- Before phase 2: measure how often description fingerprints change on phase-1 `game_versions` data, and store the fingerprint algorithm version with each classification so a normalizer change does not trigger a mass reclassification.
 
 ## Out of scope for this plan (phase 1b)
 
