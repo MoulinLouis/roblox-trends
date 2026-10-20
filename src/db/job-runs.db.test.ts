@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { JobName, JobStatus } from "@/lib/jobs/types";
-import { latestSuccessfulRun } from "./job-runs";
+import { abandonStaleRuns, latestSuccessfulRun } from "./job-runs";
 import { jobRuns } from "./schema";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "./test-database";
 
@@ -61,6 +61,24 @@ describe.skipIf(!hasTestDatabase)("job runs", () => {
     it("returns null when the job has no successful run", async () => {
       await insertRun({ job: "census", status: "degraded", startedAt: "2026-10-20T10:00:00Z" });
       expect(await latestSuccessfulRun(database.db, "census", since)).toBeNull();
+    });
+  });
+
+  describe("abandonStaleRuns", () => {
+    it("fails only the running rows of the job that started before the cutoff", async () => {
+      const stale = await insertRun({ job: "poll", status: "running", startedAt: "2026-10-20T10:00:00Z" });
+      const recent = await insertRun({ job: "poll", status: "running", startedAt: "2026-10-20T12:30:00Z" });
+      const finished = await insertRun({ job: "poll", status: "success", startedAt: "2026-10-20T09:00:00Z" });
+      const otherJob = await insertRun({ job: "votes", status: "running", startedAt: "2026-10-20T10:00:00Z" });
+
+      expect(await abandonStaleRuns(database.db, "poll", new Date("2026-10-20T12:00:00Z"))).toBe(1);
+
+      const runs = new Map((await database.db.select().from(jobRuns)).map((run) => [run.id, run]));
+      expect(runs.get(stale)).toMatchObject({ status: "failed", error: "abandoned" });
+      expect(runs.get(stale)?.finishedAt).toBeInstanceOf(Date);
+      expect(runs.get(recent)).toMatchObject({ status: "running", error: null, finishedAt: null });
+      expect(runs.get(finished)).toMatchObject({ status: "success", error: null, finishedAt: null });
+      expect(runs.get(otherJob)).toMatchObject({ status: "running", error: null, finishedAt: null });
     });
   });
 });

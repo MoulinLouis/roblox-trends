@@ -1,4 +1,4 @@
-import { and, desc, eq, gte } from "drizzle-orm";
+import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
 import type { JobName, JobStatus } from "@/lib/jobs/types";
 import type { Database } from "./client";
 import { jobRuns } from "./schema";
@@ -46,4 +46,14 @@ export async function latestSuccessfulRun(
     .orderBy(desc(jobRuns.startedAt))
     .limit(1);
   return run ?? null;
+}
+
+// A run still "running" well past its timeout belongs to a process that crashed or was killed.
+export async function abandonStaleRuns(db: Database, job: JobName, olderThan: Date): Promise<number> {
+  const abandoned = await db
+    .update(jobRuns)
+    .set({ status: "failed", error: "abandoned", finishedAt: sql`now()` })
+    .where(and(eq(jobRuns.job, job), eq(jobRuns.status, "running"), lt(jobRuns.startedAt, olderThan)))
+    .returning({ id: jobRuns.id });
+  return abandoned.length;
 }
