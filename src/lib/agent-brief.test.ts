@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS } from "./config";
-import { assessDecisionReadiness, calculateVerifiedWindow } from "./agent-brief";
+import { assessDecisionReadiness, calculateVerifiedWindow, maximumDate, minimumDate } from "./agent-brief";
 import type { GameSnapshotPoint } from "./types";
 
 describe("agent decision readiness", () => {
@@ -40,6 +40,20 @@ describe("verified evidence windows", () => {
     const result = calculateVerifiedWindow(points, 24, DEFAULT_SETTINGS);
     expect(result?.growth).toBe(100);
     expect(result?.gain).toBe(100);
+  });
+});
+
+describe("snapshot date bounds", () => {
+  it("handles more timestamps than a function call can take as arguments", () => {
+    const start = Date.parse("2026-08-01T00:00:00Z");
+    const dates = Array.from({ length: 500_000 }, (_, index) => new Date(start + index * 1000));
+    expect(minimumDate(dates)?.getTime()).toBe(start);
+    expect(maximumDate(dates)?.getTime()).toBe(start + 499_999 * 1000);
+  });
+
+  it("returns null without dates", () => {
+    expect(minimumDate([])).toBeNull();
+    expect(maximumDate([])).toBeNull();
   });
 });
 

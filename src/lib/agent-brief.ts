@@ -720,12 +720,13 @@ async function writeAtomically(path: string, content: string): Promise<void> {
   await rename(temporaryPath, path);
 }
 
-function minimumDate(dates: Date[]): Date | null {
-  return dates.length ? new Date(Math.min(...dates.map((date) => date.getTime()))) : null;
+// Reduce instead of spreading: the snapshot history outgrows the engine's argument limit.
+export function minimumDate(dates: Date[]): Date | null {
+  return dates.length ? new Date(dates.reduce((min, date) => Math.min(min, date.getTime()), Infinity)) : null;
 }
 
-function maximumDate(dates: Date[]): Date | null {
-  return dates.length ? new Date(Math.max(...dates.map((date) => date.getTime()))) : null;
+export function maximumDate(dates: Date[]): Date | null {
+  return dates.length ? new Date(dates.reduce((max, date) => Math.max(max, date.getTime()), -Infinity)) : null;
 }
 
 function round(value: number, decimals: number): number {
