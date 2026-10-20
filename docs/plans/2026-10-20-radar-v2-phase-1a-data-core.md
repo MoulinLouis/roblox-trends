@@ -861,7 +861,7 @@ ALTER TABLE census_observations SET (timescaledb.compress, timescaledb.compress_
 --> statement-breakpoint
 ALTER TABLE vote_observations SET (timescaledb.compress, timescaledb.compress_segmentby = 'universe_id', timescaledb.compress_orderby = 'observed_at DESC');
 --> statement-breakpoint
-ALTER TABLE chart_placements SET (timescaledb.compress, timescaledb.compress_segmentby = 'sort_id', timescaledb.compress_orderby = 'observed_at DESC, rank');
+ALTER TABLE chart_placements SET (timescaledb.compress, timescaledb.compress_segmentby = 'universe_id', timescaledb.compress_orderby = 'sort_id, observed_at DESC');
 --> statement-breakpoint
 SELECT add_compression_policy('game_observations', INTERVAL '7 days');
 --> statement-breakpoint
@@ -871,9 +871,9 @@ SELECT add_compression_policy('vote_observations', INTERVAL '30 days');
 --> statement-breakpoint
 SELECT add_compression_policy('chart_placements', INTERVAL '30 days');
 --> statement-breakpoint
-SELECT add_retention_policy('game_observations', INTERVAL '90 days');
+SELECT add_retention_policy('game_observations', INTERVAL '365 days');
 --> statement-breakpoint
-SELECT add_retention_policy('census_observations', INTERVAL '90 days');
+SELECT add_retention_policy('census_observations', INTERVAL '365 days');
 --> statement-breakpoint
 CREATE MATERIALIZED VIEW game_hourly
 WITH (timescaledb.continuous, timescaledb.materialized_only = false) AS
@@ -883,7 +883,7 @@ SELECT
   min(ccu) AS ccu_min,
   avg(ccu)::real AS ccu_avg,
   max(ccu) AS ccu_max,
-  last(visits, observed_at) AS visits_last,
+  max(visits) AS visits_max,
   last(favorites, observed_at) AS favorites_last,
   count(*) AS samples
 FROM game_observations
@@ -895,9 +895,11 @@ WITH (timescaledb.continuous, timescaledb.materialized_only = false) AS
 SELECT
   universe_id,
   time_bucket(INTERVAL '1 day', observed_at) AS bucket,
+  min(ccu) AS ccu_min,
   avg(ccu)::real AS ccu_avg,
   max(ccu) AS ccu_peak,
-  last(visits, observed_at) AS visits_last,
+  min(visits) AS visits_min,
+  max(visits) AS visits_max,
   last(favorites, observed_at) AS favorites_last,
   count(*) AS samples
 FROM game_observations
@@ -909,6 +911,7 @@ WITH (timescaledb.continuous, timescaledb.materialized_only = false) AS
 SELECT
   place_id,
   time_bucket(INTERVAL '1 hour', observed_at) AS bucket,
+  min(ccu) AS ccu_min,
   avg(ccu)::real AS ccu_avg,
   max(ccu) AS ccu_max,
   count(*) AS samples
@@ -922,8 +925,16 @@ SELECT add_continuous_aggregate_policy('game_daily', start_offset => INTERVAL '7
 --> statement-breakpoint
 SELECT add_continuous_aggregate_policy('census_hourly', start_offset => INTERVAL '3 days', end_offset => INTERVAL '1 hour', schedule_interval => INTERVAL '15 minutes');
 --> statement-breakpoint
+ALTER MATERIALIZED VIEW game_hourly SET (timescaledb.compress = true);
+--> statement-breakpoint
+ALTER MATERIALIZED VIEW census_hourly SET (timescaledb.compress = true);
+--> statement-breakpoint
+SELECT add_compression_policy('game_hourly', compress_after => INTERVAL '30 days');
+--> statement-breakpoint
+SELECT add_compression_policy('census_hourly', compress_after => INTERVAL '30 days');
+--> statement-breakpoint
 CREATE VIEW game_daily_all AS
-SELECT universe_id, bucket AS day, ccu_avg, ccu_peak, visits_last AS visits, favorites_last AS favorites, 'observed'::text AS origin
+SELECT universe_id, bucket AS day, ccu_avg, ccu_peak, visits_max AS visits, favorites_last AS favorites, 'observed'::text AS origin
 FROM game_daily
 UNION ALL
 SELECT legacy.universe_id, legacy.day, legacy.ccu_avg, legacy.ccu_peak, legacy.visits, legacy.favorites, 'legacy'::text AS origin
@@ -934,7 +945,7 @@ WHERE NOT EXISTS (
 );
 ```
 
-Retention keeps 90 days of raw 5-minute and 10-minute rows. The refresh windows (3 and 7 days) stay far inside that retention, so dropping old raw chunks never erases aggregated buckets.
+Retention keeps 365 days of raw 5-minute and 10-minute rows; compressed, a year of raw data costs about as much as the aggregates, and it keeps every aggregate recomputable for a year. The continuous aggregates are the only record older than that, so they store minimum, average and maximum CCU, and visits as a maximum (a cumulative counter that only goes up, so one bad final reading cannot stick). Policy refresh windows (3 and 7 days) stay far inside the retention, so dropping old raw chunks never erases aggregated buckets. A manual refresh must never cover a range whose raw rows were already dropped: it would recompute those buckets from nothing. `chart_placements` is segmented by game because per-game chart history is its main read pattern.
 
 **Step 5: Create `src/db/client.ts`**
 
@@ -942,6 +953,7 @@ Retention keeps 90 days of raw 5-minute and 10-minute rows. The refresh windows 
 import * as nextEnvNamespace from "@next/env";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
+import { errorMessage, logger } from "@/lib/logger";
 import { normalizePostgresConnectionUrl } from "./connection-url";
 import * as schema from "./schema";
 
@@ -953,18 +965,31 @@ const environmentNamespace = nextEnvNamespace as unknown as {
 
 export type Database = NodePgDatabase<typeof schema>;
 
-export function createDatabase(connectionString: string, maxConnections = 5): { db: Database; pool: Pool } {
-  const pool = new Pool({ connectionString: normalizePostgresConnectionUrl(connectionString), max: maxConnections });
+export interface DatabaseOptions {
+  maxConnections?: number;
+  // Shown in pg_stat_activity, to tell the dashboard, each job and analysis sessions apart.
+  applicationName?: string;
+}
+
+export function createDatabase(connectionString: string, options: DatabaseOptions = {}): { db: Database; pool: Pool } {
+  const pool = new Pool({
+    connectionString: normalizePostgresConnectionUrl(connectionString),
+    max: options.maxConnections ?? 5,
+    connectionTimeoutMillis: 10_000,
+    application_name: options.applicationName ?? "radar",
+  });
+  // Idle clients report errors (for example a server restart) on the pool; unhandled, they crash the process.
+  pool.on("error", (error) => logger.warn("Idle PostgreSQL client error", { error: errorMessage(error) }));
   return { db: drizzle(pool, { schema }), pool };
 }
 
 let shared: { db: Database; pool: Pool } | null = null;
 
-export function getDatabase(): Database {
+export function getDatabase(applicationName = "radar"): Database {
   if (shared) return shared.db;
   const connectionString = process.env.DATABASE_URL?.trim();
   if (!connectionString) throw new Error("DATABASE_URL is required");
-  shared = createDatabase(connectionString);
+  shared = createDatabase(connectionString, { applicationName });
   return shared.db;
 }
 
@@ -977,16 +1002,24 @@ export async function closeDatabase(): Promise<void> {
 **Step 6: Create `src/db/migrate.ts`**
 
 ```ts
+import { fileURLToPath } from "node:url";
 import { sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import type { Database } from "./client";
 
-export async function migrateDatabase(db: Database): Promise<void> {
+const MIGRATIONS_FOLDER = fileURLToPath(new URL("../../drizzle", import.meta.url));
+
+// v1 and v2 both read DATABASE_URL; nothing v2 may run against the v1 production schema.
+export async function assertNotLegacyDatabase(db: Database): Promise<void> {
   const legacy = await db.execute<{ found: string | null }>(sql`select to_regclass('public.snapshots')::text as found`);
   if (legacy.rows[0]?.found) {
-    throw new Error("Refusing to migrate: this database still holds v1 radar tables");
+    throw new Error("Refusing to run: this database still holds v1 radar tables");
   }
-  await migrate(db, { migrationsFolder: "drizzle" });
+}
+
+export async function migrateDatabase(db: Database): Promise<void> {
+  await assertNotLegacyDatabase(db);
+  await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
 }
 ```
 
@@ -1014,6 +1047,7 @@ Add to `package.json` scripts: `"db:migrate": "tsx scripts/migrate.ts",`
 
 ```ts
 import { randomUUID } from "node:crypto";
+import { sql } from "drizzle-orm";
 import { Client } from "pg";
 import { createDatabase, type Database } from "./client";
 import { migrateDatabase } from "./migrate";
@@ -1036,18 +1070,41 @@ export interface TestDatabase {
 
 export async function createTestDatabase(options: { migrate?: boolean } = {}): Promise<TestDatabase> {
   const name = `radar_test_${randomUUID().replaceAll("-", "")}`;
-  await runAdminQuery(`CREATE DATABASE "${name}"`);
+  // template0 has no TimescaleDB, so the migration's CREATE EXTENSION path is exercised as in production.
+  await runAdminQuery(`CREATE DATABASE "${name}" TEMPLATE template0`);
   const url = withDatabaseName(adminUrl, name);
-  const { db, pool } = createDatabase(url, 3);
-  if (options.migrate !== false) await migrateDatabase(db);
-  return {
-    db,
-    url,
-    async drop() {
+  const { db, pool } = createDatabase(url, { maxConnections: 3, applicationName: "radar-test" });
+  const drop = async () => {
+    try {
       await pool.end();
+    } finally {
       await runAdminQuery(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
-    },
+    }
   };
+  try {
+    if (options.migrate !== false) {
+      await migrateDatabase(db);
+      await pauseBackgroundJobs(db);
+    }
+  } catch (error) {
+    await drop();
+    throw error;
+  }
+  return { db, url, drop };
+}
+
+// Policies would otherwise materialize, compress or drop fixture rows while tests run.
+// Tests that need materialized aggregates call refresh_continuous_aggregate explicitly.
+async function pauseBackgroundJobs(db: Database): Promise<void> {
+  await db.execute(sql`select alter_job(job_id, scheduled => false) from timescaledb_information.jobs where job_id >= 1000`);
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const result = await db.execute<{ running: number }>(
+      sql`select count(*)::int as running from timescaledb_information.job_stats where job_status = 'Running'`,
+    );
+    if (!result.rows[0]?.running) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("TimescaleDB background jobs did not stop");
 }
 
 async function runAdminQuery(statement: string): Promise<void> {
@@ -1114,10 +1171,26 @@ describe.skipIf(!hasTestDatabase)("v2 schema migrations", () => {
         (1, '2026-10-20T14:05:00Z', 300, 1100, 11),
         (1, '2026-10-20T14:10:00Z', 200, 1200, 12)
     `);
-    const result = await database.db.execute<{ ccu_min: number; ccu_max: number; samples: string; visits_last: string }>(
-      sql`select ccu_min, ccu_max, samples, visits_last from game_hourly where universe_id = 1`,
+    const result = await database.db.execute<{ ccu_min: number; ccu_max: number; samples: string; visits_max: string }>(
+      sql`select ccu_min, ccu_max, samples, visits_max from game_hourly where universe_id = 1`,
     );
-    expect(result.rows).toEqual([{ ccu_min: 100, ccu_max: 300, samples: "3", visits_last: "1200" }]);
+    expect(result.rows).toEqual([{ ccu_min: 100, ccu_max: 300, samples: "3", visits_max: "1200" }]);
+  });
+
+  it("schedules compression, retention and refresh policies", async () => {
+    const result = await database.db.execute<{ proc_name: string; jobs: number }>(sql`
+      select proc_name, count(*)::int as jobs from timescaledb_information.jobs
+      where job_id >= 1000 group by proc_name order by proc_name
+    `);
+    expect(result.rows).toEqual([
+      { proc_name: "policy_compression", jobs: 6 },
+      { proc_name: "policy_refresh_continuous_aggregate", jobs: 3 },
+      { proc_name: "policy_retention", jobs: 2 },
+    ]);
+    const retention = await database.db.execute<{ drop_after: string }>(sql`
+      select distinct config->>'drop_after' as drop_after from timescaledb_information.jobs where proc_name = 'policy_retention'
+    `);
+    expect(retention.rows).toEqual([{ drop_after: "365 days" }]);
   });
 
   it("refuses to migrate a database that still holds v1 tables", async () => {
@@ -1434,6 +1507,7 @@ export function createJobs(): JobDefinition[] {
 
 ```ts
 import { closeDatabase, getDatabase } from "@/db/client";
+import { assertNotLegacyDatabase } from "@/db/migrate";
 import { createJobs } from "@/lib/jobs/registry";
 import { executeJob } from "@/lib/jobs/runner";
 import { logger } from "@/lib/logger";
@@ -1446,7 +1520,9 @@ if (!definition) {
   process.exit(2);
 }
 
-const status = await executeJob(definition, getDatabase());
+const database = getDatabase(`radar-${definition.name}`);
+await assertNotLegacyDatabase(database);
+const status = await executeJob(definition, database);
 await closeDatabase();
 process.exit(status === "failed" ? 1 : 0);
 ```
@@ -3411,6 +3487,7 @@ git push && gh run watch --exit-status
 
 ```ts
 import { closeDatabase, getDatabase } from "@/db/client";
+import { assertNotLegacyDatabase } from "@/db/migrate";
 import { createJobs } from "@/lib/jobs/registry";
 import { executeJob } from "@/lib/jobs/runner";
 import type { JobName } from "@/lib/jobs/types";
@@ -3420,7 +3497,8 @@ import { logger } from "@/lib/logger";
 const ORDER: JobName[] = ["census", "poll", "votes", "charts", "explore", "thumbnails"];
 
 const jobs = new Map(createJobs().map((job) => [job.name, job]));
-const database = getDatabase();
+const database = getDatabase("radar-collect");
+await assertNotLegacyDatabase(database);
 const outcomes: Record<string, string> = {};
 for (const name of ORDER) {
   const job = jobs.get(name);
@@ -3550,6 +3628,7 @@ const HOUR = 60 * 60 * 1000;
 export interface LegacyImportOptions {
   since?: Date;
   windowHours?: number;
+  now?: Date;
 }
 
 export interface LegacyImportStats {
@@ -3572,9 +3651,12 @@ export async function importLegacyHistory(target: Database, source: Pool, option
   stats.dailyRows = await importDaily(target, source, imported);
   stats.discoveries = await importDiscoveries(target, source, imported);
 
+  const retentionStart = await rawRetentionStart(target, options.now ?? new Date());
+  const requested = options.since ?? new Date(0);
+  const start = requested > retentionStart ? requested : retentionStart;
   const range = await source.query<{ first: Date | null; last: Date | null }>(
     "select min(bucket_at) as first, max(bucket_at) as last from snapshots where bucket_at >= $1",
-    [options.since ?? new Date(0)],
+    [start],
   );
   const first = range.rows[0]?.first;
   const last = range.rows[0]?.last;
@@ -3593,6 +3675,21 @@ export async function importLegacyHistory(target: Database, source: Pool, option
   }
   await backfillLastCcu(target);
   return stats;
+}
+
+// Raw rows older than the retention window are dropped by TimescaleDB. Importing them again would let a
+// later refresh recompute those aggregate buckets from legacy rows only, overwriting collected history.
+async function rawRetentionStart(target: Database, now: Date): Promise<Date> {
+  const policy = await target.execute<{ drop_after: string | null }>(sql`
+    select config->>'drop_after' as drop_after from timescaledb_information.jobs
+    where proc_name = 'policy_retention' and hypertable_name = 'game_observations'
+  `);
+  const dropAfter = policy.rows[0]?.drop_after;
+  if (!dropAfter) return new Date(0);
+  const result = await target.execute<{ start: string }>(
+    sql`select (${now.toISOString()}::timestamptz - ${dropAfter}::interval + interval '1 day') as start`,
+  );
+  return new Date(result.rows[0].start);
 }
 
 async function legacyUniverseIds(source: Pool): Promise<number[]> {
@@ -3864,6 +3961,17 @@ describe.skipIf(!hasTestDatabase)("importLegacyHistory", () => {
     await importLegacyHistory(target.db, legacyPool);
     expect(await target.db.select().from(gameObservations)).toHaveLength(1);
     expect(await target.db.select().from(games)).toHaveLength(1);
+  });
+
+  it("skips raw history older than the retention window", async () => {
+    const late = await createTestDatabase();
+    try {
+      const stats = await importLegacyHistory(late.db, legacyPool, { now: new Date("2027-12-01T00:00:00Z") });
+      expect(stats).toMatchObject({ games: 1, observations: 0, placements: 0, dailyRows: 1 });
+      expect(await late.db.select().from(gameObservations)).toHaveLength(0);
+    } finally {
+      await late.drop();
+    }
   });
 });
 ```
@@ -4173,6 +4281,10 @@ Expected: CI green with every database suite executed.
 - Before phase 2 classifies from `contentFingerprint`, finish `normalizeTitle`: let `update`/`upd` swallow a version token (`UPDATE 2!`, `UPD 2.5`), handle trailing markers after `|` or ` - `, repeat the leading rule up to three times, and fall back to the emoji-free title when markers leave it empty.
 - If phase 1b adds deployment to CI, the concurrency group must not cancel runs on the deploy branch.
 - After Task 2 review: fingerprints use `toLowerCase()` (never locale-dependent casing) and tests pin their exact values. Metadata versions compare against `games.metadata_fingerprint` through PostgreSQL 18 `RETURNING old.*`, so reverts are recorded; the `game_versions` unique key includes `observed_at` to keep retries and imports idempotent.
+- After Task 3 review: raw retention is 365 days; aggregates keep min/avg/max CCU and visits as a maximum; `game_hourly` and `census_hourly` compress after 30 days; `chart_placements` is segmented by game. Test databases are created from `template0` (so `CREATE EXTENSION` runs as in production) and pause TimescaleDB jobs after migrating. The pool logs idle-client errors, times out connections after 10 s and sets `application_name`. Jobs and `collect` refuse to run against a database holding v1 tables. The legacy import never re-imports raw rows older than the retention window. `@next/env` is a direct dependency, pinned to the installed `next` version.
+- Before phase 3: raw SQL over aggregates returns `int8`, `numeric` and `timestamptz` as strings; convert with `Number()`/`new Date()` or declare the views with `pgView(...).existing()`. Exclude the partial current UTC day from daily analysis; `game_daily` computes it in real time.
+- Before phase 4: cache the dashboard database instance on `globalThis` so Next dev hot reloads do not open new pools.
+- Task 17: update design section 2 (separate `vote_observations`, 365-day raw retention, aggregate columns).
 - Before phase 2: measure how often description fingerprints change on phase-1 `game_versions` data, and store the fingerprint algorithm version with each classification so a normalizer change does not trigger a mass reclassification.
 
 ## Out of scope for this plan (phase 1b)
