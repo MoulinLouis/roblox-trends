@@ -1,5 +1,6 @@
 import { closeDatabaseWithin, getDatabase } from "@/db/client";
 import { assertNotLegacyDatabase, assertSupportedPostgres } from "@/db/legacy-guard";
+import { DATABASE_SESSION_CONFIG } from "@/lib/config";
 import { orderJobs } from "@/lib/jobs/order";
 import { createJobs } from "@/lib/jobs/registry";
 import { executeJob } from "@/lib/jobs/runner";
@@ -17,7 +18,7 @@ try {
   // One pool serves every job in this process, so its statement timeout is the longest job timeout; the lock
   // timeout matches the job script.
   const statementTimeoutMs = Math.max(...definitions.map((definition) => definition.timeoutMs));
-  const database = getDatabase("radar-collect", { statementTimeoutMs, lockTimeoutMs: 30_000 });
+  const database = getDatabase("radar-collect", { statementTimeoutMs, lockTimeoutMs: DATABASE_SESSION_CONFIG.lockTimeoutMs });
   await assertNotLegacyDatabase(database);
   await assertSupportedPostgres(database);
   // executeJob records and reports its own failures, so one failed collector does not stop the others.
@@ -29,5 +30,5 @@ try {
   logger.error("Collection pass failed", { error: errorMessage(error) });
 }
 
-await closeDatabaseWithin(5_000, { command: "collect" });
+await closeDatabaseWithin(DATABASE_SESSION_CONFIG.closeTimeoutMs, { command: "collect" });
 process.exit(exitCode);

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { closeDatabaseWithin, getDatabase } from "@/db/client";
 import { assertNotLegacyDatabase, assertSupportedPostgres } from "@/db/legacy-guard";
+import { DATABASE_SESSION_CONFIG } from "@/lib/config";
 import { healthchecksPingBase, jobSlug, sendPing } from "@/lib/jobs/healthchecks";
 import { createJobs } from "@/lib/jobs/registry";
 import { executeJob } from "@/lib/jobs/runner";
@@ -28,7 +29,10 @@ let exitCode = 1;
 try {
   // Each statement is bounded by statement_timeout (server side it can outlive this process until PostgreSQL
   // notices the client is gone), and a blocked lock fails fast instead of stalling the run.
-  const database = getDatabase(slug, { statementTimeoutMs: definition.timeoutMs, lockTimeoutMs: 30_000 });
+  const database = getDatabase(slug, {
+    statementTimeoutMs: definition.timeoutMs,
+    lockTimeoutMs: DATABASE_SESSION_CONFIG.lockTimeoutMs,
+  });
   await assertNotLegacyDatabase(database);
   await assertSupportedPostgres(database);
   exitCode = (await executeJob(definition, database)) === "failed" ? 1 : 0;
@@ -39,5 +43,5 @@ try {
   await sendPing(slug, "fail", randomUUID(), message);
 }
 
-await closeDatabaseWithin(5_000, { job: definition.name });
+await closeDatabaseWithin(DATABASE_SESSION_CONFIG.closeTimeoutMs, { job: definition.name });
 process.exit(exitCode);

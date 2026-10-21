@@ -1,13 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Database } from "@/db/client";
 import { abandonStaleRuns, finishJobRun, startJobRun } from "@/db/job-runs";
+import { DATABASE_SESSION_CONFIG } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
 import { floorToSlot } from "@/lib/time-slots";
 import { jobSlug, qualitySlug, sendPing } from "./healthchecks";
 import type { JobName, JobStatus } from "./types";
-
-// A run still marked running this long after its timeout belongs to a process that crashed or was killed.
-const staleRunGraceMs = 60_000;
 
 export interface JobContext {
   db: Database;
@@ -43,7 +41,7 @@ export async function executeJob(
   try {
     const slot = floorToSlot(now, definition.intervalMinutes);
     // started_at holds wall-clock time, so the cutoff uses it too rather than the injectable `now`.
-    const staleBefore = new Date(startedMs - definition.timeoutMs - staleRunGraceMs);
+    const staleBefore = new Date(startedMs - definition.timeoutMs - DATABASE_SESSION_CONFIG.abandonedRunGraceMs);
     const abandoned = await abandonStaleRuns(db, definition.name, staleBefore);
     if (abandoned > 0) logger.warn("Abandoned stale job runs", { job: definition.name, abandoned });
     await startJobRun(db, { id: runId, job: definition.name, slot, startedAt: new Date(startedMs) });

@@ -1,7 +1,7 @@
 import { closeDatabaseWithin, getDatabase } from "@/db/client";
 import { assertNotLegacyDatabase, assertSupportedPostgres } from "@/db/legacy-guard";
 import { censusCoverage, dataTotals, jobSummaries } from "@/db/status";
-import { STATUS_CONFIG } from "@/lib/config";
+import { DATABASE_SESSION_CONFIG, STATUS_CONFIG } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
 import { formatStatusReport } from "@/lib/status-report";
 
@@ -9,8 +9,10 @@ import { formatStatusReport } from "@/lib/status-report";
 // totals.
 let exitCode = 1;
 try {
-  // Read-only and interactive: it gives up quickly rather than waiting behind a migration or a lock.
-  const database = getDatabase("radar-status", { statementTimeoutMs: 30_000, lockTimeoutMs: 5_000 });
+  const database = getDatabase("radar-status", {
+    statementTimeoutMs: DATABASE_SESSION_CONFIG.statusStatementTimeoutMs,
+    lockTimeoutMs: DATABASE_SESSION_CONFIG.statusLockTimeoutMs,
+  });
   await assertNotLegacyDatabase(database);
   await assertSupportedPostgres(database);
   const now = new Date();
@@ -30,5 +32,5 @@ try {
   logger.error("Status could not be read", { error: errorMessage(error) });
 }
 
-await closeDatabaseWithin(5_000, { command: "status" });
+await closeDatabaseWithin(DATABASE_SESSION_CONFIG.closeTimeoutMs, { command: "status" });
 process.exit(exitCode);

@@ -126,6 +126,24 @@ export const JOB_CONFIG = {
   },
 } as const;
 
+// The database sessions of the scripts and how they end. A job's statement timeout is its own timeoutMs.
+export const DATABASE_SESSION_CONFIG = {
+  // Jobs, `collect` and the legacy import: a blocked lock fails its statement instead of stalling the run.
+  lockTimeoutMs: 30_000,
+  // Migrations take exclusive locks: one blocked behind a running job gives up instead of queueing every later query
+  // on the table behind it.
+  migrationLockTimeoutMs: 10_000,
+  // `status` is read-only and interactive: it gives up quickly rather than waiting behind a migration or a lock.
+  statusStatementTimeoutMs: 30_000,
+  statusLockTimeoutMs: 5_000,
+  // Every statement of the legacy import commits on its own and stays short: one window, one page or one refresh.
+  legacyImportStatementTimeoutMs: 10 * 60_000,
+  // Scripts exit after this even when a query left running by a timed-out job keeps its client checked out.
+  closeTimeoutMs: 5_000,
+  // A run still marked running this long after its timeout belongs to a process that crashed or was killed.
+  abandonedRunGraceMs: 60_000,
+} as const;
+
 export const ACTIVE_SET_CONFIG = {
   minimumCcu: 50,
   lookbackHours: 24,

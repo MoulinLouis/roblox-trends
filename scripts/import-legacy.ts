@@ -2,6 +2,7 @@ import { Pool } from "pg";
 import { closeDatabaseWithin, getDatabase } from "@/db/client";
 import { normalizePostgresConnectionUrl } from "@/db/connection-url";
 import { assertNotLegacyDatabase, assertSupportedPostgres } from "@/db/legacy-guard";
+import { DATABASE_SESSION_CONFIG } from "@/lib/config";
 import { parseImportArguments, type ImportArguments } from "@/lib/legacy/arguments";
 import { importLegacyHistory, LEGACY_IMPORT_SESSION_SETTINGS } from "@/lib/legacy/import";
 import { errorMessage, logger } from "@/lib/logger";
@@ -32,10 +33,9 @@ source.on("error", (error) => logger.warn("Idle legacy PostgreSQL client error",
 
 let exitCode = 1;
 try {
-  // Every statement commits on its own and stays short (one window, one page or one aggregate refresh at a time).
   const target = getDatabase("radar-import-legacy", {
-    statementTimeoutMs: 10 * 60_000,
-    lockTimeoutMs: 30_000,
+    statementTimeoutMs: DATABASE_SESSION_CONFIG.legacyImportStatementTimeoutMs,
+    lockTimeoutMs: DATABASE_SESSION_CONFIG.lockTimeoutMs,
     settings: LEGACY_IMPORT_SESSION_SETTINGS,
   });
   await assertNotLegacyDatabase(target);
@@ -48,5 +48,5 @@ try {
 }
 
 await source.end().catch((error: unknown) => logger.warn("Could not close the legacy database", { error: errorMessage(error) }));
-await closeDatabaseWithin(5_000, { command: "import:legacy" });
+await closeDatabaseWithin(DATABASE_SESSION_CONFIG.closeTimeoutMs, { command: "import:legacy" });
 process.exit(exitCode);

@@ -13,7 +13,7 @@ One Next.js 16 application and one PostgreSQL 18 database with TimescaleDB 2.30,
 - A run still marked `running` one minute after its timeout is marked `failed` (`abandoned`) by the job's next run.
 - Observations are keyed by their slot, so a retry within the same slot overwrites instead of duplicating.
 
-Job intervals, timeouts, thresholds and limits live in `src/lib/config.ts`: `JOB_CONFIG`, `ACTIVE_SET_CONFIG`, `STATUS_CONFIG`, `EXTERNAL_REQUEST_CONFIG` and `ROBLOX_DISCOVERY_CHARTS`, plus `ROBLOX_REGION` read from the environment. The intervals must match the systemd timers. Database session timeouts (`statement_timeout`, `lock_timeout`) are set per script, in `scripts/job.ts`, `collect.ts`, `status.ts`, `import-legacy.ts` and `migrate.ts`.
+Job intervals, timeouts, thresholds and limits live in `src/lib/config.ts`: `JOB_CONFIG`, `ACTIVE_SET_CONFIG`, `STATUS_CONFIG`, `EXTERNAL_REQUEST_CONFIG`, `DATABASE_SESSION_CONFIG` and `ROBLOX_DISCOVERY_CHARTS`, plus `ROBLOX_REGION` read from the environment. The intervals must match the systemd timers. `DATABASE_SESSION_CONFIG` holds the database session limits of the scripts: `lock_timeout`, the `statement_timeout` of `status` and of the legacy import (a job's is its own timeout), how long a script waits for its connections to close before it exits, and the grace after which a run still marked `running` is abandoned.
 
 | Job | Interval | Timeout | Work |
 | --- | --- | --- | --- |
