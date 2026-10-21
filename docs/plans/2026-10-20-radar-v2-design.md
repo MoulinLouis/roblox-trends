@@ -1,6 +1,6 @@
 # Roblox Trend Radar v2 design
 
-Validated with the repository owner on 2026-10-20.
+Validated with the repository owner on 2026-10-20. Updated on 2026-10-21 to match the phase 1a implementation (sections 2 and 3).
 
 ## Why a v2
 
@@ -76,8 +76,8 @@ Reference tables:
 
 - `games`: universe metadata, with the Roblox creation timestamp kept separate from the radar's first observation.
 - `places`: cached place-to-universe mapping, resolved once. A place without a universe is retried after 7 days.
-- `game_versions`: history of titles, descriptions and thumbnails with observation times. Thumbnail changes are A/B tests and are worth keeping. A thumbnail version is keyed on the media asset id (`games.thumbnail_key`), so a new CDN URL for the same image is not a change.
-- `discovery_sources`: how and when each game was found (chart, search query, recommendation seed, Rolimon's), one row per game, source and detail with its first and last sighting. `explore` also records sightings of games already tracked (`recordKnown`), so the table holds relations too: a row is the game's discovery path when its `first_seen_at` equals `games.first_observed_at`.
+- `game_versions`: history of titles, descriptions and thumbnails with observation times. Thumbnail changes are A/B tests and are worth keeping. A thumbnail version is keyed on `games.thumbnail_key`: `media:<asset id>`, or `url:<sha1>` of the image URL when Roblox gives no asset id, so a new CDN URL for the same media asset is not a change.
+- `discovery_sources`: how and when each game was found (chart, search query, recommendation seed, Rolimon's), one row per game, source and detail with its first and last sighting. `explore` also records sightings of games already tracked, so the table holds relations too: a row is the game's discovery path when its `first_seen_at` equals `games.first_observed_at`.
 - `game_features`: the AI classification (section 4).
 - `clusters` and `cluster_members`: groups of similar games.
 - `watchlist`: games and clusters the owner follows.
@@ -111,7 +111,7 @@ Reliability rules:
 
 - **Idempotency.** Every observation is keyed by its slot timestamp, so a retry within the same slot overwrites instead of duplicating.
 - **No overlap.** `poll` starts no batch after a 180-second deadline (its timeout is 270 seconds), after a rate limit that outlasted the retries, or after 3 failed batches in a row. Games are polled busiest first, so the lowest-CCU games are the ones left for the next run instead of running into the next slot.
-- **Quality gates.** A run is marked `degraded`, and excluded from analysis, when fewer than 95% of the requested games come back, or when the Rolimon's list size changes by more than 30% from one run to the next.
+- **Quality gates.** A run is marked `degraded`, and excluded from analysis, when fewer than 95% of the requested games come back, or when the Rolimon's list has fewer than 1,000 places, more than 5% malformed entries, or a size more than 30% away from the latest list of the last 6 hours that passed this check.
 - **Rate limits.** The existing HTTP client is kept: per-host spacing, retries, `Retry-After` handling, jittered exponential backoff. If rate limiting persists on the dedicated IP address, `poll` moves to 10 minutes.
 
 To measure in the first week:
