@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { upsertGameDetails } from "@/db/games";
 import { games, gameVersions, jobRuns } from "@/db/schema";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/test-database";
+import { selectGamesNeedingThumbnails } from "@/db/thumbnails";
 import type { GameThumbnail, GameThumbnailAnswer } from "@/lib/api/roblox";
 import { JOB_CONFIG } from "@/lib/config";
 import { gameDetail } from "@/test/fixtures";
@@ -81,6 +82,7 @@ describe.skipIf(!hasTestDatabase)("thumbnails job", () => {
       withThumbnail: 1,
       withoutThumbnail: 1,
       pending: 1,
+      errored: 0,
       icons: 4,
       changed: 1,
       failedBatches: 0,
@@ -184,6 +186,15 @@ describe.skipIf(!hasTestDatabase)("thumbnails job batches", () => {
     return run.stats;
   }
 
+  function due() {
+    const config = JOB_CONFIG.thumbnails;
+    return selectGamesNeedingThumbnails(database.db, now, {
+      refreshHours: config.refreshHours,
+      refreshMinimumCcu: config.refreshMinimumCcu,
+      limit: config.maximumGamesPerRun,
+    });
+  }
+
   it("saves every batch", async () => {
     const universeIds = await insertGames(3 * batchSize);
     expect(await executeJob(job(allAnswered(universeIds)), database.db, now)).toBe("success");
@@ -240,5 +251,12 @@ describe.skipIf(!hasTestDatabase)("thumbnails job batches", () => {
     expect(await executeJob(definition, database.db, now)).toBe("degraded");
     expect(await keyedGames()).toEqual(universeIds.slice(0, batchSize));
     expect(await runStats()).toMatchObject({ attempted: batchSize, answered: batchSize, skipped: batchSize, stoppedBy: "deadline" });
+  });
+
+  it("counts errors as answers and keeps the erroring games due", async () => {
+    await insertGames(2);
+    expect(await executeJob(job({ "1": "error", "2": "error" }), database.db, now)).toBe("success");
+    expect(await runStats()).toMatchObject({ requested: 2, answered: 2, errored: 2, withThumbnail: 0 });
+    expect(await due()).toEqual([1, 2]);
   });
 });

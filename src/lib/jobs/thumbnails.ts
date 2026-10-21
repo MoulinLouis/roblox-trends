@@ -62,10 +62,11 @@ export function createThumbnailsJob(dependencies: ThumbnailsDependencies): JobDe
         );
       }
       const pending = answers.filter((answer) => answer === "pending").length;
+      const errored = answers.filter((answer) => answer === "error").length;
       const withoutThumbnail = answers.filter((answer) => answer === null).length;
       return {
-        // Coverage counts every answer, including "no custom thumbnail" and "pending": only games Roblox did not answer
-        // for (failed, skipped or malformed) are missing.
+        // Coverage counts every answer, including "no custom thumbnail", "pending" and "error": only games Roblox did
+        // not answer for (failed, skipped or malformed) are missing.
         status: evaluateCollectionQuality({
           requested: universeIds.length,
           returned: answers.length,
@@ -75,9 +76,10 @@ export function createThumbnailsJob(dependencies: ThumbnailsDependencies): JobDe
           requested: universeIds.length,
           attempted: outcome.attempted,
           answered: answers.length,
-          withThumbnail: answers.length - pending - withoutThumbnail,
+          withThumbnail: answers.length - pending - errored - withoutThumbnail,
           withoutThumbnail,
           pending,
+          errored,
           icons: outcome.results.filter((result) => result.iconUrl !== undefined).length,
           changed,
           failedBatches: outcome.failedBatches,

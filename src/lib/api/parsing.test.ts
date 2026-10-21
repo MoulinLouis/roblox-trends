@@ -210,19 +210,29 @@ describe("Roblox API response parsing", () => {
     expect([...thumbnails]).toEqual([["101", "pending"]]);
   });
 
-  it("leaves thumbnails in an error or unknown state unknown", () => {
+  it("reports thumbnails in the Error state as an error", () => {
     const thumbnails = parseGameThumbnailsResponse({
       data: [
         { universeId: 101, error: null, thumbnails: [{ targetId: 9, state: "Error", imageUrl: null }] },
-        { universeId: 102, error: null, thumbnails: [{ targetId: 10, state: "Archived", imageUrl: null }] },
+        { universeId: 102, error: null, thumbnails: [
+          { targetId: 10, state: "Blocked", imageUrl: "https://t2.rbxcdn.com/UnapprovedImage" },
+          { targetId: 11, state: "Error", imageUrl: null },
+        ] },
       ],
     });
-    expect(thumbnails.size).toBe(0);
+    expect([...thumbnails]).toEqual([["101", "error"], ["102", "error"]]);
   });
 
-  it("leaves universes reported with an error unknown", () => {
+  it("reports universes answered with an error as an error", () => {
     const thumbnails = parseGameThumbnailsResponse({
       data: [{ universeId: 101, error: { code: 1, message: "Unavailable" }, thumbnails: [{ targetId: 9, state: "Completed", imageUrl: "https://tr.rbxcdn.com/a/768/432/Image/Png" }] }],
+    });
+    expect([...thumbnails]).toEqual([["101", "error"]]);
+  });
+
+  it("leaves thumbnails in an unknown state unknown", () => {
+    const thumbnails = parseGameThumbnailsResponse({
+      data: [{ universeId: 101, error: null, thumbnails: [{ targetId: 10, state: "Archived", imageUrl: null }] }],
     });
     expect(thumbnails.size).toBe(0);
   });

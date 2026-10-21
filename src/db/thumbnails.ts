@@ -18,7 +18,7 @@ export function thumbnailKey(thumbnail: GameThumbnail): string {
 }
 
 // Games never checked come first, busiest first, then busy games whose last check is older than the refresh interval.
-// A game left pending or unanswered keeps its check time, so it stays due and the next run retries it.
+// A game left pending, erroring or unanswered keeps its check time, so it stays due and the next run retries it.
 export async function selectGamesNeedingThumbnails(
   db: Database,
   now: Date,
@@ -39,7 +39,7 @@ export async function selectGamesNeedingThumbnails(
 
 // Saves one batch in one transaction, so a game's update and its version commit together: a version lost after the
 // new key was stored would never be recorded, because the next run would see no change. Per answer:
-// - none or "pending": only the icon is updated, and the game stays due;
+// - none, "pending" or "error": only the icon is updated, and the game stays due;
 // - null (no usable custom thumbnail): the game is marked checked and its previous thumbnail is kept on purpose, so a
 //   transient empty answer neither erases history nor records a fake change;
 // - a thumbnail: stored, with a version when its key differs from the stored one.
@@ -53,7 +53,7 @@ export async function saveThumbnails(db: Database, results: ThumbnailResult[], c
     for (const { universeId, answer, iconUrl } of ordered) {
       const target = eq(games.universeId, universeId);
       const iconUpdate = iconUrl ? { iconUrl } : {};
-      if (answer === undefined || answer === "pending") {
+      if (answer === undefined || answer === "pending" || answer === "error") {
         if (iconUrl) await transaction.update(games).set(iconUpdate).where(target);
         continue;
       }

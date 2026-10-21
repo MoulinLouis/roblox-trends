@@ -115,7 +115,7 @@ export const JOB_CONFIG = {
     refreshHours: 24,
     refreshMinimumCcu: 50,
     maximumGamesPerRun: 4_000,
-    // Every answer counts, including "no custom thumbnail" and "pending"; only games Roblox did not answer for are missing.
+    // Every answer counts, including "no custom thumbnail", "pending" and "error"; only unanswered games are missing.
     minimumAnsweredShare: 0.9,
   },
 } as const;

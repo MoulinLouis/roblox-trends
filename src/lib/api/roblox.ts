@@ -98,8 +98,9 @@ export interface GameThumbnail {
 }
 
 // "pending": Roblox is still processing or reviewing the image; retry later. It is an answer, not a failure.
+// "error": Roblox reported an error for the universe or its image; retry later. Also an answer, not a failure.
 // null: no usable custom thumbnail (none uploaded, or blocked by moderation).
-export type GameThumbnailAnswer = GameThumbnail | null | "pending";
+export type GameThumbnailAnswer = GameThumbnail | null | "pending" | "error";
 
 export function parseSortsResponse(value: unknown): RobloxSort[] {
   return sortsResponseSchema
@@ -187,14 +188,14 @@ export function parseSearchResponse(value: unknown): RobloxChartGame[] {
   }));
 }
 
-// A universe without an entry is unknown: its item was malformed or carried an error, or its thumbnails are in a
-// state that is neither usable, pending nor blocked (for example Error).
+// A universe without an entry is unknown: its item was malformed, or its thumbnails are in a state that is neither
+// usable, pending, blocked nor an error.
 export function parseGameThumbnailsResponse(value: unknown): Map<string, GameThumbnailAnswer> {
   const answers = new Map<string, GameThumbnailAnswer>();
   for (const raw of thumbnailEnvelopeSchema.parse(value).data) {
     const item = gameThumbnailItemSchema.safeParse(raw);
-    if (!item.success || item.data.error != null) continue;
-    const answer = gameThumbnailAnswer(item.data.thumbnails ?? []);
+    if (!item.success) continue;
+    const answer = item.data.error != null ? "error" : gameThumbnailAnswer(item.data.thumbnails ?? []);
     if (answer !== undefined) answers.set(String(item.data.universeId), answer);
   }
   return answers;
@@ -216,6 +217,7 @@ function gameThumbnailAnswer(thumbnails: z.infer<typeof gameThumbnailSchema>[]):
   if (completed?.imageUrl) return { imageUrl: completed.imageUrl, mediaId: completed.targetId ?? null };
   if (thumbnails.some((thumbnail) => pendingThumbnailStates.has(thumbnail.state))) return "pending";
   if (thumbnails.every((thumbnail) => thumbnail.state === "Blocked")) return null;
+  if (thumbnails.some((thumbnail) => thumbnail.state === "Error")) return "error";
   return undefined;
 }
 
