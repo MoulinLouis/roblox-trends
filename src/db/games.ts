@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import type { RobloxGameDetail } from "@/lib/api/roblox";
 import { chunk, uniqueBy } from "@/lib/arrays";
 import { contentFingerprint, rawFingerprint } from "@/lib/fingerprint";
@@ -51,8 +51,9 @@ export async function upsertGameDetails(db: Database, details: RobloxGameDetail[
             metadataFingerprint: sql`excluded.metadata_fingerprint`,
             contentFingerprint: sql`excluded.content_fingerprint`,
           },
-          // A detail older than the stored observation (a late retry) is ignored: the row is neither updated
-          // nor returned, so it counts as neither inserted nor changed.
+          // A detail older than the stored observation (a late retry, or a job that started earlier but committed
+          // later) is ignored: the row is neither updated nor returned, so it counts as neither inserted nor changed.
+          // Only its first observation is kept, below.
           setWhere: sql`excluded.last_observed_at >= ${games.lastObservedAt}`,
         })
         .returning({
@@ -60,6 +61,18 @@ export async function upsertGameDetails(db: Database, details: RobloxGameDetail[
           previousFingerprint: sql<string | null>`old.metadata_fingerprint`,
           currentFingerprint: games.metadataFingerprint,
         });
+      // The guard also skips least() on first_observed_at. When two jobs promote the same new game and the later one
+      // commits first, the game must still keep the earlier sighting, which its discovery path is compared with.
+      // ON CONFLICT DO UPDATE locks every conflicting row even when the guard skips it, so no new lock is taken here.
+      const written = new Set(rows.map((row) => row.universeId));
+      const stale = part.filter((detail) => !written.has(detail.id)).map((detail) => detail.id);
+      if (stale.length) {
+        await transaction
+          .update(games)
+          .set({ firstObservedAt: observedAt })
+          .where(and(inArray(games.universeId, stale), gt(games.firstObservedAt, observedAt)));
+      }
+
       const versioned = new Set<number>();
       for (const row of rows) {
         if (row.previousFingerprint === null) {

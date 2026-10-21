@@ -183,13 +183,25 @@ describe.skipIf(!hasTestDatabase)("game repositories", () => {
     }
   });
 
-  it("ignores a game detail older than the stored observation", async () => {
-    await upsertGameDetails(database.db, [gameDetail(40, { playing: 700 })], second);
-    const result = await upsertGameDetails(database.db, [gameDetail(40, { name: "Game 40 (stale)", playing: 5 })], first);
+  it("ignores a game detail older than the stored observation, except for an earlier first observation", async () => {
+    const third = new Date("2026-10-20T14:10:00Z");
+    // Game 40 was first stored by a job that started after the stale one; game 41 was observed before the stale detail.
+    await upsertGameDetails(database.db, [gameDetail(41, { playing: 300 })], first);
+    await upsertGameDetails(database.db, [gameDetail(40, { playing: 700 }), gameDetail(41, { playing: 400 })], third);
+    const stored = () =>
+      database.db.select().from(games).where(inArray(games.universeId, [40, 41])).orderBy(games.universeId);
+    const [game40, game41] = await stored();
+
+    const result = await upsertGameDetails(
+      database.db,
+      [40, 41].map((id) => gameDetail(id, { name: `Game ${id} (stale)`, playing: 5 })),
+      second,
+    );
+
     expect(result).toEqual({ inserted: [], metadataChanged: [] });
-    const [game] = await database.db.select().from(games).where(eq(games.universeId, 40));
-    expect(game).toMatchObject({ name: "Game 40", lastCcu: 700, firstObservedAt: second, lastObservedAt: second });
-    expect(await versionCount([40])).toBe(1);
+    expect(await stored()).toEqual([{ ...game40, firstObservedAt: second }, game41]);
+    expect(game40).toMatchObject({ name: "Game 40", lastCcu: 700, firstObservedAt: third, lastObservedAt: third });
+    expect(await versionCount([40, 41])).toBe(2);
   });
 
   it("tracks the last observation with players", async () => {
