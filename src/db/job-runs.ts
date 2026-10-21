@@ -34,13 +34,14 @@ export async function finishJobRun(
 }
 
 // A run degraded for one reason can still hold a measurement that passed its own check, so the stat selects the run,
-// not the status. Running runs have no stats yet, and the stats of failed runs are not trusted.
+// not the status. Without a value, any string value of the stat selects the run. Running runs have no stats yet, and
+// the stats of failed runs are not trusted.
 export async function latestRunWithStat(
   db: Database,
   job: JobName,
   since: Date,
   key: string,
-  value: string,
+  value?: string,
 ): Promise<{ slot: Date; stats: Record<string, unknown> } | null> {
   const [run] = await db
     .select({ slot: jobRuns.slot, stats: jobRuns.stats })
@@ -50,7 +51,9 @@ export async function latestRunWithStat(
         eq(jobRuns.job, job),
         inArray(jobRuns.status, ["success", "degraded"]),
         gte(jobRuns.startedAt, since),
-        sql`${jobRuns.stats} ->> ${key}::text = ${value}::text`,
+        value === undefined
+          ? sql`jsonb_typeof(${jobRuns.stats} -> ${key}::text) = 'string'`
+          : sql`${jobRuns.stats} ->> ${key}::text = ${value}::text`,
       ),
     )
     .orderBy(desc(jobRuns.startedAt))

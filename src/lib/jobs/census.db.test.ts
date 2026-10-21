@@ -11,7 +11,7 @@ import { JOB_CONFIG } from "@/lib/config";
 import type { JobStatus } from "@/lib/jobs/types";
 import { hasStat, WATCHED_STATS } from "@/lib/status-report";
 import { gameDetail } from "@/test/fixtures";
-import { createCensusJob, type CensusDependencies } from "./census";
+import { censusListFingerprint, createCensusJob, type CensusDependencies } from "./census";
 import { executeJob } from "./runner";
 
 const config = JOB_CONFIG.census;
@@ -79,6 +79,10 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
     return new Date(Date.now() - hours * hourMs);
   }
 
+  function minutesLater(minutes: number): Date {
+    return new Date(now.getTime() + minutes * 60_000);
+  }
+
   async function lastRunStats(): Promise<Record<string, unknown>> {
     const [run] = await database.db.select().from(jobRuns).orderBy(desc(jobRuns.startedAt)).limit(1);
     return run.stats;
@@ -118,6 +122,7 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
     expect(stats).toEqual({
       listed: listed.length,
       rejected: 2,
+      listFingerprint: censusListFingerprint(listed),
       listQuality: "success",
       eligible: 3,
       resolved: 1,
@@ -318,6 +323,7 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
     expect(stats).toEqual({
       listed: null,
       rejected: null,
+      listFingerprint: null,
       listQuality: "failed",
       eligible: 0,
       resolved: 0,
@@ -337,6 +343,32 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
     expect(coverage.slot).toEqual(goodListAt);
     expect(await executeJob(censusJob(filler()), database.db, now)).toBe("degraded");
     expect(await lastRunStats()).toMatchObject({ listed: config.minimumListed, listQuality: "degraded" });
+  });
+
+  it("does not store a list identical to the previous run's and degrades the run", async () => {
+    const listed = [place(1, 500), ...filler()];
+    expect(await executeJob(censusJob(listed), database.db, now)).toBe("success");
+    expect(await executeJob(censusJob(listed), database.db, minutesLater(10))).toBe("degraded");
+    expect(await lastRunStats()).toMatchObject({ listQuality: "repeated", listed: listed.length });
+    // Only the first slot holds rows: the repeated list is not a new sample.
+    const rows = await database.db.select({ observedAt: censusObservations.observedAt }).from(censusObservations);
+    expect(rows).toHaveLength(listed.length);
+    expect(new Set(rows.map((row) => row.observedAt.toISOString()))).toEqual(new Set(["2026-10-20T14:10:00.000Z"]));
+    // A list that changed is stored again.
+    expect(await executeJob(censusJob([place(1, 501), ...filler()]), database.db, minutesLater(20))).toBe("success");
+  });
+
+  it("compares with the latest list read, across a failed request", async () => {
+    const listed = [place(1, 500), ...filler()];
+    expect(await executeJob(censusJob(listed), database.db, now)).toBe("success");
+    const outage = censusJob([], {
+      fetchGames: async () => {
+        throw new HttpError(503, "Service Unavailable", rolimonsUrl);
+      },
+    });
+    expect(await executeJob(outage, database.db, minutesLater(10))).toBe("degraded");
+    expect(await executeJob(censusJob(listed), database.db, minutesLater(20))).toBe("degraded");
+    expect(await lastRunStats()).toMatchObject({ listQuality: "repeated" });
   });
 
   it("fails the run when the database fails during promotion", async () => {

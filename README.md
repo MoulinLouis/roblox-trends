@@ -30,7 +30,7 @@ Quality gates mark a run `degraded`:
 
 - `poll`: fewer than 95% of the requested games (the hot set and the tail slice) returned, or an empty active set.
 - `votes`: fewer than 95% of the active set returned, or an empty active set.
-- `census`: a list shorter than 1,000 places, more than 5% malformed entries, or a size change above 30% from the latest list of the last 6 hours that passed this check; also a stalled place resolution or a failed promotion. A Rolimon's outage (an error status, a network failure or a broken envelope) degrades the run too, with `listQuality` `failed` and the error in `listError`, while `poll` keeps sampling the tracked games; a database error still fails it.
+- `census`: a list shorter than 1,000 places, more than 5% malformed entries, or a size change above 30% from the latest list of the last 6 hours that passed this check; a list identical to the latest one read (Rolimon's serving the previous slot again, `listQuality` `repeated`), which is not stored; also a stalled place resolution or a failed promotion. A Rolimon's outage (an error status, a network failure or a broken envelope) degrades the run too, with `listQuality` `failed` and the error in `listError`, while `poll` keeps sampling the tracked games; a database error still fails it.
 - `charts`: fewer than 80% of the sorts collected (an empty sort, or one with more than 20% malformed entries, counts as failed), a 429 that outlasted the retries, or a failed promotion.
 - `explore`: an endpoint that failed or answered empty on every request, a 429, or a failed promotion.
 - `thumbnails`: fewer than 90% of the requested games answered. A run where Roblox answered for no game fails.

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { latestRunWithStat } from "@/db/job-runs";
 import { writeCensusObservations } from "@/db/observations";
 import { placesToSkip, savePlaceResolution, unpromotedUniverses } from "@/db/places";
@@ -29,6 +30,17 @@ export function evaluateCensusQuality(
   if (rejected / (listed + rejected) > limits.maximumRejectedShare) return "degraded";
   if (!previousListed) return "success";
   return Math.abs(listed - previousListed) / previousListed > limits.maximumListSizeChange ? "degraded" : "success";
+}
+
+// The content of a Rolimon's list: its places and their CCU, in place order. Rolimon's sometimes serves the list of
+// the previous slot again (2 of the first 44 runs on 2026-10-21, while about 78% of the places change between two
+// slots); storing it would record those CCU as a new sample.
+export function censusListFingerprint(games: readonly RolimonsGame[]): string {
+  const hash = createHash("sha1");
+  for (const game of [...games].sort((left, right) => Number(left.placeId) - Number(right.placeId))) {
+    hash.update(`${game.placeId}:${game.ccu}\n`);
+  }
+  return hash.digest("hex");
 }
 
 export function selectPlacesToResolve(games: RolimonsGame[], skip: Set<number>, minimumCcu: number): RolimonsGame[] {
@@ -77,6 +89,7 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
             // Every stat of a normal run is present, so `npm run status` prints the run like any other.
             listed: null,
             rejected: null,
+            listFingerprint: null,
             // Neither the analysis nor the baseline of later runs takes this run: both select listQuality "success".
             listQuality: "failed",
             eligible: 0,
@@ -94,17 +107,27 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
       }
       // The parser only accepts canonical place ids, so Number(placeId) is exact.
       const { games: listed, rejected } = list;
-      await writeCensusObservations(
-        db,
-        listed.map((game) => ({ placeId: Number(game.placeId), observedAt: slot, ccu: Math.round(game.ccu) })),
-      );
-      // Baseline: the latest list of the last hours that passed this check, even in a run degraded for another reason,
-      // so one truncated list never becomes the reference. job_runs.started_at holds wall-clock time, so the window
-      // starts from Date.now(), not from the injectable `now`.
+      // job_runs.started_at holds wall-clock time, so the windows start from Date.now(), not from the injectable `now`.
       const baselineSince = new Date(Date.now() - config.baselineMaxAgeHours * 60 * 60 * 1000);
+      // The same list as the latest one read is Rolimon's serving it again: its CCU are not a new sample, so they are
+      // not stored and the run is degraded (a list frozen for an hour alerts through the quality check). Promotion
+      // still uses it: its places and their CCU are real.
+      const listFingerprint = censusListFingerprint(listed);
+      const latestList = await latestRunWithStat(db, "census", baselineSince, "listFingerprint");
+      const repeated = latestList?.stats.listFingerprint === listFingerprint;
+      if (!repeated) {
+        await writeCensusObservations(
+          db,
+          listed.map((game) => ({ placeId: Number(game.placeId), observedAt: slot, ccu: Math.round(game.ccu) })),
+        );
+      }
+      // Baseline: the latest list of the last hours that passed this check, even in a run degraded for another reason,
+      // so one truncated list never becomes the reference.
       const previous = await latestRunWithStat(db, "census", baselineSince, "listQuality", "success");
       const previousListed = typeof previous?.stats.listed === "number" ? previous.stats.listed : null;
-      const listQuality = evaluateCensusQuality({ listed: listed.length, rejected }, previousListed, config);
+      const listQuality = repeated
+        ? "repeated"
+        : evaluateCensusQuality({ listed: listed.length, rejected }, previousListed, config);
 
       const eligibleIds = listed.filter((game) => game.ccu >= config.promotionMinimumCcu).map((game) => Number(game.placeId));
       const skip = await placesToSkip(db, eligibleIds, now, config.resolutionRetryDays);
@@ -172,11 +195,13 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
         resolutionFailures > 0 &&
         (rateLimited || deferred > 0 || resolutionFailures >= config.stalledResolutionFailures);
       return {
-        status: listQuality === "degraded" || resolutionStalled || promotionError !== undefined ? "degraded" : "success",
+        status: listQuality !== "success" || resolutionStalled || promotionError !== undefined ? "degraded" : "success",
         stats: {
           listed: listed.length,
           rejected,
-          // The list check alone: analysis keeps the census slots whose list passed it, and later runs compare with them.
+          listFingerprint,
+          // The list check alone ("success", "degraded" or "repeated"): analysis keeps the census slots whose list passed
+          // it, and later runs compare with them.
           listQuality,
           eligible: eligibleIds.length,
           resolved,

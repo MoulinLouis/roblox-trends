@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RolimonsGame } from "@/lib/api/rolimons";
-import { evaluateCensusQuality, selectPlacesToResolve } from "./census";
+import { censusListFingerprint, evaluateCensusQuality, selectPlacesToResolve } from "./census";
 
 function listed(placeId: string, ccu: number): RolimonsGame {
   return { placeId, name: `Place ${placeId}`, ccu, thumbnailUrl: "" };
@@ -50,6 +50,21 @@ describe("evaluateCensusQuality", () => {
   it("flags a list with a larger share of rejected entries, even when its size is stable", () => {
     expect(evaluateCensusQuality(list(9_000, 1_000), null, limits)).toBe("degraded");
     expect(evaluateCensusQuality(list(9_000, 1_000), 9_000, limits)).toBe("degraded");
+  });
+});
+
+describe("censusListFingerprint", () => {
+  it("does not depend on the order of the places", () => {
+    expect(censusListFingerprint([listed("2", 20), listed("1", 10)])).toBe(
+      censusListFingerprint([listed("1", 10), listed("2", 20)]),
+    );
+  });
+
+  it("changes when a CCU, a place or the size of the list changes", () => {
+    const base = censusListFingerprint([listed("1", 10), listed("2", 20)]);
+    expect(censusListFingerprint([listed("1", 10), listed("2", 21)])).not.toBe(base);
+    expect(censusListFingerprint([listed("1", 10), listed("3", 20)])).not.toBe(base);
+    expect(censusListFingerprint([listed("1", 10)])).not.toBe(base);
   });
 });
 
