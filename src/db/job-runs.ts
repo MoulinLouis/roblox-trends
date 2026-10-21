@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { JobName, JobStatus } from "@/lib/jobs/types";
 import type { Database } from "./client";
 import { jobRuns } from "./schema";
@@ -43,6 +43,31 @@ export async function latestSuccessfulRun(
     .select({ slot: jobRuns.slot, stats: jobRuns.stats })
     .from(jobRuns)
     .where(and(eq(jobRuns.job, job), eq(jobRuns.status, "success"), gte(jobRuns.startedAt, since)))
+    .orderBy(desc(jobRuns.startedAt))
+    .limit(1);
+  return run ?? null;
+}
+
+// A run degraded for one reason can still hold a measurement that passed its own check, so the stat selects the run,
+// not the status. Running runs have no stats yet, and the stats of failed runs are not trusted.
+export async function latestRunWithStat(
+  db: Database,
+  job: JobName,
+  since: Date,
+  key: string,
+  value: string,
+): Promise<{ slot: Date; stats: Record<string, unknown> } | null> {
+  const [run] = await db
+    .select({ slot: jobRuns.slot, stats: jobRuns.stats })
+    .from(jobRuns)
+    .where(
+      and(
+        eq(jobRuns.job, job),
+        inArray(jobRuns.status, ["success", "degraded"]),
+        gte(jobRuns.startedAt, since),
+        sql`${jobRuns.stats} ->> ${key}::text = ${value}::text`,
+      ),
+    )
     .orderBy(desc(jobRuns.startedAt))
     .limit(1);
   return run ?? null;

@@ -1,4 +1,4 @@
-import { latestSuccessfulRun } from "@/db/job-runs";
+import { latestRunWithStat } from "@/db/job-runs";
 import { writeCensusObservations } from "@/db/observations";
 import { placesToSkip, savePlaceResolution, unpromotedUniverses } from "@/db/places";
 import { HttpError } from "@/lib/api/http";
@@ -63,10 +63,11 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
         db,
         listed.map((game) => ({ placeId: Number(game.placeId), observedAt: slot, ccu: Math.round(game.ccu) })),
       );
-      // Baseline: the latest fully successful run of the last hours, so one truncated list never becomes the reference.
-      // job_runs.started_at holds wall-clock time, so the window starts from Date.now(), not from the injectable `now`.
+      // Baseline: the latest list of the last hours that passed this check, even in a run degraded for another reason,
+      // so one truncated list never becomes the reference. job_runs.started_at holds wall-clock time, so the window
+      // starts from Date.now(), not from the injectable `now`.
       const baselineSince = new Date(Date.now() - config.baselineMaxAgeHours * 60 * 60 * 1000);
-      const previous = await latestSuccessfulRun(db, "census", baselineSince);
+      const previous = await latestRunWithStat(db, "census", baselineSince, "listQuality", "success");
       const previousListed = typeof previous?.stats.listed === "number" ? previous.stats.listed : null;
       const listQuality = evaluateCensusQuality(listed.length, previousListed, {
         maximumChange: config.maximumListSizeChange,
@@ -128,7 +129,7 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
         stats: {
           listed: listed.length,
           rejected,
-          // The list check alone: analysis keeps the census slots whose list passed it.
+          // The list check alone: analysis keeps the census slots whose list passed it, and later runs compare with them.
           listQuality,
           eligible: eligibleIds.length,
           resolved,

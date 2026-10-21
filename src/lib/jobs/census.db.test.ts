@@ -7,6 +7,7 @@ import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/tes
 import { HttpError } from "@/lib/api/http";
 import type { RolimonsGame } from "@/lib/api/rolimons";
 import { JOB_CONFIG } from "@/lib/config";
+import type { JobStatus } from "@/lib/jobs/types";
 import { gameDetail } from "@/test/fixtures";
 import { createCensusJob, type CensusDependencies } from "./census";
 import { executeJob } from "./runner";
@@ -54,10 +55,18 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
   });
 
   // A finished census run, started at a wall-clock time like the runner records it.
-  async function recordRun(status: "success" | "degraded", listed: number, startedAt: Date): Promise<void> {
+  async function recordRun(
+    status: Exclude<JobStatus, "running">,
+    stats: { listed: number; listQuality: "success" | "degraded" },
+    startedAt: Date,
+  ): Promise<void> {
     const id = randomUUID();
     await startJobRun(database.db, { id, job: "census", slot: startedAt, startedAt });
-    await finishJobRun(database.db, id, { status, finishedAt: startedAt, durationMs: 0, stats: { listed } });
+    await finishJobRun(database.db, id, { status, finishedAt: startedAt, durationMs: 0, stats });
+  }
+
+  function hoursAgo(hours: number): Date {
+    return new Date(Date.now() - hours * hourMs);
   }
 
   async function lastRunStats(): Promise<Record<string, unknown>> {
@@ -109,22 +118,31 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
     });
   });
 
-  it("degrades a list that shrinks sharply against a recent successful run", async () => {
-    await recordRun("success", config.minimumListed * 2, new Date(Date.now() - hourMs));
+  it("degrades a list that shrinks sharply against a recent good list", async () => {
+    await recordRun("success", { listed: config.minimumListed * 2, listQuality: "success" }, hoursAgo(1));
 
     expect(await executeJob(censusJob(filler()), database.db, now)).toBe("degraded");
     expect(await lastRunStats()).toMatchObject({ listQuality: "degraded" });
   });
 
-  it("ignores a successful run older than the baseline window", async () => {
-    await recordRun("success", config.minimumListed * 2, new Date(Date.now() - (config.baselineMaxAgeHours + 1) * hourMs));
+  it("ignores a good list older than the baseline window", async () => {
+    await recordRun("success", { listed: config.minimumListed * 2, listQuality: "success" }, hoursAgo(config.baselineMaxAgeHours + 1));
 
     expect(await executeJob(censusJob(filler()), database.db, now)).toBe("success");
   });
 
-  it("never takes a degraded run as the baseline", async () => {
-    await recordRun("success", config.minimumListed, new Date(Date.now() - 2 * hourMs));
-    await recordRun("degraded", config.minimumListed * 2, new Date(Date.now() - hourMs));
+  it("takes the good list of a run degraded for another reason as the baseline", async () => {
+    await recordRun("degraded", { listed: config.minimumListed * 2, listQuality: "success" }, hoursAgo(1));
+
+    expect(await executeJob(censusJob(filler()), database.db, now)).toBe("degraded");
+    expect(await lastRunStats()).toMatchObject({ listQuality: "degraded" });
+  });
+
+  it.each(["degraded list", "failed run"] as const)("never takes a %s as the baseline", async (kind) => {
+    await recordRun("success", { listed: config.minimumListed, listQuality: "success" }, hoursAgo(2));
+    const doubled = config.minimumListed * 2;
+    if (kind === "degraded list") await recordRun("degraded", { listed: doubled, listQuality: "degraded" }, hoursAgo(1));
+    else await recordRun("failed", { listed: doubled, listQuality: "success" }, hoursAgo(1));
 
     expect(await executeJob(censusJob(filler()), database.db, now)).toBe("success");
   });
