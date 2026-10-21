@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { gameDetail } from "@/test/fixtures";
 import { selectActiveUniverses } from "./active-set";
@@ -21,6 +22,9 @@ describe.skipIf(!hasTestDatabase)("selectActiveUniverses", () => {
       gameDetail(5, { playing: 0, created: old }),
       gameDetail(6, { playing: 0, created: old }),
       gameDetail(10, { playing: 0, created: old }),
+      // Thresholds: game 11 has exactly the minimum; game 12 is one below it in the census.
+      gameDetail(11, { playing: 50, created: old }),
+      gameDetail(12, { playing: 0, created: old }),
     ], now);
     // Game 7 was busy when last returned, two days ago: Roblox has not returned it since (deleted, or malformed).
     await upsertGameDetails(database.db, [gameDetail(7, { playing: 3_000, created: old })], new Date("2026-10-18T14:00:00Z"));
@@ -38,8 +42,10 @@ describe.skipIf(!hasTestDatabase)("selectActiveUniverses", () => {
     ]);
     await savePlaceResolution(database.db, { placeId: 333, universeId: 3, resolvedAt: now, error: null });
     await savePlaceResolution(database.db, { placeId: 555, universeId: 5, resolvedAt: now, error: null });
+    await savePlaceResolution(database.db, { placeId: 1212, universeId: 12, resolvedAt: now, error: null });
     await writeCensusObservations(database.db, [
       { placeId: 333, observedAt: new Date("2026-10-20T13:50:00Z"), ccu: 120 },
+      { placeId: 1212, observedAt: new Date("2026-10-20T13:50:00Z"), ccu: 49 },
       { placeId: 555, observedAt: new Date("2026-10-20T13:00:00Z"), ccu: 500 },
     ]);
   });
@@ -48,15 +54,35 @@ describe.skipIf(!hasTestDatabase)("selectActiveUniverses", () => {
     await database?.drop();
   });
 
+  const expected = [
+    { universeId: 1, priority: 5_000 },
+    { universeId: 2, priority: 800 },
+    { universeId: 10, priority: 300 },
+    { universeId: 3, priority: 120 },
+    { universeId: 11, priority: 50 },
+    { universeId: 4, priority: 10 },
+    { universeId: 9, priority: 0 },
+  ];
+
   it("selects busy, recently busy, census-visible and young active games by priority", async () => {
-    const active = await selectActiveUniverses(database.db, now);
-    expect(active).toEqual([
-      { universeId: 1, priority: 5_000 },
-      { universeId: 2, priority: 800 },
-      { universeId: 10, priority: 300 },
-      { universeId: 3, priority: 120 },
-      { universeId: 4, priority: 10 },
-      { universeId: 9, priority: 0 },
-    ]);
+    expect(await selectActiveUniverses(database.db, now)).toEqual(expected);
+  });
+
+  // Fixtures are read in real time until now; production reads mostly materialized hourly buckets.
+  it("selects the same games once the hourly aggregate is materialized", async () => {
+    await database.db.execute(
+      sql.raw(`CALL refresh_continuous_aggregate('game_hourly', '2026-10-01T00:00:00Z'::timestamptz, '2026-10-21T00:00:00Z'::timestamptz)`),
+    );
+    const [table] = (
+      await database.db.execute<{ schema: string; name: string }>(sql`
+        select materialization_hypertable_schema as schema, materialization_hypertable_name as name
+        from timescaledb_information.continuous_aggregates where view_name = 'game_hourly'
+      `)
+    ).rows;
+    const materialized = await database.db.execute<{ buckets: number }>(
+      sql.raw(`select count(*)::int as buckets from "${table.schema}"."${table.name}"`),
+    );
+    expect(materialized.rows[0].buckets).toBeGreaterThan(0);
+    expect(await selectActiveUniverses(database.db, now)).toEqual(expected);
   });
 });
