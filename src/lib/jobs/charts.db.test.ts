@@ -1,9 +1,9 @@
 import { and, desc, eq, sql } from "drizzle-orm";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { chartPlacements, discoverySources, games, jobRuns } from "@/db/schema";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/test-database";
 import { HttpError } from "@/lib/api/http";
-import type { RobloxChartGame, RobloxSort } from "@/lib/api/roblox";
+import { RobloxClient, type RobloxChartGame, type RobloxSort } from "@/lib/api/roblox";
 import { gameDetail } from "@/test/fixtures";
 import { createChartsJob, type ChartsDependencies } from "./charts";
 import { PromotionApiError } from "./promotion";
@@ -98,7 +98,16 @@ describe.skipIf(!hasTestDatabase)("charts job", () => {
       playerCount: 900,
       isSponsored: null,
     });
-    expect((await lastRun()).stats).toMatchObject({ sorts: 5, failedSorts: 1, placements: 4, promotionRequested: 1, promoted: 1 });
+    expect((await lastRun()).stats).toMatchObject({
+      sorts: 5,
+      failedSorts: 1,
+      failedSortIds: ["top-rated"],
+      skippedItems: 0,
+      rateLimited: false,
+      placements: 4,
+      promotionRequested: 1,
+      promoted: 1,
+    });
   });
 
   it("replaces the whole slot of a sort when the same hour is collected again", async () => {
@@ -157,7 +166,7 @@ describe.skipIf(!hasTestDatabase)("charts job", () => {
     expect(await executeJob(chartsJob({ "top-trending": [chartGame(7), chartGame(8)] }), database.db, at)).toBe("success");
     expect(await executeJob(chartsJob({ "top-trending": [] }), database.db, at)).toBe("degraded");
     expect(await storedUniverses("top-trending", slot)).toEqual([7, 8]);
-    expect((await lastRun()).stats).toMatchObject({ sorts: 1, failedSorts: 1, placements: 0 });
+    expect((await lastRun()).stats).toMatchObject({ sorts: 1, failedSorts: 1, failedSortIds: ["top-trending"], placements: 0 });
   });
 
   it("counts a sort with too many malformed entries as failed and keeps what an earlier attempt stored", async () => {
@@ -173,7 +182,73 @@ describe.skipIf(!hasTestDatabase)("charts job", () => {
     expect(await executeJob(job, database.db, at)).toBe("degraded");
     expect(await storedUniverses("top-trending", slot)).toEqual([7, 9, 10, 11]);
     expect(await storedUniverses("up-and-coming", slot)).toEqual([8]);
-    expect((await lastRun()).stats).toMatchObject({ failedSorts: 1, skippedItems: 2, placements: 4 });
+    expect((await lastRun()).stats).toMatchObject({ failedSorts: 1, failedSortIds: ["up-and-coming"], skippedItems: 2, placements: 4 });
+  });
+
+  it("stops reading sorts after a rate limit that outlasted the retries and degrades the run", async () => {
+    // The ninth of ten sorts is rate limited: 8 stored sorts out of 10 still meet the minimum share.
+    const sortIds = Array.from({ length: 10 }, (_, index) => `sort-${index + 1}`);
+    const requested: string[] = [];
+    const job = createChartsJob({
+      sortIds,
+      roblox: {
+        getSortContent: async (sortId) => {
+          requested.push(sortId);
+          if (sortId === "sort-9") throw new HttpError(429, "Too Many Requests", "https://apis.roblox.com/explore-api/v1/get-sort-content");
+          return sortOf(sortId, [chartGame(7)]);
+        },
+        getGameDetails,
+      },
+    });
+    expect(await executeJob(job, database.db, new Date("2026-10-20T14:02:00Z"))).toBe("degraded");
+    expect(requested).toEqual(sortIds.slice(0, 9));
+    expect(await database.db.select().from(chartPlacements)).toHaveLength(8);
+    expect((await lastRun()).stats).toMatchObject({
+      sorts: 10,
+      failedSorts: 2,
+      failedSortIds: ["sort-9", "sort-10"],
+      rateLimited: true,
+      placements: 8,
+      promoted: 1,
+    });
+  });
+
+  it("reports the HTTP requests and the malformed entries of the run", async () => {
+    const listed = [7, 8, "broken", 9, 10].map((universeId) =>
+      typeof universeId === "number" ? { universeId, rootPlaceId: universeId * 10, name: `Game ${universeId}`, playerCount: 10 } : { universeId },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/get-sort-content")) return Response.json({ sortId: url.searchParams.get("sortId"), games: listed });
+        const ids = url.searchParams.get("universeIds")?.split(",") ?? [];
+        return Response.json({ data: ids.map((id) => gameDetail(Number(id))) });
+      }),
+    );
+    try {
+      const job = createChartsJob({ sortIds: ["top-trending"], roblox: new RobloxClient() });
+      expect(await executeJob(job, database.db, new Date("2026-10-20T14:02:00Z"))).toBe("success");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const rows = await database.db
+      .select({ universeId: chartPlacements.universeId, rank: chartPlacements.rank })
+      .from(chartPlacements)
+      .orderBy(chartPlacements.rank);
+    // The malformed third entry leaves a gap in the ranks.
+    expect(rows).toEqual([
+      { universeId: 7, rank: 1 },
+      { universeId: 8, rank: 2 },
+      { universeId: 9, rank: 4 },
+      { universeId: 10, rank: 5 },
+    ]);
+    expect((await lastRun()).stats).toMatchObject({
+      failedSortIds: [],
+      skippedItems: 1,
+      promoted: 4,
+      http: { attempts: 2, retries: 0, rateLimitedResponses: 0 },
+    });
   });
 
   it("keeps the placements and reports the error when promotion fails", async () => {

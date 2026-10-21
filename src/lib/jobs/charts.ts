@@ -1,7 +1,9 @@
 import { replaceChartSlot, type ChartPlacementRow } from "@/db/observations";
+import { getHttpRequestMetrics } from "@/lib/api/http";
 import type { RobloxApi, RobloxSort, RobloxSortGame } from "@/lib/api/roblox";
 import { JOB_CONFIG, ROBLOX_DISCOVERY_CHARTS } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
+import { httpMetricsSince, isRateLimited } from "./batching";
 import { PromotionApiError, promoteUniverses, type PromotionCandidate } from "./promotion";
 import type { JobDefinition } from "./runner";
 
@@ -47,24 +49,34 @@ export function createChartsJob(dependencies: ChartsDependencies): JobDefinition
     intervalMinutes: config.intervalMinutes,
     timeoutMs: config.timeoutMs,
     async run({ db, now, slot }) {
+      const httpBefore = getHttpRequestMetrics();
       const candidates: PromotionCandidate[] = [];
-      let failedSorts = 0;
+      // A failed sort keeps whatever an earlier attempt in this hour stored for it.
+      const failedSortIds: string[] = [];
       let skippedItems = 0;
       let placements = 0;
-      for (const sortId of sortIds) {
+      let rateLimited = false;
+      for (const [index, sortId] of sortIds.entries()) {
         let sort: RobloxSort;
         try {
           sort = await dependencies.roblox.getSortContent(sortId);
         } catch (error) {
-          // A failed sort keeps whatever an earlier attempt in this hour stored for it.
-          failedSorts += 1;
+          failedSortIds.push(sortId);
           logger.warn("Chart collection failed", { sortId, error: errorMessage(error) });
+          // The client already retried: further requests would only extend the rate limit.
+          if (isRateLimited(error)) {
+            rateLimited = true;
+            const remaining = sortIds.slice(index + 1);
+            failedSortIds.push(...remaining);
+            logger.warn("Chart collection rate limited; skipping the remaining sorts", { skipped: remaining.length });
+            break;
+          }
           continue;
         }
         skippedItems += sort.skipped;
         const problem = sortProblem(sort, config.maximumMalformedShare);
         if (problem) {
-          failedSorts += 1;
+          failedSortIds.push(sortId);
           logger.warn("Chart collection failed", { sortId, error: problem });
           continue;
         }
@@ -85,18 +97,21 @@ export function createChartsJob(dependencies: ChartsDependencies): JobDefinition
         promotionError = error.message;
         logger.error("Chart promotion failed; retrying next run", { error: promotionError });
       }
-      const succeededSorts = sortIds.length - failedSorts;
+      const succeededSorts = sortIds.length - failedSortIds.length;
       const sortsOk = sortIds.length > 0 && succeededSorts / sortIds.length >= config.minimumSortShare;
       return {
-        status: sortsOk && promotionError === undefined ? "success" : "degraded",
+        status: sortsOk && !rateLimited && promotionError === undefined ? "success" : "degraded",
         stats: {
           sorts: sortIds.length,
-          failedSorts,
+          failedSorts: failedSortIds.length,
+          failedSortIds,
           skippedItems,
           placements,
           promotionRequested: new Set(candidates.map((candidate) => candidate.universeId)).size,
           promoted,
           promotionError,
+          rateLimited,
+          http: httpMetricsSince(httpBefore),
         },
       };
     },
