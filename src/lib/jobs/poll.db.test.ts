@@ -76,6 +76,8 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
         http: { attempts: 1, retries: 0, rateLimitedResponses: 0, endpointIntervalMs: { "games.roblox.com/v1/games": 7_000 } },
         shedBelowCcu: null,
         oldestTailDetailsMinutes: null,
+        missing: 0,
+        missingSample: [],
       });
       expect(Object.keys(run.stats).sort()).toEqual([
         "active",
@@ -84,6 +86,8 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
         "hot",
         "http",
         "metadataChanges",
+        "missing",
+        "missingSample",
         "newGames",
         "oldestTailDetailsMinutes",
         "rateLimited",
@@ -162,7 +166,9 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
         skipped: 10,
         stoppedBy: "deadline",
         shedBelowCcu: 1_840,
+        // The tail games shed at the deadline were never requested: they are skipped, not missing, and still count here.
         oldestTailDetailsMinutes: 30,
+        missing: 0,
       });
     });
 
@@ -188,6 +194,32 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
         stoppedBy: null,
         rateLimited: false,
         shedBelowCcu: null,
+        // The games of the failed batch were requested and not answered.
+        missing: 50,
+        missingSample: universeIds.slice(0, 10),
+      });
+    });
+
+    it("counts the requested games Roblox left out and lists the first ten universe ids", async () => {
+      // Priorities now rise with the universe id, so the games are requested from 160 down to 101.
+      await upsertGameDetails(database.db, universeIds.map((id) => gameDetail(id, { playing: id })), now);
+      const unanswered = universeIds.filter((id) => id % 4 === 0);
+      const job = createPollJob({
+        roblox: {
+          getGameDetails: async (ids) => ids.map(Number).filter((id) => !unanswered.includes(id)).map((id) => gameDetail(id)),
+        },
+      });
+      await executeJob(job, database.db, now);
+      const [run] = await database.db.select().from(jobRuns);
+      expect(unanswered).toHaveLength(15);
+      expect(run.stats).toMatchObject({
+        requested: 60,
+        attempted: 60,
+        returned: 45,
+        failedBatches: 0,
+        skipped: 0,
+        missing: 15,
+        missingSample: [104, 108, 112, 116, 120, 124, 128, 132, 136, 140],
       });
     });
 
@@ -266,21 +298,33 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
     const minutesBefore = (minutes: number) => new Date(now.getTime() - minutes * 60_000);
     let requests: number[][];
 
-    function rotatingJob() {
+    // Roblox answers for every requested game except the unanswered ones.
+    function rotatingJob(unanswered: readonly number[] = [], hotUniverses = 2) {
       return createPollJob({
         roblox: {
           getGameDetails: async (ids) => {
             requests.push(ids.map(Number));
-            return ids.map((id) => gameDetail(Number(id), { playing: playing.get(Number(id)) }));
+            return ids
+              .map(Number)
+              .filter((id) => !unanswered.includes(id))
+              .map((id) => gameDetail(id, { playing: playing.get(id) }));
           },
         },
-        hotUniverses: 2,
+        hotUniverses,
         tailUniversesPerRun: 2,
       });
     }
 
     async function setDetailsAt(universeId: number, at: Date | null): Promise<void> {
       await database.db.update(games).set({ lastCcuAt: at }).where(eq(games.universeId, universeId));
+    }
+
+    async function storedTimes(universeId: number): Promise<{ lastCcuAt: Date | null; detailsAttemptedAt: Date | null }> {
+      const [row] = await database.db
+        .select({ lastCcuAt: games.lastCcuAt, detailsAttemptedAt: games.detailsAttemptedAt })
+        .from(games)
+        .where(eq(games.universeId, universeId));
+      return row;
     }
 
     beforeEach(async () => {
@@ -351,6 +395,47 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
       ]);
       const runs = await database.db.select().from(jobRuns).orderBy(jobRuns.startedAt);
       expect(runs.map((run) => run.stats.oldestTailDetailsMinutes)).toEqual([50, 40, 20]);
+    });
+
+    it("moves a requested game that Roblox did not answer behind the other tail games, once per tail cycle", async () => {
+      const later = (minutes: number) => new Date(now.getTime() + minutes * 60_000);
+      // Game 204 holds the oldest details, from before Roblox stopped answering for it; game 205 has some too.
+      await setDetailsAt(205, minutesBefore(40));
+      const job = rotatingJob([204]);
+      expect(await executeJob(job, database.db, now)).toBe("degraded");
+      expect(await storedTimes(204)).toEqual({ lastCcuAt: minutesBefore(50), detailsAttemptedAt: now });
+      // Every requested game gets the time, answered or not; a game left out of the request keeps none.
+      expect(await storedTimes(205)).toEqual({ lastCcuAt: now, detailsAttemptedAt: now });
+      expect(await storedTimes(203)).toEqual({ lastCcuAt: minutesBefore(30), detailsAttemptedAt: null });
+      // 204 and 205 were both requested by the first run, answered or not: 203 and 206 come first.
+      expect(await executeJob(job, database.db, later(10))).toBe("success");
+      // Then 204 is retried with 205, on its turn rather than on every run.
+      expect(await executeJob(job, database.db, later(20))).toBe("degraded");
+      expect(requests).toEqual([
+        [201, 202, 204, 205],
+        [201, 202, 203, 206],
+        [201, 202, 204, 205],
+      ]);
+      expect(await storedTimes(204)).toEqual({ lastCcuAt: minutesBefore(50), detailsAttemptedAt: later(20) });
+      const runs = await database.db.select().from(jobRuns).orderBy(jobRuns.startedAt);
+      expect(runs.map((run) => run.stats.missing)).toEqual([1, 0, 1]);
+      expect(runs.map((run) => run.stats.missingSample)).toEqual([[204], [], [204]]);
+      // Game 204's 50-minute-old details never count: the first run reports game 205's 40 minutes, the last game
+      // 205's details from the first run, 20 minutes before.
+      expect(runs.map((run) => run.stats.oldestTailDetailsMinutes)).toEqual([40, 40, 20]);
+    });
+
+    it("keeps the latest request time when an older overlapping run finishes last", async () => {
+      const later = new Date(now.getTime() + 10 * 60_000);
+      // Every active game is in the hot set, so both runs request game 204.
+      const job = rotatingJob([204], playing.size);
+      expect(await executeJob(job, database.db, later)).toBe("degraded");
+      expect(await storedTimes(204)).toEqual({ lastCcuAt: minutesBefore(50), detailsAttemptedAt: later });
+      // The older run requested the same games and finishes after the newer one.
+      expect(await executeJob(job, database.db, now)).toBe("degraded");
+      expect(requests.map((ids) => ids.includes(204))).toEqual([true, true]);
+      expect(await storedTimes(204)).toEqual({ lastCcuAt: minutesBefore(50), detailsAttemptedAt: later });
+      expect(await storedTimes(205)).toMatchObject({ detailsAttemptedAt: later });
     });
   });
 

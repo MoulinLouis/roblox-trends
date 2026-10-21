@@ -1,5 +1,5 @@
 import { type ActiveUniverse, selectActiveUniverses } from "@/db/active-set";
-import { upsertGameDetails } from "@/db/games";
+import { markGameDetailsAttempted, upsertGameDetails } from "@/db/games";
 import { writeGameObservations } from "@/db/observations";
 import { getHttpRequestMetrics } from "@/lib/api/http";
 import type { RobloxApi } from "@/lib/api/roblox";
@@ -22,41 +22,48 @@ export interface PollPlan {
   hot: ActiveUniverse[];
   // Every other active game.
   tail: ActiveUniverse[];
-  // The tail games requested this run, oldest details first.
+  // The tail games requested this run, longest since their latest details request first.
   tailRequested: ActiveUniverse[];
   // The hot set, then the tail slice: the deadline sheds the end of this order first.
   requested: ActiveUniverse[];
-  // How far behind the rotation runs: the age of the oldest details among the tail games requested. Games whose
-  // details were never stored have no age; null when no requested tail game has one.
-  oldestTailDetailsMinutes: number | null;
 }
 
 // The active set holds more games than one run can request within the game details limit. The hot set is requested
-// on every run; the tail rotates, since every game polled gets fresh details and moves behind the others.
+// on every run; the tail rotates, since every game requested moves behind the others: a game polled gets fresh
+// details, and a game Roblox does not answer gets a new request time, so it is retried once per tail cycle.
 export function planPollRun(
   active: readonly ActiveUniverse[],
   limits: { hotUniverses: number; tailUniversesPerRun: number },
-  now: Date,
 ): PollPlan {
   const hot = active.slice(0, limits.hotUniverses);
   const tail = active.slice(limits.hotUniverses);
-  const tailRequested = [...tail].sort(byOldestDetails).slice(0, limits.tailUniversesPerRun);
-  const oldest = tailRequested.find((game) => game.lastDetailsAt !== null)?.lastDetailsAt;
-  return {
-    hot,
-    tail,
-    tailRequested,
-    requested: [...hot, ...tailRequested],
-    oldestTailDetailsMinutes: oldest ? Math.max(0, Math.round((now.getTime() - oldest.getTime()) / 60_000)) : null,
-  };
+  const tailRequested = [...tail].sort(byOldestRequest).slice(0, limits.tailUniversesPerRun);
+  return { hot, tail, tailRequested, requested: [...hot, ...tailRequested] };
 }
 
-// Never-stored details first, then the oldest, then the lowest universe id.
-function byOldestDetails(left: ActiveUniverse, right: ActiveUniverse): number {
-  const leftAt = left.lastDetailsAt?.getTime() ?? Number.NEGATIVE_INFINITY;
-  const rightAt = right.lastDetailsAt?.getTime() ?? Number.NEGATIVE_INFINITY;
+// Never-requested games first, then the oldest request, then the lowest universe id.
+function byOldestRequest(left: ActiveUniverse, right: ActiveUniverse): number {
+  const leftAt = left.lastDetailsRequestAt?.getTime() ?? Number.NEGATIVE_INFINITY;
+  const rightAt = right.lastDetailsRequestAt?.getTime() ?? Number.NEGATIVE_INFINITY;
   if (leftAt !== rightAt) return leftAt < rightAt ? -1 : 1;
   return left.universeId - right.universeId;
+}
+
+// How far behind the rotation runs: the age of the oldest details among the tail games requested. Games whose details
+// were never stored have no age, and the games Roblox did not answer are left out: their details stay old however
+// often they are requested, so one such game would pin this age. Null when no other requested tail game has details.
+export function oldestTailDetailsMinutes(
+  tailRequested: readonly ActiveUniverse[],
+  unanswered: ReadonlySet<number>,
+  now: Date,
+): number | null {
+  let oldest: number | null = null;
+  for (const game of tailRequested) {
+    if (game.lastDetailsAt === null || unanswered.has(game.universeId)) continue;
+    const at = game.lastDetailsAt.getTime();
+    if (oldest === null || at < oldest) oldest = at;
+  }
+  return oldest === null ? null : Math.max(0, Math.round((now.getTime() - oldest) / 60_000));
 }
 
 export function createPollJob(dependencies: PollDependencies): JobDefinition {
@@ -72,7 +79,7 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
     timeoutMs: config.timeoutMs,
     async run({ db, now, slot }) {
       const active = await selectActiveUniverses(db, now);
-      const plan = planPollRun(active, limits, now);
+      const plan = planPollRun(active, limits);
       const { requested } = plan;
       const httpBefore = getHttpRequestMetrics();
       // The deadline stops new batches, but a batch already in its retries can outlast the timeout. Its observations
@@ -109,6 +116,14 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
       // games upsert must not lose this CCU slot. The upsert also stamps games.last_ccu_at, which moves every tail
       // game polled here behind the others.
       const upsert = await upsertGameDetails(db, details, now);
+      // Batches run in order, so the games requested from Roblox are the first `attempted` ones; a game shed by the
+      // deadline or a stop was not requested and keeps its place at the head of the tail. Every requested game gets a
+      // request time, so one that Roblox did not answer (its batch failed, or the response left it out) moves behind
+      // the others like a polled one instead of heading the tail of every run.
+      const attempted = requested.slice(0, outcome.attempted).map((game) => game.universeId);
+      await markGameDetailsAttempted(db, attempted, now);
+      const answered = new Set(details.map((detail) => detail.id));
+      const missing = attempted.filter((universeId) => !answered.has(universeId)).sort((left, right) => left - right);
       // Census promotes every busy game, so an empty active set means collection upstream is broken, not a quiet hour.
       // Otherwise the run is judged on the games it planned: the unrequested tail waits for its turn by design.
       const status =
@@ -134,9 +149,12 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
           stoppedBy: outcome.stoppedBy,
           rateLimited: outcome.stoppedBy === "error",
           // The priority of the first requested game left out: every game before it in the request order (the hot
-          // set by priority, then the tail by details age) was attempted.
+          // set by priority, then the tail by request age) was attempted.
           shedBelowCcu: outcome.skippedItems > 0 ? requested[outcome.attempted].priority : null,
-          oldestTailDetailsMinutes: plan.oldestTailDetailsMinutes,
+          oldestTailDetailsMinutes: oldestTailDetailsMinutes(plan.tailRequested, new Set(missing), now),
+          // The requested games Roblox did not answer: every requested game is answered, missing or skipped.
+          missing: missing.length,
+          missingSample: missing.slice(0, config.missingSampleSize),
           http: httpMetricsSince(httpBefore),
           newGames: upsert.inserted.length,
           metadataChanges: upsert.metadataChanged.length,

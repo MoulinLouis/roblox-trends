@@ -53,6 +53,9 @@ describe.skipIf(!hasTestDatabase)("selectActiveUniverses", () => {
     // and game 3's from the census, so neither depends on its stored CCU.
     await database.db.update(games).set({ lastCcuAt: new Date("2026-10-20T09:00:00Z") }).where(eq(games.universeId, 2));
     await database.db.update(games).set({ lastCcuAt: null }).where(eq(games.universeId, 3));
+    // Poll requested game 2 at 13:00 and got no answer; it requested game 1 at 13:50, before its latest details.
+    await database.db.update(games).set({ detailsAttemptedAt: new Date("2026-10-20T13:00:00Z") }).where(eq(games.universeId, 2));
+    await database.db.update(games).set({ detailsAttemptedAt: new Date("2026-10-20T13:50:00Z") }).where(eq(games.universeId, 1));
   });
 
   afterAll(async () => {
@@ -60,17 +63,23 @@ describe.skipIf(!hasTestDatabase)("selectActiveUniverses", () => {
   });
 
   // lastDetailsAt is when the game's details were last stored (games.last_ccu_at); null when they never were.
+  // lastDetailsRequestAt is the later of that and games.details_attempted_at; null when neither is set.
   const expected = [
-    { universeId: 1, priority: 5_000, lastDetailsAt: now },
-    { universeId: 2, priority: 800, lastDetailsAt: new Date("2026-10-20T09:00:00Z") },
-    { universeId: 10, priority: 300, lastDetailsAt: now },
-    { universeId: 3, priority: 120, lastDetailsAt: null },
-    { universeId: 11, priority: 50, lastDetailsAt: now },
-    { universeId: 4, priority: 10, lastDetailsAt: now },
-    { universeId: 9, priority: 0, lastDetailsAt: now },
+    { universeId: 1, priority: 5_000, lastDetailsAt: now, lastDetailsRequestAt: now },
+    {
+      universeId: 2,
+      priority: 800,
+      lastDetailsAt: new Date("2026-10-20T09:00:00Z"),
+      lastDetailsRequestAt: new Date("2026-10-20T13:00:00Z"),
+    },
+    { universeId: 10, priority: 300, lastDetailsAt: now, lastDetailsRequestAt: now },
+    { universeId: 3, priority: 120, lastDetailsAt: null, lastDetailsRequestAt: null },
+    { universeId: 11, priority: 50, lastDetailsAt: now, lastDetailsRequestAt: now },
+    { universeId: 4, priority: 10, lastDetailsAt: now, lastDetailsRequestAt: now },
+    { universeId: 9, priority: 0, lastDetailsAt: now, lastDetailsRequestAt: now },
   ];
 
-  it("selects busy, recently busy, census-visible and young active games by priority, with their details age", async () => {
+  it("selects busy, recently busy, census-visible and young active games by priority, with their details and request times", async () => {
     expect(await selectActiveUniverses(database.db, now)).toEqual(expected);
   });
 

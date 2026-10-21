@@ -72,6 +72,8 @@ describe("formatStatusReport", () => {
             http: { attempts: 80, retries: 4, rateLimitedResponses: 4, endpointIntervalMs: { "games.roblox.com/v1/games": 10_500 } },
             requested: 3_150,
             skipped: 600,
+            missing: 1,
+            missingSample: [3_269_082_462],
             shedBelowCcu: 63,
             oldestTailDetailsMinutes: 31,
           },
@@ -101,8 +103,8 @@ describe("formatStatusReport", () => {
         "         listQuality=success listed=4000 rejected=12 resolved=0 resolutionFailures=3 deferred=40 rateLimited=false",
         "         promotionError: Game details request failed: 503 Service Unavailable",
         "poll     failed 7m ago    success 11m ago    288         3       2             1      12/20,160",
-        "         rateLimited=true stoppedBy=error http.rateLimitedResponses=4 requested=3150 skipped=600 shedBelowCcu=63",
-        '         oldestTailDetailsMinutes=31 http.endpointIntervalMs={"games.roblox.com/v1/games":10500}',
+        "         rateLimited=true stoppedBy=error http.rateLimitedResponses=4 requested=3150 skipped=600 missing=1",
+        '         shedBelowCcu=63 oldestTailDetailsMinutes=31 http.endpointIntervalMs={"games.roblox.com/v1/games":10500}',
         "         error 7m ago: poll exceeded 270000 ms",
         "votes    failed 3d ago    never                0         0       0",
         "         error 3d ago: votes went quiet",
@@ -121,7 +123,7 @@ describe("formatStatusReport", () => {
       completed("poll", { rateLimited: false, stoppedBy: null, http: {}, skipped: 0, shedBelowCcu: null, oldestTailDetailsMinutes: null }),
       completed("census", { listQuality: "success", listed: 7_800 }),
     ]);
-    expect(lines).toContain("rateLimited=false stoppedBy=- http.rateLimitedResponses=- requested=- skipped=0 shedBelowCcu=-");
+    expect(lines).toContain("rateLimited=false stoppedBy=- http.rateLimitedResponses=- requested=- skipped=0 missing=- shedBelowCcu=-");
     expect(lines).toContain("oldestTailDetailsMinutes=- http.endpointIntervalMs=-");
     expect(lines).toContain("listQuality=success listed=7800 rejected=- resolved=- resolutionFailures=- deferred=- rateLimited=-");
     expect(lines.some((line) => line.startsWith("promotionError") || line.startsWith("listError"))).toBe(false);
@@ -194,6 +196,7 @@ describe("formatStatusReport", () => {
         http: { rateLimitedResponses: 12_345, endpointIntervalMs: { "games.roblox.com/v1/games": 30_000 } },
         requested: 123_456,
         skipped: 12_345,
+        missing: 123_456,
         shedBelowCcu: 12_345,
         oldestTailDetailsMinutes: 12_345,
       },

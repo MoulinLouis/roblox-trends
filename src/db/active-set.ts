@@ -6,8 +6,12 @@ export interface ActiveUniverse {
   universeId: number;
   priority: number;
   // When the game's details were last stored (games.last_ccu_at, set by poll and by every promotion); null when they
-  // never were. Poll rotates its tail on it.
+  // never were. Poll reports how old they are.
   lastDetailsAt: Date | null;
+  // When the game's details were last requested, answered or not: the later of lastDetailsAt and
+  // games.details_attempted_at, which poll sets for every game it requests; null when neither is set. Poll rotates its
+  // tail on it, so a game Roblox does not answer waits behind the others like a game it polled.
+  lastDetailsRequestAt: Date | null;
 }
 
 // Games worth polling, highest priority first: poll's hot set is the head of this order, and votes' deadline shedding
@@ -19,7 +23,12 @@ export interface ActiveUniverse {
 export async function selectActiveUniverses(db: Database, now: Date): Promise<ActiveUniverse[]> {
   const config = ACTIVE_SET_CONFIG;
   const at = now.toISOString();
-  const result = await db.execute<{ universe_id: string; priority: number; last_details_at: Date | string | null }>(sql`
+  const result = await db.execute<{
+    universe_id: string;
+    priority: number;
+    last_details_at: Date | string | null;
+    last_details_request_at: Date | string | null;
+  }>(sql`
     with recent as (
       select universe_id, max(ccu_max) as peak
       from game_hourly
@@ -41,6 +50,7 @@ export async function selectActiveUniverses(db: Database, now: Date): Promise<Ac
         g.roblox_created_at,
         g.last_active_at,
         g.last_ccu_at,
+        g.details_attempted_at,
         greatest(
           coalesce(r.peak, 0),
           coalesce(c.ccu, 0),
@@ -53,7 +63,12 @@ export async function selectActiveUniverses(db: Database, now: Date): Promise<Ac
       left join recent r on r.universe_id = g.universe_id
       left join census_now c on c.universe_id = g.universe_id
     )
-    select universe_id, priority::int as priority, last_ccu_at as last_details_at
+    select
+      universe_id,
+      priority::int as priority,
+      last_ccu_at as last_details_at,
+      -- greatest() ignores nulls: null only when the game was neither stored nor requested.
+      greatest(last_ccu_at, details_attempted_at) as last_details_request_at
     from candidates
     where priority >= ${config.minimumCcu}
        or (
@@ -65,6 +80,11 @@ export async function selectActiveUniverses(db: Database, now: Date): Promise<Ac
   return result.rows.map((row) => ({
     universeId: Number(row.universe_id),
     priority: Number(row.priority),
-    lastDetailsAt: row.last_details_at === null ? null : new Date(row.last_details_at),
+    lastDetailsAt: toDate(row.last_details_at),
+    lastDetailsRequestAt: toDate(row.last_details_request_at),
   }));
+}
+
+function toDate(value: Date | string | null): Date | null {
+  return value === null ? null : new Date(value);
 }

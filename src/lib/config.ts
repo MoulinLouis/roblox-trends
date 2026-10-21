@@ -86,8 +86,9 @@ export const JOB_CONFIG = {
     batchSize: 50,
     // The active set (about 4,300 games on 2026-10-21, growing toward 5,000 as census promotes every place at or above
     // 100 CCU) no longer fits one run. Each run requests the hot set, the first hotUniverses of the active set in
-    // priority order, then at most tailUniversesPerRun of the other games, the tail, whose details are the oldest
-    // (never stored first). The hot set goes first, so the deadline sheds tail games before any hot game.
+    // priority order, then at most tailUniversesPerRun of the other games, the tail, whose details were stored or
+    // requested the longest ago (never either first): a game Roblox does not answer is retried once per tail cycle,
+    // not on every run. The hot set goes first, so the deadline sheds tail games before any hot game.
     // Hot 2,000 = 40 requests, plus tail 1,150 = 23 requests, gives 63 requests × 7 s ≈ 441 s, within the 450 s
     // deadline. With about 2,300–3,000 tail games, each is refreshed every 20–30 minutes; census still counts their CCU
     // every 10 minutes.
@@ -96,6 +97,8 @@ export const JOB_CONFIG = {
     // Of the games requested (the hot set and the tail slice), not of the whole active set.
     minimumReturnedShare: 0.95,
     maximumConsecutiveFailedBatches: 3,
+    // Universe ids of the requested games Roblox did not answer, kept in the run's stats (missingSample).
+    missingSampleSize: 10,
   },
   votes: {
     intervalMinutes: 60,

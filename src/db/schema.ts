@@ -46,6 +46,9 @@ export const games = pgTable(
     thumbnailsCheckedAt: timestamptz("thumbnails_checked_at"),
     // The latest thumbnail request, answered or not: a game never checked is retried only once this is old enough.
     thumbnailsAttemptedAt: timestamptz("thumbnails_attempted_at"),
+    // The latest poll request for the game's details, answered or not. Poll rotates its tail on the later of this and
+    // last_ccu_at, so a game Roblox does not answer waits behind the others instead of heading the tail forever.
+    detailsAttemptedAt: timestamptz("details_attempted_at"),
   },
   (table) => [
     index("games_roblox_created_idx").on(table.robloxCreatedAt),

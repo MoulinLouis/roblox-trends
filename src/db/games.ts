@@ -126,6 +126,26 @@ export async function upsertGameDetails(db: Database, details: RobloxGameDetail[
   return { inserted, metadataChanged };
 }
 
+// Records every game poll requested, answered or not, in one statement: a game Roblox does not answer keeps its old
+// details, and without this time it would head the tail of every run. An older run that finishes last keeps the newer
+// time. Rows are locked in universe-id order first, like every other writer to games, so concurrent writers cannot
+// deadlock with it.
+export async function markGameDetailsAttempted(db: Database, universeIds: number[], attemptedAt: Date): Promise<void> {
+  if (universeIds.length === 0) return;
+  await db.execute(sql`
+    with locked as materialized (
+      select universe_id from games
+      where universe_id = any(${sql.param(universeIds)}::bigint[])
+      order by universe_id
+      for update
+    )
+    update games g
+    set details_attempted_at = greatest(g.details_attempted_at, ${attemptedAt.toISOString()}::timestamptz)
+    from locked
+    where g.universe_id = locked.universe_id
+  `);
+}
+
 export async function knownUniverseIds(db: Database, universeIds: number[]): Promise<Set<number>> {
   const known = new Set<number>();
   for (const part of chunk([...new Set(universeIds)], 5_000)) {
