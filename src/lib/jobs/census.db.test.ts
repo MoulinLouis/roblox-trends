@@ -3,6 +3,7 @@ import { desc, eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { finishJobRun, startJobRun } from "@/db/job-runs";
 import { censusObservations, discoverySources, games, jobRuns, places } from "@/db/schema";
+import { censusCoverage } from "@/db/status";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/test-database";
 import { HttpError } from "@/lib/api/http";
 import type { RolimonsGame } from "@/lib/api/rolimons";
@@ -17,6 +18,7 @@ const config = JOB_CONFIG.census;
 const now = new Date("2026-10-20T14:13:00Z");
 const hourMs = 60 * 60 * 1000;
 const universesUrl = "https://apis.roblox.com/universes/v1/places";
+const rolimonsUrl = "https://api.rolimons.com/games/v1/gamelist";
 
 function place(placeId: number, ccu: number): RolimonsGame {
   return { placeId: String(placeId), name: `Place ${placeId}`, ccu, thumbnailUrl: "" };
@@ -297,7 +299,42 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
       promoted: 0,
       promotionError: expect.stringMatching(/^Game details request failed: 503/),
     });
-    expect(WATCHED_STATS.census?.messages?.filter((path) => !hasStat(stats, path))).toEqual([]);
+    expect(WATCHED_STATS.census?.messages).toContain("promotionError");
+  });
+
+  it("degrades the run on a Rolimon's outage and keeps the last good list as the reference", async () => {
+    const goodListAt = hoursAgo(1);
+    await recordRun("success", { listed: config.minimumListed * 2, listQuality: "success" }, goodListAt);
+    const outage = censusJob([], {
+      fetchGames: async () => {
+        throw new HttpError(503, "Service Unavailable", rolimonsUrl);
+      },
+    });
+
+    expect(await executeJob(outage, database.db, now)).toBe("degraded");
+    expect(await database.db.select().from(censusObservations)).toEqual([]);
+    const stats = await lastRunStats();
+    expect(stats).toEqual({
+      listed: null,
+      rejected: null,
+      listQuality: "failed",
+      eligible: 0,
+      resolved: 0,
+      unresolvable: 0,
+      resolutionFailures: 0,
+      deferred: 0,
+      rateLimited: false,
+      promotionRequested: 0,
+      promoted: 0,
+      listError: "503 Service Unavailable for api.rolimons.com",
+    });
+    expect(WATCHED_STATS.census?.values.filter((path) => !hasStat(stats, path))).toEqual([]);
+    expect(WATCHED_STATS.census?.messages).toContain("listError");
+    // Status coverage and the next run's size check still use the good list, not the run that has none.
+    const coverage = await censusCoverage(database.db, new Date(), { minimumCcu: 100, withinMinutes: 15, listWithinHours: 24 });
+    expect(coverage.slot).toEqual(goodListAt);
+    expect(await executeJob(censusJob(filler()), database.db, now)).toBe("degraded");
+    expect(await lastRunStats()).toMatchObject({ listed: config.minimumListed, listQuality: "degraded" });
   });
 
   it("fails the run when the database fails during promotion", async () => {

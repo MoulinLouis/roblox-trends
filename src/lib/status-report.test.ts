@@ -120,7 +120,24 @@ describe("formatStatusReport", () => {
     ]);
     expect(lines).toContain("rateLimited=false stoppedBy=- http.rateLimitedResponses=- skipped=0 shedBelowCcu=-");
     expect(lines).toContain("listQuality=success listed=7800 rejected=- resolved=- resolutionFailures=- deferred=- rateLimited=-");
-    expect(lines.some((line) => line.startsWith("promotionError"))).toBe(false);
+    expect(lines.some((line) => line.startsWith("promotionError") || line.startsWith("listError"))).toBe(false);
+  });
+
+  it("shows why a census run has no list", () => {
+    const lines = reportLines([
+      completed("census", {
+        listQuality: "failed",
+        listed: null,
+        rejected: null,
+        resolved: 0,
+        resolutionFailures: 0,
+        deferred: 0,
+        rateLimited: false,
+        listError: "503 Service Unavailable for api.rolimons.com",
+      }),
+    ]);
+    expect(lines).toContain("listQuality=failed listed=- rejected=- resolved=0 resolutionFailures=0 deferred=0 rateLimited=false");
+    expect(lines).toContain("listError: 503 Service Unavailable for api.rolimons.com");
   });
 
   it("wraps watched stats that do not fit on one line", () => {

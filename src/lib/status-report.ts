@@ -17,7 +17,8 @@ export const WATCHED_STATS: Partial<Record<JobName, { values: readonly string[];
   census: {
     // A run can be degraded while its list passed: a stalled resolution or a failed promotion explains it.
     values: ["listQuality", "listed", "rejected", "resolved", "resolutionFailures", "deferred", "rateLimited"],
-    messages: ["promotionError"],
+    // listError: the Rolimon's list could not be read (listQuality "failed").
+    messages: ["listError", "promotionError"],
   },
   // stoppedBy tells games shed at the deadline from games skipped after a rate limit or repeated failed batches.
   poll: { values: ["rateLimited", "stoppedBy", "http.rateLimitedResponses", "skipped", "shedBelowCcu"] },

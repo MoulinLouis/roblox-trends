@@ -60,8 +60,36 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
     intervalMinutes: config.intervalMinutes,
     timeoutMs: config.timeoutMs,
     async run({ db, now, slot }) {
+      let list: RolimonsGameList;
+      try {
+        list = await dependencies.fetchGames();
+      } catch (error) {
+        // Only the request is guarded: a Rolimon's outage (an error status, a network failure or a broken envelope)
+        // degrades the run while poll keeps sampling the tracked games. A database error below still fails the run.
+        const listError = errorMessage(error);
+        logger.error("Rolimon's list request failed; retrying next run", { error: listError });
+        return {
+          status: "degraded",
+          stats: {
+            // Every stat of a normal run is present, so `npm run status` prints the run like any other.
+            listed: null,
+            rejected: null,
+            // Neither the analysis nor the baseline of later runs takes this run: both select listQuality "success".
+            listQuality: "failed",
+            eligible: 0,
+            resolved: 0,
+            unresolvable: 0,
+            resolutionFailures: 0,
+            deferred: 0,
+            rateLimited: false,
+            promotionRequested: 0,
+            promoted: 0,
+            listError,
+          },
+        };
+      }
       // The parser only accepts canonical place ids, so Number(placeId) is exact.
-      const { games: listed, rejected } = await dependencies.fetchGames();
+      const { games: listed, rejected } = list;
       await writeCensusObservations(
         db,
         listed.map((game) => ({ placeId: Number(game.placeId), observedAt: slot, ccu: Math.round(game.ccu) })),
