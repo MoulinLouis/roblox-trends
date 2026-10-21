@@ -1,6 +1,6 @@
 # Roblox Trend Radar
 
-Roblox Trend Radar tracks Roblox games to answer three questions: which Roblox formats convert right now, what is breaking out early, and whether a concept still has room. The v1 radar answered them late: games that later passed 10,000 CCU were first seen at a median of 6,216 CCU, only 54% of the Rolimon's games above 100 CCU were tracked in detail, and irregular GitHub Actions runs captured 37–58% of the real weekend peaks of the owner's game. v2 rebuilds the data core on one server: every place listed by Rolimon's is counted every 10 minutes, every active game is polled every 5 minutes, and the history lives in PostgreSQL with TimescaleDB, so the database computes the aggregates. This branch implements phase 1a, the data core: schema, collectors, legacy history import and a status command. Classification, analysis and the dashboard follow in later phases.
+Roblox Trend Radar tracks Roblox games to answer three questions: which Roblox formats convert right now, what is breaking out early, and whether a concept still has room. The v1 radar answered them late: games that later passed 10,000 CCU were first seen at a median of 6,216 CCU, only 54% of the Rolimon's games above 100 CCU were tracked in detail, and irregular GitHub Actions runs captured 37–58% of the real weekend peaks of the owner's game. v2 rebuilds the data core on one server: every place listed by Rolimon's is counted every 10 minutes, every active game is polled every 5 minutes, and the history lives in PostgreSQL with TimescaleDB, so the database computes the aggregates. This branch implements phase 1a, the data core: schema, collectors, legacy history import and a status command. Phase 1b runs it on one production server (see Production). Classification, analysis and the dashboard follow in later phases.
 
 ## Architecture
 
@@ -70,11 +70,13 @@ The full design is in [`docs/plans/2026-10-20-radar-v2-design.md`](docs/plans/20
 src/lib/jobs/     Collectors, the job runner and Healthchecks pings
 src/lib/api/      Roblox and Rolimon's clients, parsers and the HTTP client
 src/lib/legacy/   v1 history import
+src/lib/ops/      Healthchecks provisioning and system check logic
 src/lib/          Configuration, time slots, fingerprints, status report
 src/components/   React components (navigation, interactive area chart)
 src/db/           Drizzle schema, client, migrations runner and repositories
 src/app/          Next.js application shell
-scripts/          job, collect, import-legacy, status, migrate
+scripts/          job, collect, import-legacy, status, migrate, provision-healthchecks, system-check
+ops/              Server units (systemd), PostgreSQL configuration and shell scripts (docs/operations.md)
 drizzle/          SQL migrations (0001 holds the TimescaleDB objects)
 ```
 
@@ -113,7 +115,8 @@ npm run status
 | `DATABASE_URL` | The v2 database. Required by every command that connects to it. |
 | `TEST_DATABASE_URL` | Server for the database test suites, set in `.env.test.local` (see Tests). |
 | `LEGACY_DATABASE_URL` | The v1 production database, read only by `npm run import:legacy`. Never use it as `DATABASE_URL`. |
-| `HEALTHCHECKS_PING_BASE` | Healthchecks.io ping base, for example `https://hc-ping.com/<ping-key>`. Checks are created on first ping with Healthchecks' default 1-day period, so they alert about 25 hours late until phase 1b provisions the real periods. Without it, no ping is sent. |
+| `HEALTHCHECKS_PING_BASE` | Healthchecks.io ping base, for example `https://hc-ping.com/<ping-key>`. Checks are created on first ping with Healthchecks' default 1-day period, so they alert about 25 hours late until `npm run provision:healthchecks` sets the real periods. Without it, no ping is sent. |
+| `HEALTHCHECKS_API_KEY` | Read-write Healthchecks API key, read from the environment only (not from `.env.local`) by `npm run provision:healthchecks`. Never stored on the server. |
 | `RADAR_REQUIRE_HEALTHCHECKS` | `1` makes `npm run job` and `npm run system-check` refuse to run without `HEALTHCHECKS_PING_BASE`. |
 | `ROBLOX_COUNTRY`, `ROBLOX_DEVICE` | Charts filters; default `all` and `computer`. |
 
@@ -129,6 +132,8 @@ Every command that connects to the database refuses one that still holds v1 tabl
 | `npm run status` | Prints, per job, the latest and last completed run, the runs, degraded and failed counts over the last 24 hours, rate-limited runs and 429s per request, the watched census and poll stats and the last error; then the coverage of Rolimon's places at or above 100 CCU polled within 15 minutes, and data totals. |
 | `npm run db:generate` | Generates a migration from `src/db/schema.ts` into `drizzle/`. Schema changes go into new migrations. It reads only the schema and the snapshots: `drizzle.config.ts` holds no database credentials, so `drizzle-kit push` and `studio`, which would bypass the v1 guard, never pick up `DATABASE_URL`. |
 | `npm run db:migrate` | Applies the migrations in `drizzle/`. Sets `lock_timeout` to 10 s, so a migration blocked behind a running job fails instead of queueing every later query behind it. Exits 1 when it failed. |
+| `npm run provision:healthchecks` | Creates or updates, by slug, the 16 Healthchecks checks (a heartbeat and a quality check per job, plus `radar-deploy`, `radar-system`, `radar-backup` and `radar-restore-test`) with the periods of `JOB_CONFIG` and the graces of `HEALTHCHECKS_CONFIG`, and attaches every integration of the project. Needs `HEALTHCHECKS_API_KEY`; exits 2 without it and 1 when a check was not provisioned. Run it after any change of either configuration. |
+| `npm run system-check` | Checks disk usage (limit 70%), WAL archiving (a segment archived within the last 30 minutes) and the TimescaleDB policies (paused, or without success for 3 schedule intervals and at least 60 minutes), with the limits of `SYSTEM_CHECK_CONFIG`, and pings `radar-system`. Exits 1 on any problem. In production `radar-system-check.timer` runs it every 15 minutes. |
 | `npm run validate` | Runs lint, typecheck, tests and the production build. |
 
 ## Tests
@@ -167,4 +172,11 @@ The retry behavior follows Roblox's [rate-limit guidance](https://create.roblox.
 
 ## Production
 
-Phase 1b provisions the server: the systemd timers (one per job, with the intervals of `JOB_CONFIG`), backups, the Healthchecks checks, and deployment from the `radar-v2` branch until cutover. Until then the v1 collector keeps running from `main`. The full list is in the phase 1a plan, under [Out of scope for this plan (phase 1b)](docs/plans/2026-10-20-radar-v2-phase-1a-data-core.md#out-of-scope-for-this-plan-phase-1b).
+v2 runs on one server, `radar-prod`: a Hetzner Cloud CAX21 (4 arm64 vCPU, 8 GB RAM, 80 GB disk) with Ubuntu 24.04, PostgreSQL 18.6 with TimescaleDB 2.30.2 and Node.js 24. Only the tailnet reaches it: public SSH is closed, and the dashboard is served by `tailscale serve` at `https://radar-prod.tail6e77de.ts.net`.
+
+- Timers: one systemd timer per job, with the intervals of `JOB_CONFIG`, plus the deploy, the system check, the backups and the restore test (`ops/systemd`).
+- Backups: pgBackRest archives WAL continuously to Cloudflare R2 and takes a daily backup (full on Sundays), for 14 days of point-in-time recovery; a weekly job restores the latest backup into a scratch cluster and checks it.
+- Monitoring: 16 Healthchecks.io checks, provisioned by `npm run provision:healthchecks`.
+- Deploys: every 5 minutes, the server deploys the newest commit of `radar-v2` once its CI passed. Until the phase 4 cutover, v1 keeps running from `main` on GitHub Actions.
+
+The runbook, with the layout, access, secrets, deploys, recovery, alerts and maintenance, is [`docs/operations.md`](docs/operations.md); the phase 1b plan with its execution notes is [`docs/plans/2026-10-21-radar-v2-phase-1b-infrastructure.md`](docs/plans/2026-10-21-radar-v2-phase-1b-infrastructure.md).

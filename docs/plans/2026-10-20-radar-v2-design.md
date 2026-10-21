@@ -1,6 +1,6 @@
 # Roblox Trend Radar v2 design
 
-Validated with the repository owner on 2026-10-20. Updated on 2026-10-21 to match the phase 1a implementation (sections 2 and 3).
+Validated with the repository owner on 2026-10-20. Updated on 2026-10-21 to match the phase 1a implementation (sections 2 and 3) and the phase 1b server (section 1).
 
 ## Why a v2
 
@@ -31,21 +31,22 @@ Out of scope for now:
 
 ## 1. Architecture and infrastructure
 
-- One Hetzner Cloud CX33 server (4 vCPU, 8 GB RAM, 80 GB NVMe, Ubuntu 24.04 LTS, EU location). The server costs €8.99 per month excluding VAT, plus 20% for Hetzner backups, about €11 per month in total.
+- One Hetzner Cloud CAX21 server (4 Ampere arm64 vCPU, 8 GB RAM, 80 GB disk, Ubuntu 24.04 LTS, Germany). It costs €10.99 per month excluding VAT, plus 20% for Hetzner backups, about €13.20 per month in total. The CX33 planned first was sold out in every EU location, and Ubuntu 26.04 lacks the TimescaleDB community packages: Timescale publishes only the Apache-licensed edition for it, without compression or continuous aggregates.
 - PostgreSQL 18 with TimescaleDB (community edition, which includes compression, continuous aggregates and retention policies).
 - The Next.js dashboard and all jobs run on the same server. Jobs are systemd services triggered by systemd timers. systemd prevents a service from overlapping with itself, which replaces the v1 lease and slot reconciliation.
 - Access:
+  - Public SSH is closed and only the tailnet reaches the server: ufw admits only the Tailscale interface and Tailscale's UDP port, and a Hetzner Cloud Firewall admits only inbound UDP 41641. The owner logs in as root over SSH through Tailscale, with keys only.
   - The owner reaches the dashboard through Tailscale only, with a private HTTPS address served by `tailscale serve`. The app has no public port.
-  - AI analysis sessions connect over an SSH tunnel with a read-only PostgreSQL role.
+  - AI analysis sessions log in as the `analysis` user over SSH, mapped to the read-only PostgreSQL role by peer authentication (no password); local tools reach the same socket through an SSH tunnel.
 - Backups:
-  - pgBackRest continuously archives WAL and stores base backups in an S3-compatible bucket at another provider (Cloudflare R2 or Backblaze B2), giving 14 days of point-in-time recovery.
+  - pgBackRest continuously archives WAL and stores encrypted base backups in an S3-compatible bucket at another provider (Cloudflare R2, with Backblaze B2 as the fallback), giving 14 days of point-in-time recovery.
   - Hetzner takes a daily server backup.
   - An automated weekly job restores the latest backup into a scratch database and checks row counts.
-- Monitoring: Healthchecks.io runs one check per job with its real period, plus checks for disk usage above 70%, backup completion and the restore test. Notifications go to email or Telegram.
+- Monitoring: Healthchecks.io runs two checks per job with its real period (one for every completed run, one for fully successful runs only), plus checks for the deploy timer, the system (disk usage above 70%, WAL archiving, TimescaleDB policies), backup completion and the restore test. Notifications go to email or Telegram.
 - Deployment:
   - GitHub Actions keeps CI.
-  - After CI passes on `main`, a deploy job connects over SSH, pulls, builds, migrates and restarts. Deploys are event-triggered, so GitHub's scheduled-workflow delays and the 60-day inactivity rule no longer apply.
-- Reproducibility: a provisioning script and an operations runbook in the repository rebuild the server from scratch in about 30 minutes.
+  - Deployment is pull-based: a timer on the server deploys, every 5 minutes, the newest commit of the deploy branch (`radar-v2` until the phase 4 cutover, then `main`) whose CI passed, so the server accepts no inbound connection except over Tailscale and GitHub holds no credential for it. It builds the release beside the live one, migrates (pausing the job timers only for migrations), switches the live release and restarts the dashboard. GitHub's scheduled-workflow delays and the 60-day inactivity rule do not apply.
+- Reproducibility: a provisioning script (`ops/bin/provision.sh`) and an operations runbook (`docs/operations.md`) rebuild the server from scratch and restore the database from the backups.
 - Local development: PGlite cannot load TimescaleDB, so local development uses a Docker container running PostgreSQL with TimescaleDB.
 
 ## 2. Data model

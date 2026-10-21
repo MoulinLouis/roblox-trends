@@ -3,7 +3,8 @@
 - Write all source code, identifiers, comments, tests, documentation, configuration, logs, and UI copy in English.
 - Communicate with the repository owner in French.
 - Keep the product as one Next.js application backed by one PostgreSQL 18 database with TimescaleDB.
-- Put reusable domain logic in `src/lib`, persistence in `src/db`, pages in `src/app`, and scheduled entry points in `scripts`.
+- Put reusable domain logic in `src/lib`, persistence in `src/db`, pages in `src/app`, scheduled and operations entry points in `scripts`, and server units, configuration and shell scripts in `ops`.
+- Production runs on one server described in `docs/operations.md`; change it only through the repository and the runbook, never by hand-editing files that `ops/` manages.
 - Keep collection intervals, thresholds and limits centralized in `src/lib/config.ts`; avoid hidden constants in jobs or UI code.
 - Preserve collection idempotency (observations are keyed by slot) and isolate external-source failures.
 - Use `npm run db:migrate` and `npm run collect` for local setup with live data; `npm run status` reports collection health.
