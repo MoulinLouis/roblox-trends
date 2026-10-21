@@ -97,3 +97,6 @@ WHERE NOT EXISTS (
   SELECT 1 FROM game_daily observed
   WHERE observed.universe_id = legacy.universe_id AND observed.bucket = legacy.day
 );
+--> statement-breakpoint
+-- The 5-minute poll updates every active game; free space on each page lets those updates stay HOT (no index writes).
+ALTER TABLE games SET (fillfactor = 80);

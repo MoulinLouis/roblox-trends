@@ -30,8 +30,9 @@ export async function upsertGameDetails(db: Database, details: RobloxGameDetail[
           target: games.universeId,
           set: {
             rootPlaceId: sql`excluded.root_place_id`,
-            name: sql`excluded.name`,
-            description: sql`excluded.description`,
+            // Unchanged text keeps the stored value (and its TOAST pointer) instead of being rewritten every poll.
+            name: sql`case when ${games.metadataFingerprint} = excluded.metadata_fingerprint then ${games.name} else excluded.name end`,
+            description: sql`case when ${games.metadataFingerprint} = excluded.metadata_fingerprint then ${games.description} else excluded.description end`,
             creatorId: sql`excluded.creator_id`,
             creatorName: sql`excluded.creator_name`,
             creatorType: sql`excluded.creator_type`,

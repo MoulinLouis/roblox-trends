@@ -66,6 +66,13 @@ describe.skipIf(!hasTestDatabase)("v2 schema migrations", () => {
     expect(paused.rows).toEqual([{ paused: true }]);
   });
 
+  it("leaves free space in games pages for HOT updates", async () => {
+    const result = await database.db.execute<{ options: string[] | null }>(
+      sql`select reloptions as options from pg_class where oid = 'games'::regclass`,
+    );
+    expect(result.rows[0]?.options).toContain("fillfactor=80");
+  });
+
   it("refuses to migrate a database that still holds v1 tables", async () => {
     const legacy = await createTestDatabase({ migrate: false });
     try {
