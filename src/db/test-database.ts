@@ -59,8 +59,9 @@ async function pauseBackgroundJobs(db: Database): Promise<void> {
   throw new Error("TimescaleDB background jobs did not stop");
 }
 
-async function runAdminQuery(statement: string): Promise<void> {
-  const client = new Client({ connectionString: adminUrl });
+// Runs one statement (or a script of several) as the admin user, in the admin database or in `database`.
+export async function runAdminQuery(statement: string, database?: string): Promise<void> {
+  const client = new Client({ connectionString: database ? withDatabaseName(adminUrl, database) : adminUrl });
   await client.connect();
   try {
     await client.query(statement);
@@ -69,7 +70,7 @@ async function runAdminQuery(statement: string): Promise<void> {
   }
 }
 
-function withDatabaseName(url: string, name: string): string {
+export function withDatabaseName(url: string, name: string): string {
   const parsed = new URL(url);
   parsed.pathname = `/${name}`;
   return parsed.toString();
