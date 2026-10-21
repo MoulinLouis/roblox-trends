@@ -3332,7 +3332,7 @@ git push && gh run watch --exit-status
 - Generate: `drizzle/0002_thumbnail_key.sql`
 - Create: `src/db/thumbnails.ts`, `src/lib/jobs/thumbnails.ts`, `src/lib/jobs/thumbnails.db.test.ts`
 
-Roblox's thumbnail map (Task 5) has three cases per universe: a custom thumbnail `{ imageUrl, mediaId }`, `null` (Roblox answered that the game has no custom thumbnail), or no entry (pending, blocked, error, malformed or failed batch). A thumbnail version is keyed on the media asset id, so a CDN URL change for the same image never records a fake A/B test.
+Roblox's thumbnail map (Task 5) has four cases per universe: a custom thumbnail `{ imageUrl, mediaId }`; `null` (no usable custom thumbnail: none uploaded, or blocked by moderation); `"pending"` (still processing or in review: retried next run, but an answer, not a failure); or no entry (error, malformed item or failed batch). Coverage counts every answer, so only source failures degrade a run, and a run where Roblox answered for no game at all fails. A thumbnail version is keyed on the media asset id, so a CDN URL change for the same image never records a fake A/B test. When Roblox answers `null`, the previous thumbnail URL and key are kept on purpose: a transient empty answer must not erase history or record a fake change.
 
 **Step 1: Add the thumbnail key column and generate its migration**
 
@@ -3356,7 +3356,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { upsertGameDetails } from "@/db/games";
 import { games, gameVersions } from "@/db/schema";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/test-database";
-import type { GameThumbnail } from "@/lib/api/roblox";
+import type { GameThumbnailAnswer } from "@/lib/api/roblox";
 import { gameDetail } from "@/test/fixtures";
 import { executeJob } from "./runner";
 import { createThumbnailsJob } from "./thumbnails";
@@ -3366,14 +3366,14 @@ describe.skipIf(!hasTestDatabase)("thumbnails job", () => {
 
   beforeAll(async () => {
     database = await createTestDatabase();
-    await upsertGameDetails(database.db, [gameDetail(1), gameDetail(2), gameDetail(3)], new Date("2026-10-20T13:00:00Z"));
+    await upsertGameDetails(database.db, [gameDetail(1), gameDetail(2), gameDetail(3), gameDetail(4)], new Date("2026-10-20T13:00:00Z"));
   });
 
   afterAll(async () => {
     await database?.drop();
   });
 
-  function job(thumbnails: Record<string, GameThumbnail | null>) {
+  function job(thumbnails: Record<string, GameThumbnailAnswer>) {
     return createThumbnailsJob({
       roblox: {
         getGameThumbnails: async (ids) => new Map(ids.filter((id) => id in thumbnails).map((id) => [id, thumbnails[id]])),
@@ -3391,24 +3391,30 @@ describe.skipIf(!hasTestDatabase)("thumbnails job", () => {
     return database.db.select().from(gameVersions).where(eq(gameVersions.universeId, universeId));
   }
 
-  it("stores a custom thumbnail, marks a game without one as checked, and retries unknown games", async () => {
+  it("stores a custom thumbnail, marks a game without one as checked, and retries pending and unknown games", async () => {
     const status = await executeJob(
-      job({ "1": { imageUrl: "https://tr.rbxcdn.com/a/Image", mediaId: 101 }, "2": null }),
+      job({ "1": { imageUrl: "https://tr.rbxcdn.com/a/Image", mediaId: 101 }, "2": null, "4": "pending" }),
       database.db,
       new Date("2026-10-20T14:45:00Z"),
     );
-    expect(status).toBe("degraded"); // game 3 is unknown: 2 of 3 answered
+    expect(status).toBe("degraded"); // game 3 is unknown: 3 of 4 answered (pending counts as an answer)
     expect(await game(1)).toMatchObject({ thumbnailUrl: "https://tr.rbxcdn.com/a/Image", thumbnailKey: "media:101", iconUrl: "https://tr.rbxcdn.com/icon-1" });
     expect((await game(1)).thumbnailsCheckedAt).not.toBeNull();
     expect(await game(2)).toMatchObject({ thumbnailUrl: null, thumbnailKey: null });
     expect((await game(2)).thumbnailsCheckedAt).not.toBeNull();
     expect((await game(3)).thumbnailsCheckedAt).toBeNull();
     expect((await game(3)).iconUrl).toBe("https://tr.rbxcdn.com/icon-3");
+    expect((await game(4)).thumbnailsCheckedAt).toBeNull();
     expect((await thumbnailVersions(1)).filter((version) => version.kind === "thumbnail")).toHaveLength(1);
   });
 
   it("keys versions on the media id: a new URL for the same image is not a new version", async () => {
-    await executeJob(job({ "1": { imageUrl: "https://tr.rbxcdn.com/b/Image", mediaId: 101 }, "3": null }), database.db, new Date("2026-10-21T16:00:00Z"));
+    const status = await executeJob(
+      job({ "1": { imageUrl: "https://tr.rbxcdn.com/b/Image", mediaId: 101 }, "2": null, "3": null, "4": "pending" }),
+      database.db,
+      new Date("2026-10-21T16:00:00Z"),
+    );
+    expect(status).toBe("success"); // every game answered, one of them pending
     expect((await game(1)).thumbnailUrl).toBe("https://tr.rbxcdn.com/b/Image");
     expect((await thumbnailVersions(1)).filter((version) => version.kind === "thumbnail")).toHaveLength(1);
   });
@@ -3418,16 +3424,20 @@ describe.skipIf(!hasTestDatabase)("thumbnails job", () => {
     expect((await game(1)).thumbnailKey).toBe("media:202");
     expect((await thumbnailVersions(1)).filter((version) => version.kind === "thumbnail")).toHaveLength(2);
   });
+
+  it("fails when Roblox answers for no game at all", async () => {
+    expect(await executeJob(job({}), database.db, new Date("2026-10-23T18:00:00Z"))).toBe("failed");
+  });
 });
 ```
 
-Game 1 has `last_ccu = 100` (fixture default), at least `refreshMinimumCcu`, and each later run is more than 24 hours after the previous check, so it is refreshed. Game 3 is unknown in the first run, so it stays unchecked and is retried in the second run.
+Game 1 has `last_ccu = 100` (fixture default), at least `refreshMinimumCcu`, and each later run is more than 24 hours after the previous check, so it is refreshed. Games 3 (unknown) and 4 (pending) stay unchecked after the first run and are retried; game 4 stays pending and keeps being retried without degrading runs. The last test runs when games 2, 3 and 4 are due again, and an empty answer for all of them fails the run.
 
 **Step 3: Implement `src/db/thumbnails.ts`**
 
 ```ts
 import { eq, sql } from "drizzle-orm";
-import type { GameThumbnail } from "@/lib/api/roblox";
+import type { GameThumbnail, GameThumbnailAnswer } from "@/lib/api/roblox";
 import { urlFingerprint } from "@/lib/fingerprint";
 import type { Database } from "./client";
 import { games, gameVersions } from "./schema";
@@ -3459,11 +3469,12 @@ export async function selectGamesNeedingThumbnails(
   return result.rows.map((row) => ({ universeId: Number(row.universe_id), thumbnailKey: row.thumbnail_key }));
 }
 
-// A missing map entry means Roblox gave no answer for that game: only its icon is updated, and it stays due.
+// No entry (no answer) or "pending" (not ready yet): only the icon is updated, and the game stays due.
+// null (no usable custom thumbnail): the game is marked checked and its previous thumbnail is kept on purpose.
 export async function saveThumbnails(
   db: Database,
   targets: ThumbnailTarget[],
-  thumbnails: Map<string, GameThumbnail | null>,
+  thumbnails: Map<string, GameThumbnailAnswer>,
   icons: Map<string, string>,
   checkedAt: Date,
 ): Promise<{ changed: number }> {
@@ -3473,11 +3484,12 @@ export async function saveThumbnails(
       const id = String(target.universeId);
       const iconUrl = icons.get(id);
       const iconUpdate = iconUrl ? { iconUrl } : {};
-      if (!thumbnails.has(id)) {
+      const answer = thumbnails.get(id);
+      if (answer === undefined || answer === "pending") {
         if (iconUrl) await transaction.update(games).set(iconUpdate).where(eq(games.universeId, target.universeId));
         continue;
       }
-      const thumbnail = thumbnails.get(id) ?? null;
+      const thumbnail = answer;
       if (!thumbnail) {
         await transaction.update(games).set({ ...iconUpdate, thumbnailsCheckedAt: checkedAt }).where(eq(games.universeId, target.universeId));
         continue;
@@ -3506,7 +3518,7 @@ export async function saveThumbnails(
 
 ```ts
 import { saveThumbnails, selectGamesNeedingThumbnails } from "@/db/thumbnails";
-import type { GameThumbnail, RobloxApi } from "@/lib/api/roblox";
+import type { GameThumbnailAnswer, RobloxApi } from "@/lib/api/roblox";
 import { JOB_CONFIG } from "@/lib/config";
 import type { JobDefinition } from "./runner";
 
@@ -3527,18 +3539,24 @@ export function createThumbnailsJob(dependencies: ThumbnailsDependencies): JobDe
         limit: config.maximumGamesPerRun,
       });
       const ids = targets.map((target) => String(target.universeId));
-      const thumbnails = ids.length ? await dependencies.roblox.getGameThumbnails(ids) : new Map<string, GameThumbnail | null>();
+      const thumbnails = ids.length ? await dependencies.roblox.getGameThumbnails(ids) : new Map<string, GameThumbnailAnswer>();
+      if (ids.length && thumbnails.size === 0) {
+        throw new Error(`The thumbnail endpoint answered for none of ${ids.length} games`);
+      }
       const icons = ids.length ? await dependencies.roblox.getThumbnails(ids) : new Map<string, string>();
       const { changed } = await saveThumbnails(db, targets, thumbnails, icons, now);
-      const withThumbnail = [...thumbnails.values()].filter((thumbnail) => thumbnail !== null).length;
+      const answers = [...thumbnails.values()];
+      const pending = answers.filter((answer) => answer === "pending").length;
+      const withoutThumbnail = answers.filter((answer) => answer === null).length;
       return {
-        // Coverage counts every game Roblox answered for, including "no custom thumbnail".
+        // Coverage counts every answer, including "no custom thumbnail" and "pending"; only source failures degrade.
         status: ids.length && thumbnails.size / ids.length < 0.9 ? "degraded" : "success",
         stats: {
           checked: targets.length,
           answered: thumbnails.size,
-          withThumbnail,
-          withoutThumbnail: thumbnails.size - withThumbnail,
+          withThumbnail: thumbnails.size - pending - withoutThumbnail,
+          withoutThumbnail,
+          pending,
           icons: icons.size,
           changed,
         },
@@ -4375,6 +4393,7 @@ Expected: CI green with every database suite executed.
 - After Task 2 review: fingerprints use `toLowerCase()` (never locale-dependent casing) and tests pin their exact values. Metadata versions compare against `games.metadata_fingerprint` through PostgreSQL 18 `RETURNING old.*`, so reverts are recorded; the `game_versions` unique key includes `observed_at` to keep retries and imports idempotent.
 - After Task 3 review: raw retention is 365 days; aggregates keep min/avg/max CCU and visits as a maximum; `game_hourly` and `census_hourly` compress after 30 days; `chart_placements` is segmented by game. Test databases are created from `template0` (so `CREATE EXTENSION` runs as in production) and pause TimescaleDB jobs after migrating. The pool logs idle-client errors, times out connections after 10 s and sets `application_name`. Jobs and `collect` refuse to run against a database holding v1 tables. The legacy import never re-imports raw rows older than the retention window. `@next/env` is a direct dependency, pinned to the installed `next` version.
 - After Task 4 review: `executeJob` pings start before touching the database and abandons stale `running` rows; `scripts/job.ts` sends a fail ping when a job cannot even start, refuses to run without `HEALTHCHECKS_PING_BASE` when `RADAR_REQUIRE_HEALTHCHECKS=1`, sets `statement_timeout`/`lock_timeout`, and bounds the final pool close. A fully successful run also pings `radar-<job>-quality`, so sustained degradation alerts through that check's period. `latestSuccessfulRun(db, job, since)` replaces `latestCompletedRun`; the census baseline is the latest successful run of the last 6 hours. `errorMessage` includes the `cause` chain.
+- After Task 5 re-review: thumbnails also report `"pending"` (processing or in review), Blocked counts as no thumbnail, `countPerUniverse=3` falls back to an approved image, icons are best-effort per batch, and a thumbnails run where Roblox answered for no game fails.
 - After Task 5 review: `getGameThumbnails` uses `defaults=false` (with `defaults=true`, games without media come back as shared generic `GameMediaItem` images marked Completed), parses items one by one, and returns a custom thumbnail, `null` (no custom thumbnail) or no entry (unknown). Thumbnail versions are keyed on the media asset id through `games.thumbnail_key` (migration 0002).
 - Before phase 3: analysis must exclude every slot whose run was not `success` (failed runs can leave partial writes), not only degraded ones.
 - Before phase 3: raw SQL over aggregates returns `int8`, `numeric` and `timestamptz` as strings; convert with `Number()`/`new Date()` or declare the views with `pgView(...).existing()`. Exclude the partial current UTC day from daily analysis; `game_daily` computes it in real time.
