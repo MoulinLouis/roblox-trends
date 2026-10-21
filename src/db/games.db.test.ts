@@ -161,6 +161,28 @@ describe.skipIf(!hasTestDatabase)("game repositories", () => {
     expect(await unpromotedUniverses(database.db, [500, 1_000_001])).toEqual([50]);
   });
 
+  it("keeps a known place mapping when a later resolution fails", async () => {
+    await savePlaceResolution(database.db, { placeId: 900, universeId: 90, resolvedAt: first, error: null });
+    await savePlaceResolution(database.db, { placeId: 900, universeId: null, resolvedAt: second, error: "404" });
+    const [place] = await database.db.select().from(places).where(eq(places.placeId, 900));
+    expect(place).toEqual({ placeId: 900, universeId: 90, resolvedAt: first, error: null });
+  });
+
+  it("fills failed place resolutions from game details without overwriting known mappings", async () => {
+    await savePlaceResolution(database.db, { placeId: 1_000_030, universeId: null, resolvedAt: first, error: "404" });
+    await savePlaceResolution(database.db, { placeId: 1_000_031, universeId: 99, resolvedAt: first, error: null });
+    await upsertGameDetails(database.db, [gameDetail(30), gameDetail(31)], second);
+    const stored = await database.db
+      .select()
+      .from(places)
+      .where(inArray(places.placeId, [1_000_030, 1_000_031]))
+      .orderBy(places.placeId);
+    expect(stored).toEqual([
+      { placeId: 1_000_030, universeId: 30, resolvedAt: second, error: null },
+      { placeId: 1_000_031, universeId: 99, resolvedAt: first, error: null },
+    ]);
+  });
+
   it("records discoveries and widens their seen window", async () => {
     await recordDiscoveries(database.db, [
       { universeId: 1, source: "chart", detail: "top-trending", firstSeenAt: second, lastSeenAt: second },

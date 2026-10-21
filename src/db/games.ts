@@ -1,4 +1,4 @@
-import { inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { RobloxGameDetail } from "@/lib/api/roblox";
 import { chunk, uniqueBy } from "@/lib/arrays";
 import { contentFingerprint, rawFingerprint } from "@/lib/fingerprint";
@@ -85,6 +85,17 @@ export async function upsertGameDetails(db: Database, details: RobloxGameDetail[
         .insert(places)
         .values(part.map((detail) => ({ placeId: detail.rootPlaceId, universeId: detail.id, resolvedAt: observedAt, error: null })))
         .onConflictDoNothing();
+      // It also completes places whose resolution failed earlier. A separate UPDATE locks only those rows,
+      // whereas DO UPDATE ... WHERE would lock every conflicting place.
+      const mappings = sql.join(
+        part.map((detail) => sql`(${detail.rootPlaceId}::bigint, ${detail.id}::bigint)`),
+        sql`, `,
+      );
+      await transaction
+        .update(places)
+        .set({ universeId: sql`mapping.universe_id`, resolvedAt: observedAt, error: null })
+        .from(sql`(values ${mappings}) as mapping(place_id, universe_id)`)
+        .where(and(eq(places.placeId, sql`mapping.place_id`), isNull(places.universeId)));
     });
   }
   return { inserted, metadataChanged };

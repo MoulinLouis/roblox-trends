@@ -26,6 +26,8 @@ export async function savePlaceResolution(
     .onConflictDoUpdate({
       target: places.placeId,
       set: { universeId: sql`excluded.universe_id`, resolvedAt: sql`excluded.resolved_at`, error: sql`excluded.error` },
+      // A failed resolution never erases a known mapping.
+      setWhere: sql`excluded.universe_id is not null or ${places.universeId} is null`,
     });
 }
 
