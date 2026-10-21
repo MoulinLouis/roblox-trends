@@ -2039,6 +2039,33 @@ Every step is a **Gate**. v1 keeps running untouched; nothing here writes to Aiv
   - A new Healthchecks project.
   - `provision:healthchecks` created 15 checks and updated `radar-restore-test`, which an earlier ping had already created. The API key was shredded from the server.
   - The operations timers are enabled. First runs: system check OK, deploy up to date at `4df14d6`, differential backup OK.
+  - The automatic deploy shipped `b4a5d0e` about 3 minutes after the push.
+- B6 (2026-10-21):
+  - Aiven role `radar_v1_reader`, read-only, connected with `verify-full`. v1 runs PostgreSQL 18.6 and holds 589,415 snapshots, 6,573 games, 68,365 daily rows and 92,030 metadata rows.
+  - v1 dump: 50 MB, all 4 tables, read back in full, sha256 `9ac9570e…` identical on R2 at `radar-backups/v1/radar-v1-20261021T1543Z.dump`. rclone's first attempt got 501 and its retry succeeded.
+  - All 22 chart labels map.
+  - The import took about 90 s, with policies paused. It brought 6,573 games, 15,570 versions, 500,721 observations (2026-09-21 01:00 to 2026-10-21 15:00), 500,560 votes, 194,599 placements, 11,041 discoveries and 68,365 daily rows, with 0 unmapped labels, 0 invalid rows and no warning. The database reached 889 MB.
+  - Collection started at 15:47.
+- First production week, 2026-10-21. **The Games API details endpoint has a hidden per-IP limit.** `GET games.roblox.com/v1/games` throttles by universe ids, not by requests:
+  - At 500 ms spacing every poll run hit about 4 HTTP 429s, each with a 33–55 s wait, and fetched only 1,700–2,250 of 3,090 games.
+  - A clean probe of 50 ids every 2 s got a 429 at 300 ids in about 10 s.
+  - 1 id per request every 2 s, 40 times, got no 429.
+  - `x-ratelimit-*` kept reporting `300;w=60` with about 290 remaining while answering 429.
+  - The votes endpoint on the same host is unaffected: 79 requests in 39 s, no 429.
+  - 100 ids per request returns 400.
+
+  Decisions:
+  - Poll every 10 minutes, the design's fallback (`a608a8e`, `76f7b88`, `c879ac1`).
+  - The details endpoint alone is paced at 7 s per request, ×1.5 after a 429, capped at 30 s.
+  - A hot set of the 2,000 highest-priority games every run, plus 1,150 tail games per run chosen by the oldest `games.last_ccu_at` (`f48c207`, `1291d9e`).
+
+  First two-tier run (17:10): success. 3,149 of 3,150 requested, active set 4,607, 0 × 429, 436 s.
+
+  A controller mistake contaminated two of the probes. `systemctl stop radar-poll.timer` is undone within 5 minutes by the deploy run's self-heal; pausing must use `disable --now`, as the runbook says. Oneshot job units report `activating` while they run, so a wait loop must use `systemctl list-units --state=activating,active`, not `is-active`.
+- Follow-ups:
+  - The Healthchecks poll checks still have the 5-minute period (300 s plus 570 s grace, which covers the 10-minute runs). Re-provision with a temporary API key to set 600/840.
+  - Watch `oldestTailDetailsMinutes` settle at 20–30 min. The first run carried v1 timestamps, about 30 days old.
+  - Census, charts and explore promotions also call `/v1/games` from their own processes, with no cross-process pacing.
 
 ## Out of scope (later phases)
 
