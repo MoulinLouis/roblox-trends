@@ -1,0 +1,38 @@
+import { randomUUID } from "node:crypto";
+import { statfs } from "node:fs/promises";
+import { closeDatabaseWithin, getDatabase } from "@/db/client";
+import { assertNotLegacyDatabase } from "@/db/legacy-guard";
+import { readArchiver, readTimescaleJobs } from "@/db/system-health";
+import { DATABASE_SESSION_CONFIG, HEALTHCHECKS_CONFIG } from "@/lib/config";
+import { sendPing } from "@/lib/jobs/healthchecks";
+import { errorMessage, logger } from "@/lib/logger";
+import { evaluateSystemHealth } from "@/lib/ops/system-check";
+
+// Run every 15 minutes by radar-system-check.timer: disk usage, WAL archiving and the TimescaleDB policies, reported to
+// the radar-system check. Not being able to read them is reported as a failure too.
+const slug = HEALTHCHECKS_CONFIG.operations.system.slug;
+const runId = randomUUID();
+let exitCode = 1;
+try {
+  // Read-only and short, like `status`.
+  const database = getDatabase("radar-system-check", {
+    statementTimeoutMs: DATABASE_SESSION_CONFIG.statusStatementTimeoutMs,
+    lockTimeoutMs: DATABASE_SESSION_CONFIG.statusLockTimeoutMs,
+  });
+  await assertNotLegacyDatabase(database);
+  const [jobs, archiver, disk] = await Promise.all([readTimescaleJobs(database), readArchiver(database), statfs("/")]);
+  // The share df reports: blocks reserved for root count as neither used nor available.
+  const used = disk.blocks - disk.bfree;
+  const result = evaluateSystemHealth({ now: new Date(), diskUsedShare: used / (used + disk.bavail), archiver, jobs });
+  await sendPing(slug, result.ok ? "success" : "fail", runId, result.summary);
+  if (result.ok) logger.info("System check passed", { summary: result.summary });
+  else logger.error("System check failed", { problems: result.problems });
+  exitCode = result.ok ? 0 : 1;
+} catch (error) {
+  const message = errorMessage(error);
+  logger.error("System check could not run", { error: message });
+  await sendPing(slug, "fail", runId, message);
+}
+
+await closeDatabaseWithin(DATABASE_SESSION_CONFIG.closeTimeoutMs, { command: "system-check" });
+process.exit(exitCode);

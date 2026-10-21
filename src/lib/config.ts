@@ -198,3 +198,16 @@ export const HEALTHCHECKS_CONFIG = {
     },
   },
 } as const;
+
+// npm run system-check, every 15 minutes (radar-system-check.timer), reported to the radar-system check.
+export const SYSTEM_CHECK_CONFIG = {
+  // Past this share of the root filesystem there is still time to add a volume or prune before PostgreSQL stops.
+  maximumDiskUsedShare: 0.7,
+  // archive_timeout (ops/bin/configure-backups.sh) archives a WAL segment at least every 5 minutes while the database
+  // writes: no archive for this long means archiving stalled and point-in-time recovery stopped.
+  maximumArchiveAgeMinutes: 30,
+  // A TimescaleDB policy is late after this many schedule intervals without success (and at least the minimum):
+  // compression, retention and aggregate refreshes keep the active-set query fast and the disk bounded.
+  lateJobIntervals: 3,
+  minimumLateJobMinutes: 60,
+} as const;
