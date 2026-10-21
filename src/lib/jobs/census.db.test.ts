@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { finishJobRun, startJobRun } from "@/db/job-runs";
 import { censusObservations, discoverySources, games, jobRuns, places } from "@/db/schema";
@@ -290,7 +290,19 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
       listQuality: "success",
       promotionRequested: 1,
       promoted: 0,
-      promotionError: expect.stringContaining("503"),
+      promotionError: expect.stringMatching(/^Game details request failed: 503/),
     });
+  });
+
+  it("fails the run when the database fails during promotion", async () => {
+    // Recording the discovery is the last step of promotion, after the Games API answered.
+    await database.db.execute(sql`alter table discovery_sources rename to discovery_sources_hidden`);
+    try {
+      expect(await executeJob(censusJob([place(1, 500), ...filler()]), database.db, now)).toBe("failed");
+    } finally {
+      await database.db.execute(sql`alter table discovery_sources_hidden rename to discovery_sources`);
+    }
+    const [run] = await database.db.select().from(jobRuns).orderBy(desc(jobRuns.startedAt)).limit(1);
+    expect(run.error).toContain("discovery_sources");
   });
 });

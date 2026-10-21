@@ -6,7 +6,7 @@ import type { RobloxApi } from "@/lib/api/roblox";
 import type { RolimonsGame, RolimonsGameList } from "@/lib/api/rolimons";
 import { JOB_CONFIG } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
-import { promoteUniverses } from "./promotion";
+import { PromotionApiError, promoteUniverses } from "./promotion";
 import type { JobDefinition } from "./runner";
 
 export interface CensusDependencies {
@@ -126,8 +126,10 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
         );
         promoted = promotion.promoted;
       } catch (error) {
-        // The list and the resolutions are already stored, and the next run requests these universes again.
-        promotionError = errorMessage(error);
+        // Only a Games API failure is tolerated: the list and the resolutions are already stored, and the next run
+        // requests these universes again. A database error fails the run. The message already includes the cause.
+        if (!(error instanceof PromotionApiError)) throw error;
+        promotionError = error.message;
         logger.error("Promotion failed; retrying next run", { universes: universes.length, error: promotionError });
       }
       // No answer, and the run either stopped early (rate limit, budget) or failed repeatedly: the resolution API is

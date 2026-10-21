@@ -5,7 +5,7 @@ import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/tes
 import { HttpError } from "@/lib/api/http";
 import type { RobloxApi } from "@/lib/api/roblox";
 import { gameDetail } from "@/test/fixtures";
-import { promoteUniverses } from "./promotion";
+import { PromotionApiError, promoteUniverses } from "./promotion";
 
 const now = new Date("2026-10-20T14:00:00Z");
 
@@ -81,14 +81,24 @@ describe.skipIf(!hasTestDatabase)("promoteUniverses", () => {
     expect((await database.db.select().from(discoverySources)).map((row) => row.universeId)).toEqual([1]);
   });
 
-  it("throws a Games API error to the caller", async () => {
+  it("throws a Games API error to the caller as a PromotionApiError", async () => {
+    const apiError = new HttpError(503, "Service Unavailable", "https://games.roblox.com/v1/games");
     const api = {
       getGameDetails: async () => {
-        throw new HttpError(503, "Service Unavailable", "https://games.roblox.com/v1/games");
+        throw apiError;
       },
     };
 
-    await expect(promoteUniverses(database.db, api, [{ universeId: 1, source: "rolimons", detail: "" }], now)).rejects.toThrow("503");
+    const failure = await promoteUniverses(database.db, api, [{ universeId: 1, source: "rolimons", detail: "" }], now).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(PromotionApiError);
+    expect(failure).toMatchObject({
+      name: "PromotionApiError",
+      message: "Game details request failed: 503 Service Unavailable for games.roblox.com",
+      cause: apiError,
+    });
     expect(await database.db.select().from(games)).toEqual([]);
   });
 });

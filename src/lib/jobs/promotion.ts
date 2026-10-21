@@ -2,7 +2,17 @@ import type { Database } from "@/db/client";
 import { recordDiscoveries } from "@/db/discovery";
 import { knownUniverseIds, upsertGameDetails } from "@/db/games";
 import type { RobloxApi } from "@/lib/api/roblox";
+import { errorMessage } from "@/lib/logger";
 import type { DiscoverySource } from "./types";
+
+// The Games API failed, so callers may carry on and promote later. Database errors are not wrapped: they still fail
+// the run.
+export class PromotionApiError extends Error {
+  constructor(cause: unknown) {
+    super(`Game details request failed: ${errorMessage(cause)}`, { cause });
+    this.name = "PromotionApiError";
+  }
+}
 
 export interface PromotionCandidate {
   universeId: number;
@@ -25,7 +35,9 @@ export async function promoteUniverses(
   const unknown = universeIds.filter((universeId) => !knownBefore.has(universeId));
   let promoted = 0;
   if (unknown.length) {
-    const details = await roblox.getGameDetails(unknown.map(String));
+    const details = await roblox.getGameDetails(unknown.map(String)).catch((error: unknown) => {
+      throw new PromotionApiError(error);
+    });
     promoted = (await upsertGameDetails(db, details, now)).inserted.length;
   }
   const knownAfter = await knownUniverseIds(db, universeIds);
