@@ -157,18 +157,30 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
     expect(await lastRunStats()).toMatchObject({ resolved: 1, resolutionFailures: 1 });
   });
 
-  it("degrades the run when no attempted resolution succeeds", async () => {
-    const job = censusJob([place(1, 500), place(2, 400), ...filler()], {
-      roblox: {
-        ...roblox,
-        resolveUniverseId: async () => {
-          throw new Error("socket hang up");
-        },
-      },
-    });
+  const failingRoblox: CensusDependencies["roblox"] = {
+    ...roblox,
+    resolveUniverseId: async () => {
+      throw new Error("socket hang up");
+    },
+  };
+
+  it("keeps the run successful when a single place keeps failing", async () => {
+    const job = censusJob([place(1, 500), ...filler()], { roblox: failingRoblox });
+
+    expect(await executeJob(job, database.db, now)).toBe("success");
+    expect(await lastRunStats()).toMatchObject({ resolved: 0, resolutionFailures: 1 });
+  });
+
+  it("degrades the run when several attempted resolutions fail and none succeeds", async () => {
+    const failing = Array.from({ length: config.stalledResolutionFailures }, (_, index) => place(index + 1, 500));
+    const job = censusJob([...failing, ...filler()], { roblox: failingRoblox });
 
     expect(await executeJob(job, database.db, now)).toBe("degraded");
-    expect(await lastRunStats()).toMatchObject({ listQuality: "success", resolved: 0, resolutionFailures: 2 });
+    expect(await lastRunStats()).toMatchObject({
+      listQuality: "success",
+      resolved: 0,
+      resolutionFailures: config.stalledResolutionFailures,
+    });
   });
 
   it("stops resolving for the run on a terminal rate limit", async () => {

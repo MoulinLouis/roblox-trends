@@ -56,6 +56,8 @@ export const JOB_CONFIG = {
     // A shorter list is truncated even without a baseline; Rolimon's lists about 7,800 places.
     minimumListed: 1_000,
     baselineMaxAgeHours: 6,
+    // Fewer failures with nothing resolved are one bad place, not an outage of the resolution API.
+    stalledResolutionFailures: 3,
   },
   poll: {
     intervalMinutes: 5,

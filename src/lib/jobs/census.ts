@@ -121,8 +121,8 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
         promotionError = errorMessage(error);
         logger.error("Promotion failed; retrying next run", { universes: universes.length, error: promotionError });
       }
-      // No attempted place got an answer: the resolution API is failing, which a successful status would hide.
-      const resolutionStalled = resolutionFailures > 0 && resolved + unresolvable === 0;
+      // Several attempts and no answer: the resolution API is failing, which a successful status would hide.
+      const resolutionStalled = resolutionFailures >= config.stalledResolutionFailures && resolved + unresolvable === 0;
       return {
         status: listQuality === "degraded" || resolutionStalled || promotionError !== undefined ? "degraded" : "success",
         stats: {
