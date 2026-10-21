@@ -90,6 +90,19 @@ Unattended-Upgrade::Automatic-Reboot "true";
 Unattended-Upgrade::Automatic-Reboot-Time "04:48";
 EOF
 
+# SSH: keys only, root by key (the image allows passwords for other users). sshd keeps the first value it reads and
+# includes the drop-ins in name order, so this one sorts before any cloud-init drop-in, such as 50-cloud-init.conf.
+cat >/etc/ssh/sshd_config.d/01-radar.conf <<'EOF'
+# Managed by ops/bin/provision.sh: keys only, root by key.
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin prohibit-password
+EOF
+sshd -t
+# grep without -q reads the whole output: an early exit would SIGPIPE sshd and, under pipefail, fail the check.
+sshd -T | grep -x 'passwordauthentication no' >/dev/null || { echo "An sshd drop-in read earlier still allows passwords" >&2; exit 1; }
+systemctl reload ssh
+
 # Firewall: only the tailnet reaches the server. Public SSH stays open until Tailscale access is proven (Task B2
 # removes it and leaves the marker, so a later run does not reopen it).
 ufw default deny incoming >/dev/null

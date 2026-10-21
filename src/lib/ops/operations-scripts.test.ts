@@ -49,6 +49,19 @@ describe("operations scripts", () => {
     expect(deploy).not.toContain("as_radar touch");
   });
 
+  it("disables SSH password authentication in a drop-in that sshd reads before cloud-init's", () => {
+    const provision = script("provision.sh");
+    const dropIn = /cat >\/etc\/ssh\/sshd_config\.d\/(\S+) <<'EOF'\n([\s\S]*?)\nEOF\n/.exec(provision);
+    // sshd keeps the first value it reads, and reads the drop-ins in name order (cloud-init writes 50-cloud-init.conf).
+    expect(dropIn?.[1]).toMatch(/^01-[a-z-]+\.conf$/);
+    expect(dropIn?.[2].split("\n")).toEqual(
+      expect.arrayContaining(["PasswordAuthentication no", "KbdInteractiveAuthentication no", "PermitRootLogin prohibit-password"]),
+    );
+    // The configuration is validated before sshd reloads it.
+    expect(provision.indexOf("sshd -t\n")).toBeGreaterThan(provision.indexOf(dropIn?.[0] ?? "-"));
+    expect(provision.indexOf("systemctl reload ssh\n")).toBeGreaterThan(provision.indexOf("sshd -t\n"));
+  });
+
   it("pins the TimescaleDB version of the CI image", () => {
     const image = /timescale\/timescaledb:([\d.]+)-pg18/.exec(readFileSync(new URL("../../../.github/workflows/ci.yml", import.meta.url), "utf8"));
     expect(script("provision.sh")).toContain(`readonly timescaledb_version=${image?.[1]}`);
