@@ -2,7 +2,6 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { censusObservations, discoverySources, games, places } from "@/db/schema";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/test-database";
-import { HttpError } from "@/lib/api/http";
 import { gameDetail } from "@/test/fixtures";
 import { createCensusJob } from "./census";
 import { executeJob } from "./runner";
@@ -30,7 +29,7 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
       }),
       roblox: {
         resolveUniverseId: async (placeId) => {
-          if (placeId === "404") throw new HttpError(404, "Not Found", "https://apis.roblox.com/universes");
+          if (placeId === "404") return null;
           return String(Number(placeId) + 1_000);
         },
         getGameDetails: async (universeIds) => universeIds.map((universeId) => gameDetail(Number(universeId))),
@@ -44,7 +43,7 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
     const [resolved] = await database.db.select().from(places).where(eq(places.placeId, 1));
     expect(resolved.universeId).toBe(1_001);
     const [unresolvable] = await database.db.select().from(places).where(eq(places.placeId, 404));
-    expect(unresolvable.universeId).toBeNull();
+    expect(unresolvable).toMatchObject({ universeId: null, error: "no universe" });
     expect((await database.db.select().from(games)).map((game) => game.universeId)).toEqual([1_001]);
     expect(await database.db.select().from(discoverySources)).toEqual([
       expect.objectContaining({ universeId: 1_001, source: "rolimons", detail: "" }),

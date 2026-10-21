@@ -54,3 +54,20 @@ describe("RobloxClient.getThumbnails", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("400 Bad Request"));
   });
 });
+
+describe("RobloxClient.resolveUniverseId", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    clearResponseCache();
+  });
+
+  it("returns the universe of a place", async () => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => Response.json({ universeId: 456 })));
+    expect(await new RobloxClient().resolveUniverseId("123")).toBe("456");
+  });
+
+  it("returns null for a place without a universe", async () => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => Response.json({ universeId: null })));
+    expect(await new RobloxClient().resolveUniverseId("123")).toBeNull();
+  });
+});

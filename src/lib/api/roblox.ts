@@ -77,7 +77,7 @@ const searchResponseSchema = z.object({
     z.object({ contents: z.array(searchContentSchema).default([]) }),
   ).default([]),
 });
-const universeResponseSchema = z.object({ universeId: z.number() });
+const universeResponseSchema = z.object({ universeId: z.number().nullable() });
 const thumbnailsResponseSchema = z.object({
   data: z.array(
     z.object({
@@ -223,7 +223,9 @@ export interface RobloxApi {
   getGameVotes(universeIds: string[]): Promise<RobloxGameVote[]>;
   getRecommendations(universeId: string, maximumRows?: number): Promise<RobloxChartGame[]>;
   searchGames(query: string): Promise<RobloxChartGame[]>;
-  resolveUniverseId(placeId: string): Promise<string>;
+  // null: Roblox knows no universe for this place. The endpoint answers a missing place with HTTP 200 and
+  // { "universeId": null }; it returns 404 only for an empty id.
+  resolveUniverseId(placeId: string): Promise<string | null>;
   getThumbnails(universeIds: string[]): Promise<Map<string, string>>;
   getGameThumbnails(universeIds: string[]): Promise<Map<string, GameThumbnailAnswer>>;
 }
@@ -289,13 +291,13 @@ export class RobloxClient implements RobloxApi {
     return parseSearchResponse(await fetchJson(url.toString(), { cacheTtlMs: 30 * 60 * 1000 }));
   }
 
-  async resolveUniverseId(placeId: string): Promise<string> {
+  async resolveUniverseId(placeId: string): Promise<string | null> {
     const value = universeResponseSchema.parse(
       await fetchJson(`https://apis.roblox.com/universes/v1/places/${encodeURIComponent(placeId)}/universe`, {
         cacheTtlMs: 24 * 60 * 60 * 1000,
       }),
     );
-    return String(value.universeId);
+    return value.universeId === null ? null : String(value.universeId);
   }
 
   async getThumbnails(universeIds: string[]): Promise<Map<string, string>> {

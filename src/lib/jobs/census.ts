@@ -63,9 +63,14 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
         }
         const placeId = Number(candidate.placeId);
         try {
-          const universeId = Number(await dependencies.roblox.resolveUniverseId(candidate.placeId));
-          await savePlaceResolution(db, { placeId, universeId, resolvedAt: now, error: null });
-          resolved += 1;
+          const universeId = await dependencies.roblox.resolveUniverseId(candidate.placeId);
+          if (universeId === null) {
+            await savePlaceResolution(db, { placeId, universeId: null, resolvedAt: now, error: "no universe" });
+            unresolvable += 1;
+          } else {
+            await savePlaceResolution(db, { placeId, universeId: Number(universeId), resolvedAt: now, error: null });
+            resolved += 1;
+          }
         } catch (error) {
           if (error instanceof HttpError && (error.status === 400 || error.status === 404)) {
             await savePlaceResolution(db, { placeId, universeId: null, resolvedAt: now, error: errorMessage(error) });
