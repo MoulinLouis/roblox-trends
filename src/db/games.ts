@@ -5,7 +5,7 @@ import { contentFingerprint, rawFingerprint } from "@/lib/fingerprint";
 import type { Database } from "./client";
 import { games, gameVersions, places } from "./schema";
 
-// A game row binds 16 parameters, and CHUNK_SIZE × 16 must stay under PostgreSQL's limit of 65,535 per statement.
+// A game row binds 17 parameters, and CHUNK_SIZE × 17 must stay under PostgreSQL's limit of 65,535 per statement.
 const CHUNK_SIZE = 500;
 
 export interface GameUpsertResult {
@@ -46,6 +46,8 @@ export async function upsertGameDetails(db: Database, details: RobloxGameDetail[
             lastObservedAt: sql`excluded.last_observed_at`,
             lastCcu: sql`excluded.last_ccu`,
             lastCcuAt: sql`excluded.last_ccu_at`,
+            // An observation without players keeps the stored time; greatest() ignores nulls on either side.
+            lastActiveAt: sql`greatest(excluded.last_active_at, ${games.lastActiveAt})`,
             metadataFingerprint: sql`excluded.metadata_fingerprint`,
             contentFingerprint: sql`excluded.content_fingerprint`,
           },
@@ -121,6 +123,7 @@ export async function knownUniverseIds(db: Database, universeIds: number[]): Pro
 }
 
 function toGameRow(detail: RobloxGameDetail, observedAt: Date): typeof games.$inferInsert {
+  const lastCcu = Math.round(detail.playing);
   return {
     universeId: detail.id,
     rootPlaceId: detail.rootPlaceId,
@@ -134,8 +137,9 @@ function toGameRow(detail: RobloxGameDetail, observedAt: Date): typeof games.$in
     robloxUpdatedAt: detail.updated,
     firstObservedAt: observedAt,
     lastObservedAt: observedAt,
-    lastCcu: Math.round(detail.playing),
+    lastCcu,
     lastCcuAt: observedAt,
+    lastActiveAt: lastCcu > 0 ? observedAt : null,
     metadataFingerprint: rawFingerprint(detail.name, detail.description),
     contentFingerprint: contentFingerprint(detail.name, detail.description),
   };

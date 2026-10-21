@@ -15,6 +15,13 @@
       "when": 1792535472279,
       "tag": "0001_timescale",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792549703414,
+      "tag": "0002_last_active_at",
+      "breakpoints": true
     }
   ]
 }

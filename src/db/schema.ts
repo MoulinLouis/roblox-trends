@@ -34,6 +34,8 @@ export const games = pgTable(
     lastObservedAt: timestamptz("last_observed_at").notNull(),
     lastCcu: integer("last_ccu").notNull().default(0),
     lastCcuAt: timestamptz("last_ccu_at"),
+    // The latest observation with players; null until one is seen. A single empty poll does not reset it.
+    lastActiveAt: timestamptz("last_active_at"),
     // Raw fingerprint of the current name + description; a version is recorded whenever it changes.
     metadataFingerprint: text("metadata_fingerprint").notNull(),
     contentFingerprint: text("content_fingerprint").notNull(),

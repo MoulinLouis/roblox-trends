@@ -192,6 +192,26 @@ describe.skipIf(!hasTestDatabase)("game repositories", () => {
     expect(await versionCount([40])).toBe(1);
   });
 
+  it("tracks the last observation with players", async () => {
+    const at = (minutes: number) => new Date(Date.UTC(2026, 9, 20, 14, minutes));
+    async function lastActiveAt(universeId: number): Promise<Date | null> {
+      const [game] = await database.db.select({ lastActiveAt: games.lastActiveAt }).from(games).where(eq(games.universeId, universeId));
+      return game.lastActiveAt;
+    }
+    await upsertGameDetails(database.db, [gameDetail(60, { playing: 0 }), gameDetail(61, { playing: 5 })], at(0));
+    expect(await lastActiveAt(60)).toBeNull();
+    expect(await lastActiveAt(61)).toEqual(at(0));
+    await upsertGameDetails(database.db, [gameDetail(60, { playing: 12 })], at(5));
+    expect(await lastActiveAt(60)).toEqual(at(5));
+    await upsertGameDetails(database.db, [gameDetail(60, { playing: 0 })], at(10));
+    expect(await lastActiveAt(60)).toEqual(at(5));
+    // A late retry is older than the stored observation, so the stale-write guard ignores it, players or not.
+    await upsertGameDetails(database.db, [gameDetail(60, { playing: 30 })], at(7));
+    expect(await lastActiveAt(60)).toEqual(at(5));
+    await upsertGameDetails(database.db, [gameDetail(60, { playing: 3 })], at(15));
+    expect(await lastActiveAt(60)).toEqual(at(15));
+  });
+
   it("skips resolved places and recent failures, and finds unpromoted universes", async () => {
     const now = new Date("2026-10-20T15:00:00Z");
     await savePlaceResolution(database.db, { placeId: 500, universeId: 50, resolvedAt: now, error: null });
