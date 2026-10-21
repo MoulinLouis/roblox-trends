@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   parseGameDetailsResponse,
   parseGameThumbnailsResponse,
@@ -9,6 +9,31 @@ import {
   parseSortsResponse,
 } from "./roblox";
 import { parseRolimonsResponse } from "./rolimons";
+
+const gameDetailItem = {
+  id: 101,
+  rootPlaceId: 202,
+  name: "Game",
+  description: "Description",
+  creator: { id: 303, name: "Studio", type: "Group" },
+  playing: 450,
+  visits: 12000,
+  created: "2026-08-01T00:00:00Z",
+  updated: "2026-08-09T00:00:00Z",
+  favoritedCount: 90,
+  genre: "All",
+  genre_l1: "Simulation",
+};
+
+// The details of the single warning a parser logged.
+function loggedDetails(warn: { mock: { calls: unknown[][] } }): unknown {
+  expect(warn.mock.calls).toHaveLength(1);
+  return JSON.parse(String(warn.mock.calls[0][0])).details;
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("Roblox API response parsing", () => {
   it("parses current Charts sort and game fields", () => {
@@ -23,20 +48,38 @@ describe("Roblox API response parsing", () => {
   });
 
   it("parses game detail dates and creator metadata", () => {
-    const [game] = parseGameDetailsResponse({ data: [{ id: 101, rootPlaceId: 202, name: "Game", description: "Description", creator: { id: 303, name: "Studio", type: "Group" }, playing: 450, visits: 12000, created: "2026-08-01T00:00:00Z", updated: "2026-08-09T00:00:00Z", favoritedCount: 90, genre: "All", genre_l1: "Simulation" }] });
+    const [game] = parseGameDetailsResponse({ data: [gameDetailItem] });
     expect(game.created).toBeInstanceOf(Date);
     expect(game.creator.name).toBe("Studio");
     expect(game.favoritedCount).toBe(90);
   });
 
-  it("rejects malformed required fields", () => {
-    expect(() => parseGameDetailsResponse({ data: [{ id: "not-a-number" }] })).toThrow();
+  it("skips a malformed game detail without dropping the others", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const games = parseGameDetailsResponse({ data: [{ id: 102, name: 7 }, gameDetailItem] });
+    expect(games.map((game) => game.id)).toEqual([101]);
+    expect(loggedDetails(warn)).toEqual({ skipped: 1, universeIds: [102], issues: [expect.any(String), expect.any(String), expect.any(String)] });
+  });
+
+  it("rejects a malformed game details envelope", () => {
+    expect(() => parseGameDetailsResponse({ data: { id: 101 } })).toThrow();
   });
 
   it("parses public vote totals", () => {
     expect(parseGameVotesResponse({ data: [{ id: 101, upVotes: 900, downVotes: 100 }] })).toEqual([
       { id: 101, upVotes: 900, downVotes: 100 },
     ]);
+  });
+
+  it("skips a malformed vote item without dropping the others", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const votes = parseGameVotesResponse({ data: [{ id: 102, upVotes: -1, downVotes: 0 }, { id: 101, upVotes: 900, downVotes: 100 }] });
+    expect(votes).toEqual([{ id: 101, upVotes: 900, downVotes: 100 }]);
+    expect(loggedDetails(warn)).toEqual({ skipped: 1, universeIds: [102], issues: [expect.stringContaining("upVotes")] });
+  });
+
+  it("rejects a malformed votes envelope", () => {
+    expect(() => parseGameVotesResponse({ games: [] })).toThrow();
   });
 
   it("maps recommendation place IDs into chart discoveries", () => {

@@ -42,16 +42,13 @@ const gameDetailSchema = z.object({
   genre_l1: z.string().nullish(),
 });
 
-const gameDetailsResponseSchema = z.object({ data: z.array(gameDetailSchema) });
-const gameVotesResponseSchema = z.object({
-  data: z.array(
-    z.object({
-      id: z.number(),
-      upVotes: z.number().int().nonnegative(),
-      downVotes: z.number().int().nonnegative(),
-    }),
-  ),
+const gameVoteSchema = z.object({
+  id: z.number(),
+  upVotes: z.number().int().nonnegative(),
+  downVotes: z.number().int().nonnegative(),
 });
+// Items are validated one by one so that a single malformed game cannot discard the whole batch.
+const itemsResponseSchema = z.object({ data: z.array(z.unknown()) });
 const recommendationResponseSchema = z.object({
   games: z.array(
     z.object({
@@ -103,7 +100,7 @@ const pendingThumbnailStates = new Set(["Pending", "InReview", "TemporarilyUnava
 export type RobloxChartGame = z.infer<typeof chartGameSchema>;
 export type RobloxSort = z.infer<typeof sortSchema>;
 export type RobloxGameDetail = z.infer<typeof gameDetailSchema>;
-export type RobloxGameVote = z.infer<typeof gameVotesResponseSchema>["data"][number];
+export type RobloxGameVote = z.infer<typeof gameVoteSchema>;
 
 export interface GameThumbnail {
   imageUrl: string;
@@ -124,11 +121,34 @@ export function parseSortContentResponse(value: unknown): RobloxSort {
 }
 
 export function parseGameDetailsResponse(value: unknown): RobloxGameDetail[] {
-  return gameDetailsResponseSchema.parse(value).data;
+  return parseItems(itemsResponseSchema.parse(value).data, gameDetailSchema, "game details");
 }
 
 export function parseGameVotesResponse(value: unknown): RobloxGameVote[] {
-  return gameVotesResponseSchema.parse(value).data;
+  return parseItems(itemsResponseSchema.parse(value).data, gameVoteSchema, "game votes");
+}
+
+// Malformed items are skipped with one warning per batch, so a format change that breaks every item cannot flood
+// the logs. The warning names the skipped universes and the first issues of the first one.
+function parseItems<T>(items: unknown[], schema: z.ZodType<T>, label: string): T[] {
+  const parsed: T[] = [];
+  const skippedUniverseIds: unknown[] = [];
+  let issues: string[] = [];
+  for (const item of items) {
+    const result = schema.safeParse(item);
+    if (result.success) {
+      parsed.push(result.data);
+      continue;
+    }
+    if (!skippedUniverseIds.length) {
+      issues = result.error.issues.slice(0, 3).map((issue) => `${issue.path.map(String).join(".")}: ${issue.message}`);
+    }
+    skippedUniverseIds.push(typeof item === "object" && item !== null && "id" in item ? item.id : null);
+  }
+  if (skippedUniverseIds.length) {
+    logger.warn(`Skipped malformed ${label}`, { skipped: skippedUniverseIds.length, universeIds: skippedUniverseIds, issues });
+  }
+  return parsed;
 }
 
 export function parseRecommendationsResponse(value: unknown): RobloxChartGame[] {
