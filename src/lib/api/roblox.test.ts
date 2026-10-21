@@ -28,6 +28,22 @@ describe("RobloxClient.getGameThumbnails", () => {
     expect(urls[0].searchParams.get("size")).toBe("768x432");
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("400 Bad Request"));
   });
+
+  it("keeps the other batches when one envelope is malformed", async () => {
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => {
+      calls += 1;
+      if (calls === 1) return Response.json({ data: "x" });
+      return Response.json({ data: [{ universeId: 51, error: null, thumbnails: [{ targetId: 7, state: "Completed", imageUrl: "https://tr.rbxcdn.com/d/768/432/Image/Png" }] }] });
+    }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const universeIds = Array.from({ length: 51 }, (_, index) => String(index + 1));
+
+    const thumbnails = await new RobloxClient().getGameThumbnails(universeIds);
+
+    expect([...thumbnails]).toEqual([["51", { imageUrl: "https://tr.rbxcdn.com/d/768/432/Image/Png", mediaId: 7 }]]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Thumbnail batch failed"));
+  });
 });
 
 describe("RobloxClient.getThumbnails", () => {
@@ -52,6 +68,22 @@ describe("RobloxClient.getThumbnails", () => {
     expect([...icons]).toEqual([["51", "https://tr.rbxcdn.com/e/150/150/Image/Webp"]]);
     expect(urls.map((url) => url.searchParams.get("universeIds")?.split(",").length)).toEqual([50, 1]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("400 Bad Request"));
+  });
+
+  it("keeps the other icon batches when one envelope is malformed", async () => {
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => {
+      calls += 1;
+      if (calls === 1) return Response.json({ data: "x" });
+      return Response.json({ data: [{ targetId: 51, state: "Completed", imageUrl: "https://tr.rbxcdn.com/e/150/150/Image/Webp" }] });
+    }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const universeIds = Array.from({ length: 51 }, (_, index) => String(index + 1));
+
+    const icons = await new RobloxClient().getThumbnails(universeIds);
+
+    expect([...icons]).toEqual([["51", "https://tr.rbxcdn.com/e/150/150/Image/Webp"]]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Thumbnail batch failed"));
   });
 });
 

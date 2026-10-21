@@ -62,17 +62,9 @@ const searchResponseSchema = z.object({
   ).default([]),
 });
 const universeResponseSchema = z.object({ universeId: z.number().nullable() });
-const thumbnailsResponseSchema = z.object({
-  data: z.array(
-    z.object({
-      targetId: z.number(),
-      state: z.string(),
-      imageUrl: z.string().nullable(),
-    }),
-  ),
-});
-// Items are validated one by one so that a single malformed universe cannot discard the whole batch.
-const gameThumbnailsResponseSchema = z.object({ data: z.array(z.unknown()) });
+// Icon and thumbnail items are validated one by one so that a single malformed universe cannot discard the whole batch.
+const thumbnailEnvelopeSchema = z.object({ data: z.array(z.unknown()) });
+const gameIconSchema = z.object({ targetId: z.number(), state: z.string(), imageUrl: z.string().nullish() });
 const gameThumbnailSchema = z.object({ targetId: z.number().nullish(), state: z.string(), imageUrl: z.string().nullish() });
 const gameThumbnailItemSchema = z.object({
   universeId: z.number(),
@@ -199,13 +191,22 @@ export function parseSearchResponse(value: unknown): RobloxChartGame[] {
 // state that is neither usable, pending nor blocked (for example Error).
 export function parseGameThumbnailsResponse(value: unknown): Map<string, GameThumbnailAnswer> {
   const answers = new Map<string, GameThumbnailAnswer>();
-  for (const raw of gameThumbnailsResponseSchema.parse(value).data) {
+  for (const raw of thumbnailEnvelopeSchema.parse(value).data) {
     const item = gameThumbnailItemSchema.safeParse(raw);
     if (!item.success || item.data.error != null) continue;
     const answer = gameThumbnailAnswer(item.data.thumbnails ?? []);
     if (answer !== undefined) answers.set(String(item.data.universeId), answer);
   }
   return answers;
+}
+
+export function parseGameIconsResponse(value: unknown): Map<string, string> {
+  const icons = new Map<string, string>();
+  for (const raw of thumbnailEnvelopeSchema.parse(value).data) {
+    const item = gameIconSchema.safeParse(raw);
+    if (item.success && item.data.imageUrl) icons.set(String(item.data.targetId), item.data.imageUrl);
+  }
+  return icons;
 }
 
 function gameThumbnailAnswer(thumbnails: z.infer<typeof gameThumbnailSchema>[]): GameThumbnailAnswer | undefined {
@@ -217,11 +218,16 @@ function gameThumbnailAnswer(thumbnails: z.infer<typeof gameThumbnailSchema>[]):
   return undefined;
 }
 
-// Thumbnails are best-effort: a failed batch leaves its universes unknown instead of discarding the other batches.
-// Returns undefined when the request failed after its retries.
-async function fetchThumbnailBatch(url: URL, universeIds: string[], kind: "icon" | "game thumbnail"): Promise<unknown> {
+// Thumbnails are best-effort: a batch whose request failed after its retries, or whose envelope is malformed, leaves
+// its universes unknown instead of discarding the other batches. Returns undefined for such a batch.
+async function fetchThumbnailBatch<T>(
+  url: URL,
+  universeIds: string[],
+  kind: "icon" | "game thumbnail",
+  parse: (value: unknown) => T,
+): Promise<T | undefined> {
   try {
-    return await fetchJson(url.toString(), { cacheTtlMs: 60 * 60 * 1000 });
+    return parse(await fetchJson(url.toString(), { cacheTtlMs: 60 * 60 * 1000 }));
   } catch (error) {
     logger.warn("Thumbnail batch failed; its universes stay unknown", {
       kind,
@@ -326,10 +332,8 @@ export class RobloxClient implements RobloxApi {
       url.searchParams.set("size", "150x150");
       url.searchParams.set("format", "Webp");
       url.searchParams.set("isCircular", "false");
-      const response = await fetchThumbnailBatch(url, chunk, "icon");
-      if (response === undefined) continue;
-      const parsed = thumbnailsResponseSchema.parse(response);
-      for (const item of parsed.data) if (item.imageUrl) thumbnails.set(String(item.targetId), item.imageUrl);
+      const icons = await fetchThumbnailBatch(url, chunk, "icon", parseGameIconsResponse);
+      for (const [universeId, imageUrl] of icons ?? []) thumbnails.set(universeId, imageUrl);
     }
     return thumbnails;
   }
@@ -347,9 +351,8 @@ export class RobloxClient implements RobloxApi {
       url.searchParams.set("size", "768x432");
       url.searchParams.set("format", "Png");
       url.searchParams.set("isCircular", "false");
-      const response = await fetchThumbnailBatch(url, chunk, "game thumbnail");
-      if (response === undefined) continue;
-      for (const [universeId, answer] of parseGameThumbnailsResponse(response)) answers.set(universeId, answer);
+      const parsed = await fetchThumbnailBatch(url, chunk, "game thumbnail", parseGameThumbnailsResponse);
+      for (const [universeId, answer] of parsed ?? []) answers.set(universeId, answer);
     }
     return answers;
   }

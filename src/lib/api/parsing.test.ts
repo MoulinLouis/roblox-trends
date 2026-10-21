@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   parseGameDetailsResponse,
+  parseGameIconsResponse,
   parseGameThumbnailsResponse,
   parseGameVotesResponse,
   parseRecommendationsResponse,
@@ -226,6 +227,10 @@ describe("Roblox API response parsing", () => {
     expect(thumbnails.size).toBe(0);
   });
 
+  it("rejects a malformed game thumbnails envelope", () => {
+    expect(() => parseGameThumbnailsResponse({ data: "x" })).toThrow();
+  });
+
   it("skips a malformed thumbnail item without dropping the others", () => {
     const thumbnails = parseGameThumbnailsResponse({
       data: [
@@ -244,6 +249,20 @@ describe("Roblox API response parsing", () => {
       ] }],
     });
     expect([...thumbnails]).toEqual([["101", { imageUrl: "https://tr.rbxcdn.com/c/768/432/Image/Png", mediaId: 11 }]]);
+  });
+
+  it("skips a malformed icon item without dropping the others", () => {
+    const icons = parseGameIconsResponse({
+      data: [
+        { targetId: "x", state: "Completed", imageUrl: "https://tr.rbxcdn.com/a/150/150/Image/Webp" },
+        { targetId: 102, state: "Completed", imageUrl: "https://tr.rbxcdn.com/b/150/150/Image/Webp" },
+      ],
+    });
+    expect([...icons]).toEqual([["102", "https://tr.rbxcdn.com/b/150/150/Image/Webp"]]);
+  });
+
+  it("rejects a malformed icons envelope", () => {
+    expect(() => parseGameIconsResponse({ data: "x" })).toThrow();
   });
 });
 
