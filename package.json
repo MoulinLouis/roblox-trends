@@ -19,6 +19,7 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "collect": "tsx scripts/collect.ts",
     "job": "tsx scripts/job.ts",
+    "import:legacy": "tsx scripts/import-legacy.ts",
     "validate": "npm run lint && npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
