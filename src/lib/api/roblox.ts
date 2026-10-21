@@ -26,7 +26,9 @@ const sortSchema = z.object({
 const sortsResponseSchema = z.object({ sorts: z.array(sortSchema) });
 
 const gameDetailSchema = z.object({
-  id: z.number(),
+  // A moderated or deleted game comes back as a placeholder with id 0 ("[TITLE UNAVAILABLE]", creator id 0): it is
+  // skipped as malformed, so it never becomes a game, and the game it stands for counts as not returned.
+  id: z.number().int().positive(),
   rootPlaceId: z.number(),
   name: z.string(),
   description: z.string().nullish().transform((value) => value ?? ""),

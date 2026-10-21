@@ -84,6 +84,23 @@ describe("Roblox API response parsing", () => {
     expect(loggedDetails(warn)).toEqual({ skipped: 1, universeIds: [102], issues: [expect.any(String), expect.any(String), expect.any(String)] });
   });
 
+  it("skips the placeholder Roblox answers for a moderated or deleted game", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const placeholder = {
+      ...gameDetailItem,
+      id: 0,
+      rootPlaceId: 0,
+      name: "[TITLE UNAVAILABLE]",
+      description: null,
+      creator: { id: 0, name: "", type: "User" },
+      playing: 0,
+      visits: 0,
+      favoritedCount: 0,
+    };
+    expect(parseGameDetailsResponse({ data: [placeholder, gameDetailItem] }).map((game) => game.id)).toEqual([101]);
+    expect(loggedDetails(warn)).toEqual({ skipped: 1, universeIds: [0], issues: [expect.stringContaining("id")] });
+  });
+
   it("rejects a malformed game details envelope", () => {
     expect(() => parseGameDetailsResponse({ data: { id: 101 } })).toThrow();
   });
