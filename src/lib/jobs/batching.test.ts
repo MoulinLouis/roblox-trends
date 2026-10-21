@@ -9,7 +9,7 @@ function options(overrides: Partial<BatchOptions<number, number>> = {}): BatchOp
 describe("runBatchesWithDeadline", () => {
   it("processes every batch when time allows", async () => {
     const outcome = await runBatchesWithDeadline([1, 2, 3], options({ batchSize: 2, work: async (batch) => batch.map((item) => item * 10) }));
-    expect(outcome).toEqual({ results: [10, 20, 30], attempted: 3, failedBatches: 0, skippedItems: 0 });
+    expect(outcome).toEqual({ results: [10, 20, 30], attempted: 3, failedBatches: 0, skippedItems: 0, stoppedBy: null });
   });
 
   it("skips the remaining items once the deadline passes", async () => {
@@ -26,7 +26,7 @@ describe("runBatchesWithDeadline", () => {
         },
       }),
     );
-    expect(outcome).toEqual({ results: [1, 2], attempted: 2, failedBatches: 0, skippedItems: 3 });
+    expect(outcome).toEqual({ results: [1, 2], attempted: 2, failedBatches: 0, skippedItems: 3, stoppedBy: "deadline" });
   });
 
   it("counts failed batches and keeps going", async () => {
@@ -39,7 +39,51 @@ describe("runBatchesWithDeadline", () => {
         },
       }),
     );
-    expect(outcome).toEqual({ results: [1, 3], attempted: 3, failedBatches: 1, skippedItems: 0 });
+    expect(outcome).toEqual({ results: [1, 3], attempted: 3, failedBatches: 1, skippedItems: 0, stoppedBy: null });
+  });
+
+  it("stops after an error that calls for it and skips the remaining items", async () => {
+    const outcome = await runBatchesWithDeadline(
+      [1, 2, 3, 4],
+      options({
+        work: async (batch) => {
+          if (batch[0] === 2) throw new Error("rate limited");
+          if (batch[0] === 3) throw new Error("boom");
+          return batch;
+        },
+        stopOn: (error) => error instanceof Error && error.message === "rate limited",
+      }),
+    );
+    expect(outcome).toEqual({ results: [1], attempted: 2, failedBatches: 1, skippedItems: 2, stoppedBy: "error" });
+  });
+
+  it("keeps going after an error that does not call for a stop", async () => {
+    const outcome = await runBatchesWithDeadline(
+      [1, 2, 3],
+      options({
+        work: async (batch) => {
+          if (batch[0] === 2) throw new Error("boom");
+          return batch;
+        },
+        stopOn: () => false,
+      }),
+    );
+    expect(outcome).toEqual({ results: [1, 3], attempted: 3, failedBatches: 1, skippedItems: 0, stoppedBy: null });
+  });
+
+  it("stops after too many failed batches in a row", async () => {
+    // Batch 3 succeeds and resets the count; batches 4 to 6 fail in a row, so batch 7 is skipped.
+    const outcome = await runBatchesWithDeadline(
+      [1, 2, 3, 4, 5, 6, 7],
+      options({
+        work: async (batch) => {
+          if (batch[0] !== 1 && batch[0] !== 3) throw new Error("boom");
+          return batch;
+        },
+        maximumConsecutiveFailedBatches: 3,
+      }),
+    );
+    expect(outcome).toEqual({ results: [1, 3], attempted: 6, failedBatches: 4, skippedItems: 1, stoppedBy: "repeatedFailures" });
   });
 
   it("stores each batch before working on the next", async () => {

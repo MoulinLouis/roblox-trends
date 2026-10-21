@@ -64,9 +64,11 @@ export const JOB_CONFIG = {
   poll: {
     intervalMinutes: 5,
     timeoutMs: 270_000,
-    deadlineMs: 240_000,
+    // Leaves room before the timeout for a batch that started just before the deadline and is still in its retries.
+    deadlineMs: 180_000,
     batchSize: 50,
     minimumReturnedShare: 0.95,
+    maximumConsecutiveFailedBatches: 3,
   },
   votes: {
     intervalMinutes: 60,
@@ -74,6 +76,7 @@ export const JOB_CONFIG = {
     deadlineMs: 25 * 60_000,
     batchSize: 50,
     minimumReturnedShare: 0.95,
+    maximumConsecutiveFailedBatches: 3,
   },
   charts: {
     intervalMinutes: 60,

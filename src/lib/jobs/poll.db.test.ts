@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { upsertGameDetails } from "@/db/games";
 import { gameObservations, games, jobRuns } from "@/db/schema";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/test-database";
+import { HttpError } from "@/lib/api/http";
 import { JOB_CONFIG } from "@/lib/config";
 import { gameDetail } from "@/test/fixtures";
 import { createPollJob } from "./poll";
@@ -76,6 +77,31 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
       expect(await observedUniverses()).toEqual(firstBatch);
       const [run] = await database.db.select().from(jobRuns);
       expect(run.stats).toMatchObject({ active: 60, attempted: 50, returned: 50, failedBatches: 0, skipped: 10 });
+    });
+
+    it("stops at a rate limit that outlasted the retries and skips the remaining games", async () => {
+      let calls = 0;
+      const job = createPollJob({
+        roblox: {
+          getGameDetails: async () => {
+            calls += 1;
+            throw new HttpError(429, "Too Many Requests", "https://games.roblox.com/v1/games");
+          },
+        },
+      });
+      expect(await executeJob(job, database.db, now)).toBe("degraded");
+      expect(calls).toBe(1);
+      expect(await observedUniverses()).toEqual([]);
+      const [run] = await database.db.select().from(jobRuns);
+      expect(run.stats).toMatchObject({
+        active: 60,
+        attempted: 50,
+        returned: 0,
+        failedBatches: 1,
+        skipped: 10,
+        rateLimited: true,
+        stoppedBy: "error",
+      });
     });
 
     it("keeps the batches it finished when the run exceeds its timeout", async () => {

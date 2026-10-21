@@ -1,6 +1,7 @@
 import { selectActiveUniverses } from "@/db/active-set";
 import { upsertGameDetails } from "@/db/games";
 import { writeGameObservations } from "@/db/observations";
+import { HttpError } from "@/lib/api/http";
 import type { RobloxApi } from "@/lib/api/roblox";
 import { JOB_CONFIG } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
@@ -33,6 +34,10 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
           work: (batch) => dependencies.roblox.getGameDetails(batch),
           onError: (error, batch) =>
             logger.warn("Poll batch failed", { universes: batch.length, firstUniverseId: batch[0], error: errorMessage(error) }),
+          // The client already retried with backoff: the next batches would hit the same limit, so the remaining
+          // (lowest-priority) games wait for the next run.
+          stopOn: isRateLimited,
+          maximumConsecutiveFailedBatches: config.maximumConsecutiveFailedBatches,
           store: async (details) => {
             await writeGameObservations(
               db,
@@ -64,10 +69,17 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
           returned: details.length,
           failedBatches: outcome.failedBatches,
           skipped: outcome.skippedItems,
+          stoppedBy: outcome.stoppedBy,
+          // A rate limit is the only error that stops a poll.
+          rateLimited: outcome.stoppedBy === "error",
           newGames: upsert.inserted.length,
           metadataChanges: upsert.metadataChanged.length,
         },
       };
     },
   };
+}
+
+function isRateLimited(error: unknown): boolean {
+  return error instanceof HttpError && error.status === 429;
 }
