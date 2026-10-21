@@ -1,172 +1,168 @@
 # Roblox Trend Radar
 
-Roblox Trend Radar is a growth-first market intelligence application for choosing a realistic next Roblox game concept. It tracks historical snapshots, scores momentum, detects multi-creator concept propagation and saturation, and turns promising signals into scoped game ideas.
+Roblox Trend Radar tracks Roblox games to answer three questions: which Roblox formats convert right now, what is breaking out early, and whether a concept still has room. The v1 radar answered them late: games that later passed 10,000 CCU were first seen at a median of 6,216 CCU, only 54% of the Rolimon's games above 100 CCU were tracked in detail, and irregular GitHub Actions runs captured 37–58% of the real weekend peaks of the owner's game. v2 rebuilds the data core on one server: every place listed by Rolimon's is counted every 10 minutes, every active game is polled every 5 minutes, and the history lives in PostgreSQL with TimescaleDB, so the database computes the aggregates. This branch implements phase 1a, the data core: schema, collectors, legacy history import and a status command. Classification, analysis and the dashboard follow in later phases.
 
-The application is one Next.js 16 service with one PostgreSQL-compatible database. Local development can use embedded PGlite. Production uses persistent Neon PostgreSQL. The application only displays data collected from live Roblox sources.
+## Architecture
 
-## What it measures
+One Next.js 16 application and one PostgreSQL 18 database with TimescaleDB 2.30, accessed through Drizzle ORM and `pg` on Node.js 24 (`.nvmrc`; `package.json` requires Node.js 22.12 or newer and npm 11). In this phase the web application is only a shell. The work is done by six collectors in `src/lib/jobs`, started by `npm run job <name>` (one job) or `npm run collect` (all of them). In production each job runs from its own systemd timer (phase 1b).
 
-- CCU growth over 1 hour, 24 hours, 72 hours, and 7 days, plus absolute player gains.
-- Rolling-window CCU growth, acceleration, new visits, new favorites, vote velocity, comparable chart movement, freshness, and growth persistence.
-- Provisional discovery signals remain separate from durable momentum. Momentum compares 24-hour, 72-hour, or 7-day averages as enough history becomes available and exposes its history confidence.
-- Independent dimensions for core loop, progression, reward, social pressure, and theme.
-- Rising title words and two-word phrases, promoted only when several independent creators adopt them and recent frequency exceeds the older baseline.
-- Dedicated launch-breakout signals anchored to Roblox's real `created` timestamp: games must be at most 30 days old and reach 500+ CCU through rapid discovery, a milestone crossing, or verified 1h/3h/6h/24h acceleration. Games at most 14 days old are labeled as fresh launches.
-- Dedicated resurgence signals for older games that move far above their recent median, establish a new tracked high, or post strong relative 6h/24h growth.
-- Hype clusters that aggregate the mechanics, progression patterns, rewards, social hooks, and themes shared by active launch breakouts and resurgences.
-- Trend breadth, creator diversity, combined demand, new entrants, growing share, and leader concentration.
-- Separate momentum, trend, saturation, and solo-developer opportunity scores with visible breakdowns.
-- Evidence-ranked ideas with title alternatives and recent-game breakout proof; deterministic generation works without a paid API, with optional OpenAI structured generation.
+`executeJob` (`src/lib/jobs/runner.ts`) runs every job the same way:
 
-## Clean installation with live data
+- It pings the Healthchecks check `radar-<job>` on start, records a `job_runs` row for the slot (the start time floored to the job's interval), enforces the job's timeout, then pings success or failure.
+- A run ends `success`, `degraded` or `failed`. Degraded runs still ping `radar-<job>`; only fully successful runs also ping `radar-<job>-quality`, so a sustained degradation alerts through that check.
+- A run still marked `running` one minute after its timeout is marked `failed` (`abandoned`) by the job's next run.
+- Observations are keyed by their slot, so a retry within the same slot overwrites instead of duplicating.
 
-Requirements: Node.js 20.19 or newer and npm.
+All intervals, timeouts and limits are in `src/lib/config.ts` (`JOB_CONFIG`, `ACTIVE_SET_CONFIG`, `STATUS_CONFIG`). The intervals must match the systemd timers.
+
+| Job | Interval | Timeout | Work |
+| --- | --- | --- | --- |
+| `census` | 10 min | 9 min | Downloads the Rolimon's game list and writes `census_observations`. Resolves every listed place at or above 100 CCU whose universe is unknown, busiest first, within a 150-second budget per run (the rest waits for the next run), and promotes the new universes to `games`. A place without a universe is retried after 7 days. |
+| `poll` | 5 min | 270 s | Calls the Games API in batches of 50 for the active set, highest priority first, and writes `game_observations` batch by batch. Updates `games` and records name and description changes in `game_versions`. No batch starts after a 180-second deadline, after a 429 that outlasted the retries, or after 3 failed batches in a row: the remaining lowest-CCU games wait for the next run. |
+| `votes` | 1 h | 30 min | Calls the votes endpoint for the active set in batches of 50 and writes `vote_observations`, with the same stop rules as `poll` and a 25-minute deadline. |
+| `charts` | 1 h | 30 min | Reads the 22 discovery sorts of `ROBLOX_DISCOVERY_CHARTS`, replaces each sort's hourly slot in `chart_placements` as soon as it is read, and promotes new universes. A rank is the position Roblox listed the game at. |
+| `explore` | 1 h | 30 min | Asks for 20 recommendations for each of the 10 fastest-rising games at most 60 days old (6-hour average of at least 150 CCU, compared with the same window a day earlier), and searches up to 4 words shared by at least 3 of the titles of up to 50 rising games. Promotes found games at or above 50 CCU and also records sightings of games already tracked in `discovery_sources`. |
+| `thumbnails` | 1 h | 30 min | Runs hourly, in batches of 50: at most 4,000 games per run, with a 20-minute deadline. Checks games never checked first, then refreshes games at or above 50 CCU (a reading less than 24 hours old) whose last check is older than 24 hours. Stores the 16:9 thumbnail and the icon; a new media asset id records a thumbnail version. |
+
+A game is active when its best CCU evidence of the last 24 hours (hourly peaks, census readings of the last 30 minutes, or its latest stored CCU if less than 24 hours old) is at least 50, or when it is at most 90 days old and had players in the last 7 days.
+
+Quality gates mark a run `degraded`:
+
+- `poll` and `votes`: fewer than 95% of the active set returned, or an empty active set.
+- `census`: a list shorter than 1,000 places, more than 5% malformed entries, or a size change above 30% from the latest list of the last 6 hours that passed this check; also a stalled place resolution or a failed promotion.
+- `charts`: fewer than 80% of the sorts collected (an empty sort, or one with more than 20% malformed entries, counts as failed), a 429 that outlasted the retries, or a failed promotion.
+- `explore`: an endpoint that failed or answered empty on every request, a 429, or a failed promotion.
+- `thumbnails`: fewer than 90% of the requested games answered. A run where Roblox answered for no game fails.
+
+### Tables
+
+Hypertables (`drizzle/0001_timescale.sql`), without foreign keys:
+
+| Table | Grain | Content | Chunk | Compressed after | Raw retention |
+| --- | --- | --- | --- | --- | --- |
+| `game_observations` | universe × 5-minute slot | CCU, visits, favorites; `source` is `poll` or `legacy` | 1 day | 7 days | 365 days |
+| `census_observations` | place × 10-minute slot | Rolimon's active players | 1 day | 7 days | 365 days |
+| `vote_observations` | universe × hour | Cumulative up and down votes | 7 days | 30 days | Permanent |
+| `chart_placements` | sort × universe × hour | Rank, player count, sponsored flag | 7 days | 30 days | Permanent |
+
+Continuous aggregates, kept permanently. They are real-time: buckets not yet materialized are computed from the raw rows at query time. Their policies refresh up to one hour before now.
+
+| View | Bucket | Columns | Refresh | Compressed after |
+| --- | --- | --- | --- | --- |
+| `game_hourly` | universe × hour | `ccu_min`, `ccu_avg`, `ccu_max`, `visits_max`, `favorites_last`, `samples` | Every 15 min, last 3 days | 30 days |
+| `game_daily` | universe × UTC day | `ccu_min`, `ccu_avg`, `ccu_peak`, `visits_min`, `visits_max`, `favorites_last`, `samples` | Every hour, last 7 days | Not compressed |
+| `census_hourly` | place × hour | `ccu_min`, `ccu_avg`, `ccu_max`, `samples` | Every 15 min, last 3 days | 30 days |
+
+The view `game_daily_all` merges `game_daily` (`origin = 'observed'`) with `game_daily_legacy` (`origin = 'legacy'`) for the days `game_daily` lacks.
+
+Regular tables (`src/db/schema.ts`):
+
+- `games`: one row per universe with Roblox metadata, the Roblox creation time (`roblox_created_at`) kept separate from the radar's first observation (`first_observed_at`), the latest CCU and the last time it had players (`last_active_at`), name and description fingerprints, and the current thumbnail (`thumbnail_key` is the media asset id), icon and check time.
+- `places`: cached place-to-universe mapping. A place without a universe keeps a null `universe_id` and an `error`.
+- `game_versions`: `metadata` versions (name and description) and `thumbnail` versions, each with its observation time.
+- `discovery_sources`: one row per universe, source (`rolimons`, `chart`, `search`, `recommendation`) and detail (sort id, search term or seed universe), with first and last sighting. `explore` also records sightings of games already tracked, so the table holds relations too: a row is the game's discovery path when its `first_seen_at` equals `games.first_observed_at`.
+- `game_daily_legacy`: the v1 daily snapshots (the days v1 had compacted, from 2026-08-24): average and peak CCU, visits, favorites, and the v1 daily votes and best rank, null where v1 had no reading.
+- `job_runs`: one row per job execution, with slot, status, duration, `stats` and error.
+
+The full design is in [`docs/plans/2026-10-20-radar-v2-design.md`](docs/plans/2026-10-20-radar-v2-design.md), and the phase 1a plan with its execution notes in [`docs/plans/2026-10-20-radar-v2-phase-1a-data-core.md`](docs/plans/2026-10-20-radar-v2-phase-1a-data-core.md).
+
+```text
+src/lib/jobs/     Collectors, the job runner and Healthchecks pings
+src/lib/api/      Roblox and Rolimon's clients, parsers and the HTTP client
+src/lib/legacy/   v1 history import
+src/lib/          Configuration, time slots, fingerprints, status report
+src/db/           Drizzle schema, client, migrations runner and repositories
+src/app/          Next.js application shell
+scripts/          job, collect, import-legacy, status, migrate
+drizzle/          SQL migrations (0001 holds the TimescaleDB objects)
+```
+
+## Local setup
+
+The database needs PostgreSQL 18 with TimescaleDB; PGlite cannot load TimescaleDB. On Ubuntu or WSL (PostgreSQL 16 already on port 5432, so the new cluster listens on 5433):
+
+```bash
+sudo apt-get install -y postgresql-common
+sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+curl -s https://packagecloud.io/install/repositories/timescale/timescaledb/script.deb.sh | sudo bash
+sudo apt-get install -y postgresql-18 timescaledb-2-postgresql-18
+sudo timescaledb-tune --yes --quiet --pg-config=/usr/lib/postgresql/18/bin/pg_config
+sudo pg_ctlcluster 18 main restart
+sudo -u postgres psql -p 5433 -c "ALTER USER postgres PASSWORD 'postgres';"
+sudo -u postgres createdb -p 5433 roblox_trends
+```
+
+Alternatively, run the CI image: `docker run -d --name radar-db -p 5433:5432 -e POSTGRES_PASSWORD=postgres timescale/timescaledb:2.30.2-pg18`, then `docker exec radar-db createdb -U postgres roblox_trends`.
+
+Then:
 
 ```bash
 cp .env.example .env.local
+# Set DATABASE_URL=postgresql://postgres:postgres@localhost:5433/roblox_trends in .env.local.
 npm install
 npm run db:migrate
 npm run collect
-npm run analyze
-npm run dev
+npm run status
 ```
 
-Open `http://localhost:3000`. The first collection populates the database from Roblox Charts, the Roblox Games API, and optional Rolimon's discovery. An empty database stays empty until a successful live collection; the application never inserts synthetic games.
+`npm run collect` calls the live Roblox and Rolimon's APIs. A fresh database fills over several census runs, because each run resolves places for at most 150 seconds. `npm run dev` serves the application shell; the dashboard returns in phase 4.
 
-Run the complete validation workflow:
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | The v2 database. Required by every command that connects to it. |
+| `TEST_DATABASE_URL` | Server for the database test suites, set in `.env.test.local` (see Tests). |
+| `LEGACY_DATABASE_URL` | The v1 production database, read only by `npm run import:legacy`. Never use it as `DATABASE_URL`. |
+| `HEALTHCHECKS_PING_BASE` | Healthchecks.io ping base, for example `https://hc-ping.com/<ping-key>`. Checks are created on first ping. Without it, no ping is sent. |
+| `RADAR_REQUIRE_HEALTHCHECKS` | `1` makes `npm run job` refuse to run without `HEALTHCHECKS_PING_BASE`. |
+| `ROBLOX_COUNTRY`, `ROBLOX_DEVICE` | Charts filters; default `all` and `computer`. |
+
+Every command that connects to the database refuses one that still holds v1 tables, and requires PostgreSQL 18 (`RETURNING old.*`).
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `npm run job <name>` | Runs one job once: `census`, `poll`, `votes`, `charts`, `explore` or `thumbnails`. Exits 1 when the run failed or could not start, and 2 for an unknown name. Sets `statement_timeout` to the job's timeout and `lock_timeout` to 30 s. |
+| `npm run collect` | Runs the six jobs once, in the order above, for local setup and manual catch-up. A failed job does not stop the others; the exit code is 1 when any failed. |
+| `npm run import:legacy [-- --since=<ISO date>]` | Copies the v1 history from `LEGACY_DATABASE_URL` into `DATABASE_URL`: games, metadata versions, discoveries, hourly observations within the raw retention, votes, chart placements before the first v2 `charts` run, and daily rows. The source is read in read-only transactions. Writes never overwrite v2 data, so a rerun is idempotent; after a failure, `--since` set to the logged window start resumes it. Runs only during the production cutover, before the timers are enabled. |
+| `npm run status` | Prints, per job, the latest and last completed run, the runs, degraded and failed counts over the last 24 hours, rate-limited runs and 429s per request, the watched census and poll stats and the last error; then the coverage of Rolimon's places at or above 100 CCU polled within 15 minutes, and data totals. |
+| `npm run db:generate` | Generates a migration from `src/db/schema.ts` into `drizzle/`. Schema changes go into new migrations. |
+| `npm run db:migrate` | Applies the migrations in `drizzle/`. |
+| `npm run validate` | Runs lint, typecheck, tests and the production build. |
+
+## Tests
+
+`npm run test` runs Vitest. Unit tests run anywhere. The `*.db.test.ts` suites need `TEST_DATABASE_URL`, pointing to a PostgreSQL 18 + TimescaleDB server whose user can create databases. Each suite creates its own databases from `template0`, migrates them (unless it needs an empty one), pauses the TimescaleDB background jobs and drops them at the end. Fixtures never reach an application database.
+
+Put the variable in `.env.test.local`, because Vitest runs with `NODE_ENV=test` and `@next/env` does not read `.env.local` in that mode:
 
 ```bash
-npm run validate
+TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5433/postgres
 ```
 
-## Live collection
-
-```bash
-npm run db:migrate
-npm run collect
-npm run analyze
-npm run brief
-npm run report
-npm run maintenance
-npm run tick
-```
-
-The commands are intentionally separate:
-
-- `collect` reads 22 broad and genre-specific Roblox Charts, enriches games through the Games and Votes APIs, rotates through a bounded keyword-search window, explores recommendation results, consumes candidates from the Rolimon's acceleration frontier, and writes idempotent snapshots. It immediately re-evaluates launch breakouts and resurgences after persistence. Previously resolved Rolimon's Place IDs are reused from the game catalog instead of calling Roblox again.
-- `analyze` updates game momentum, trend stages, saturation, opportunity scores, history, and deterministic ideas.
-- `brief` writes an agent-oriented Markdown and JSON decision dossier using only fully covered evidence windows, including live rising games and their hype clusters.
-- `report` sends only unseen breakout, stage-change, and opportunity events to Discord.
-- `maintenance` aggregates hourly snapshots older than the configured retention into daily rows and removes the compacted hourly rows.
-- `tick` reconciles every scheduled job against durable leases and completed slots stored in PostgreSQL. It is the production scheduler entry point.
-
-The collection bucket is one hour. A retry inside the same bucket updates the matching `(universe, bucket, source, chart)` row instead of creating a duplicate. Every attempt and its per-source outcome are retained separately for diagnosis. Collection health is `healthy`, `degraded`, or `critical`; missing optional discovery remains degraded, while missing snapshots, insufficient chart coverage, or Games API failures are critical.
-
-The durable scheduler checks every fifteen minutes and writes at most one successful execution per logical slot. A lightweight Rolimon's frontier scan records sub-chart CCU movement before hourly enrichment, while collection remains hourly. A PostgreSQL lease prevents scheduled and manual reconciliation from overlapping. Discord receives an immediate critical collection alert, an alert after two consecutive degraded attempts, a recovery alert, and a bounded digest of the strongest new rising-game events. Alert delivery failures are isolated from collection.
-
-Games published in the last 90 days continue to receive direct snapshots after leaving a chart. Older games continue to be tracked while they have recorded at least 100 CCU during the last 30 days. This avoids mistaking a missing chart observation for stable demand or losing the decline after a breakout.
-
-To merge an existing local PGlite history into a configured production PostgreSQL database, run:
-
-```bash
-DATABASE_URL="postgresql://..." npm run db:import-local
-```
-
-The import copies only live game metadata, tags, snapshots, daily aggregates, and source-run history. It is idempotent and does not copy derived scores, trends, ideas, settings, alert state, or secrets. Run `npm run analyze` against the production database after the import.
-
-## Agent decision dossier
-
-Every daily brief refreshes:
-
-```text
-.data/reports/latest-agent-brief.md
-.data/reports/latest-agent-brief.json
-```
-
-The dossier is the preferred input for AI-assisted decisions. It records data freshness, verified 1-hour/24-hour/72-hour/7-day coverage, source failures, confidence caps, broad format signals, theme signals, combinations, saturation risks, supporting Roblox games, and questions requiring human judgment. A short observation is never labeled as 24-hour or 72-hour growth in this export.
-
-The latest structured and Markdown versions are also persisted in Neon and exposed through the authenticated `/api/agent-brief` endpoint, so they survive an ephemeral scheduler filesystem.
-
-Generate it manually with:
-
-```bash
-npm run brief
-```
-
-## Environment variables
-
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `DATABASE_URL` | Production | PostgreSQL connection string. If absent, PGlite uses `PGLITE_DATA_DIR`. |
-| `PGLITE_DATA_DIR` | No | Local embedded database directory; defaults to `.data/roblox-trends`. |
-| `APP_USERNAME` | No | Basic Authentication username; defaults to `radar`. |
-| `APP_PASSWORD` | No | Enables single-user Basic Authentication when non-empty. |
-| `ROBLOX_COUNTRY` | No | Charts country filter; defaults to `all`. |
-| `ROBLOX_DEVICE` | No | Charts device filter; defaults to `computer`. |
-| `ROLIMONS_ENABLED` | No | Enables the additional Rolimon's discovery source. |
-| `DISCORD_WEBHOOK_URL` | Reporting | Discord webhook for daily reports, rising-game digests, and collection-health alerts; it can alternatively be stored in Settings. |
-| `OPENAI_API_KEY` | No | Enables optional structured AI idea generation. |
-| `OPENAI_MODEL` | No | OpenAI model for ideas; defaults to `gpt-5-mini`. |
-
-Settings persisted from the interface take precedence for collection thresholds, score weights, taxonomy, developer profile, collection choices, and the Discord webhook.
-
-## Automation
-
-GitHub Actions is the primary production clock:
-
-- `CI` runs linting, type checking, tests, and the production build on pushes and pull requests.
-- `Scheduler` runs the durable reconciliation command every fifteen minutes at staggered minutes to reduce start-of-hour delays.
-- `Collect Roblox data`, `Refresh analysis`, and `Analyze and report` remain manually dispatchable for operations and recovery.
-
-Scheduled workflows must receive a persistent `DATABASE_URL` repository secret; a runner-local PGlite database is intentionally not suitable because GitHub runners are ephemeral. Add `DISCORD_WEBHOOK_URL` as a secret for reports and alerts. An optional `HEALTHCHECKS_PING_URL` secret enables independent heartbeat monitoring without deploying the web application or owning a domain.
-
-The scheduler uses Neon PostgreSQL for atomic leases and job history, retries expired or failed slots, and exits. Standard GitHub-hosted runners are free for this public repository. The optional paid Render cron declared in `render.yaml` can be added later as a second clock without causing duplicate work. Full setup and incident procedures are documented in [`docs/scheduler-operations.md`](docs/scheduler-operations.md).
-
-## Deployment
-
-For a typical deployment:
-
-1. Create one PostgreSQL database and set `DATABASE_URL`.
-2. Run `npm run db:migrate` against it.
-3. Deploy the Next.js application.
-4. Add `APP_PASSWORD` if the deployment is publicly reachable.
-5. Add the same `DATABASE_URL` to GitHub Actions secrets and keep the `Scheduler` workflow active.
-6. Add `HEALTHCHECKS_PING_URL` for domain-free scheduler monitoring, or monitor `/api/health/data` after deploying the web application.
-
-The included Dockerfile builds the standalone Next.js output. It expects a `public` directory and copies the migrations required at runtime. On a platform with a persistent disk, PGlite can be mounted at `PGLITE_DATA_DIR`, but hosted PostgreSQL is recommended for scheduled jobs.
+Without it, the database suites are reported as skipped locally. In CI a missing value fails the run. CI (`.github/workflows/ci.yml`) runs on pushes to `main` and `radar-v2` and on pull requests, with Node.js 24 and a `timescale/timescaledb:2.30.2-pg18` service, and runs lint, typecheck, tests and build.
 
 ## Verified external API behavior
 
-The endpoints were called directly on August 9–10, 2026:
+The v1 endpoints were called directly on August 9–10, 2026. Corrections found while building v2 are noted in place.
 
-- `GET https://apis.roblox.com/explore-api/v1/get-sorts` accepted `sessionId`, `device`, and `country`. It returned a `sorts` array; game sorts included `top-trending`, `up-and-coming`, and `top-playing-now`, and currently embedded their game arrays.
-- `GET https://apis.roblox.com/explore-api/v1/get-sort-content` returned one sort object with a `games` array. Each game exposed `universeId`, `rootPlaceId`, `name`, `playerCount`, and vote/maturity fields. No continuation token was present in the tested response.
-- Direct sort-content calls succeeded for 22 configured sort IDs, including 13 `trending-in-*` genre sorts plus `top-rated`, `most-popular`, `top-paid-access`, and `top-earning`. Several of these valid sorts were not advertised by the tested `get-sorts` response.
-- `GET https://games.roblox.com/v1/games?universeIds=...` returned `data` with creator metadata, `created`, `updated`, `playing`, `visits`, and `favoritedCount`.
+- `GET https://apis.roblox.com/explore-api/v1/get-sorts` accepted `sessionId`, `device`, and `country`. It returned a `sorts` array; game sorts included `top-trending`, `up-and-coming`, and `top-playing-now`, and embedded their game arrays. The v2 collectors do not use it: `charts` reads each configured sort directly.
+- `GET https://apis.roblox.com/explore-api/v1/get-sort-content` returned one sort object with a `games` array. Each game exposed `universeId`, `rootPlaceId`, `name`, `playerCount`, and vote/maturity fields. No continuation token was present in the tested response. v2 sends `sessionId`, `sortId`, `device`, and `country`.
+- Direct sort-content calls succeeded for the 22 configured sort IDs (`ROBLOX_DISCOVERY_CHARTS`), including 13 `trending-in-*` genre sorts plus `top-rated`, `most-popular`, `top-paid-access`, and `top-earning`. Several of these valid sorts were not advertised by the tested `get-sorts` response.
+- `GET https://games.roblox.com/v1/games?universeIds=...` returned `data` with creator metadata, `created`, `updated`, `playing`, `visits`, and `favoritedCount`. v2 requests 50 universes per call.
 - `GET https://games.roblox.com/v1/games/votes?universeIds=...` returned cumulative `upVotes` and `downVotes` without authentication.
-- `GET https://games.roblox.com/v1/games/recommendations/game/{universeId}?maxRows=20` returned related games with player counts, votes, and sponsorship fields without authentication.
-- `GET https://apis.roblox.com/search-api/omni-search` accepted `searchQuery`, `sessionId`, and `pageType=all`, returned 40 results in the tested first page, and exposed a next-page token. The collector intentionally uses only the first bounded page.
+- `GET https://games.roblox.com/v1/games/recommendations/game/{universeId}?maxRows=20` returned related games with player counts, votes, and sponsorship fields without authentication. Its items carry `placeId` instead of `rootPlaceId`.
+- `GET https://apis.roblox.com/search-api/omni-search` accepted `searchQuery`, `sessionId`, and `pageType=all`, returned 40 results in the tested first page, and exposed a next-page token. Results are grouped in `searchResults[].contents` with a `contentType`; v2 keeps the `Game` items of the first page only.
 - The tested Charts response advertised a 50 requests/minute limit for sort content and 120 requests/minute for sorts; Games advertised 300 requests/minute. These headers are observational and can change.
-- `GET https://api.rolimons.com/games/v1/gamelist` remained public and returned 7,137 games in a map from Place ID to `[name, activePlayers, iconUrl]`. It does not provide Universe IDs. The collector resolves only the configured number of highest-CCU extra candidates through Roblox's public place-to-universe endpoint.
-- `GET https://games.roblox.com/v1/games/multiget-place-details` returned `401` without authentication. The collector therefore uses `GET https://apis.roblox.com/universes/v1/places/{placeId}/universe`, which returned a Universe ID without authentication in the direct test.
+- `GET https://api.rolimons.com/games/v1/gamelist` remained public and returned `{ success, game_count, games }`, where `games` maps a Place ID to `[name, activePlayers, iconUrl]`: 7,137 games in August, about 7,800 by October 2026. It does not provide Universe IDs. v2 resolves every listed place at or above 100 CCU whose universe is unknown, with no count cap (a 150-second budget per census run).
+- `GET https://games.roblox.com/v1/games/multiget-place-details` returned `401` without authentication. The collector therefore uses `GET https://apis.roblox.com/universes/v1/places/{placeId}/universe`, which returns a Universe ID without authentication. Correction: a place without a universe returns HTTP 200 with `{"universeId": null}`, not 404 (404 comes only for an empty id). v2 stores such a place as unresolvable and retries it after 7 days.
+- `GET https://thumbnails.roblox.com/v1/games/multiget/thumbnails?universeIds=...&countPerUniverse=3&defaults=false&size=768x432&format=Png&isCircular=false`, verified on 2026-10-20, returns `data` items `{ universeId, error, thumbnails: [{ targetId, state, imageUrl }] }`, where `targetId` is the media asset id. v2 requests 50 universes per call with `defaults=false`: with `defaults=true`, games without media come back as shared generic `GameMediaItem` images marked `Completed`. A universe whose thumbnails are all `Blocked` counts as having none; `Pending`, `InReview`, `TemporarilyUnavailable` and `Error` answers are retried on the next run. Image URLs carry a `180DAY-` prefix and probably expire, so thumbnail history is keyed on the media asset id (`games.thumbnail_key`), not on the URL.
+- `GET https://thumbnails.roblox.com/v1/games/icons?universeIds=...&returnPolicy=PlaceHolder&size=150x150&format=Webp&isCircular=false` returns `data` items `{ targetId, state, imageUrl }`. With the placeholder policy, states other than `Completed` carry a generic image, so v2 keeps only `Completed` icons.
 
-These public web endpoints are not a stability contract. The client validates response shapes, spaces requests per Roblox host, uses timeouts and bounded exponential-backoff retries with jitter, honors `Retry-After` and rate-limit reset headers, caches responses in-process, rotates search keywords, stops search after a terminal `429`, limits Rolimon's resolution concurrency, reuses known Place-to-Universe mappings, and records source-specific failures without discarding successful sources. Attempt details also retain request, retry, and rate-limit counters.
+These public web endpoints are not a stability contract. The HTTP client (`src/lib/api/http.ts`) spaces requests per host (1.3 s on `apis.roblox.com`, 0.5 s on `games.roblox.com` and `thumbnails.roblox.com`), times out after 10 s (15 s for Rolimon's), and retries 429, 5xx and network errors up to 3 times with exponential backoff (5 s base for 429, 0.5 s otherwise, up to 750 ms of jitter, at most 60 s). It honors `Retry-After` and `x-ratelimit-reset`, pauses a host whose `x-ratelimit-remaining` reaches 0, and caches responses in-process. Other 4xx responses are not retried. Parsers validate the envelope, then each item, so a malformed item is skipped and logged instead of discarding its batch. In `census`, `poll`, `votes`, `charts` and `explore`, a 429 that outlasts the retries stops further requests to that endpoint until the next run; `thumbnails` stops after 3 unanswered batches in a row. Every job except `census` records its request, retry and 429 counts in `job_runs.stats.http`.
 
 The retry behavior follows Roblox's [rate-limit guidance](https://create.roblox.com/docs/cloud/reference/rate-limits): treat `429` as expected, honor server-provided retry timing, and use exponential backoff when no timing header is present.
 
-Competitor research and the resulting implementation decisions are documented in [`docs/market-research.md`](docs/market-research.md).
+## Production
 
-## Project map
-
-```text
-src/app/          Next.js pages and mutation endpoints
-src/components/   Responsive interface components
-src/db/           Drizzle schema, connection, migrations, repository
-src/lib/api/      Roblox and Rolimon's clients and parsers
-src/lib/          Classification, scoring, analysis, ideas, reports
-scripts/          collect, analyze, report, maintenance, migrate
-drizzle/          PostgreSQL migrations
-.github/workflows Scheduled jobs and CI
-```
-
-The optional OpenAI path uses the Responses API with a strict JSON Schema, following the [official Structured Outputs documentation](https://developers.openai.com/api/docs/guides/structured-outputs). The deterministic generator remains the default and requires no key.
+Phase 1b provisions the server: the systemd timers (one per job, with the intervals of `JOB_CONFIG`), backups, the Healthchecks checks, and deployment from the `radar-v2` branch until cutover. Until then the v1 collector keeps running from `main`. The full list is in the phase 1a plan, under [Out of scope for this plan (phase 1b)](docs/plans/2026-10-20-radar-v2-phase-1a-data-core.md#out-of-scope-for-this-plan-phase-1b).
