@@ -88,9 +88,19 @@ export const JOB_CONFIG = {
   explore: {
     intervalMinutes: 60,
     timeoutMs: 30 * 60_000,
-    seedCount: 10,
+    // Rising young games: the average hourly CCU of the current window against the same window a day earlier.
     seedMaximumAgeDays: 60,
+    currentWindowHours: 6,
+    previousWindowOffsetHours: 24,
+    // Growth is ln((current + k) / (previous + k)): k keeps a game going from 5 to 50 CCU from outranking real risers.
+    seedSmoothingCcu: 100,
+    seedMinimumCurrentCcu: 150,
+    // Recommendations expand the top seeds; search terms come from the titles of a wider set of rising games.
+    seedCount: 10,
     recommendationsPerSeed: 20,
+    termTitleCount: 50,
+    // A term must be shared by this many titles; with fewer titles available, one title is enough.
+    minimumTermTitles: 3,
     searchTermCount: 4,
     minimumDiscoveryCcu: 50,
   },

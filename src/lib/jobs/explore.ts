@@ -31,38 +31,61 @@ const SEARCH_STOP_WORDS = new Set([
   "new",
 ]);
 
-// The words that rising games share are the vocabulary of what is trending now. A word counts once per title, and
-// among several titles it must be shared by at least two.
-export function selectSearchTerms(titles: string[], count: number): string[] {
-  const frequency = new Map<string, number>();
+// The words that rising games share are the vocabulary of what is trending now. A word counts once per title and
+// must be shared by `minimumTitles` titles; when fewer titles are available, one is enough.
+export function selectSearchTerms(titles: string[], count: number, minimumTitles: number): string[] {
+  const words = new Map<string, { titles: number; forms: Map<string, number> }>();
   for (const title of titles) {
-    const tokens = new Set(
-      normalizeTitle(title)
-        .toLowerCase()
-        .split(/\s+/)
-        .map((token) => token.replace(/^['+-]+|['+-]+$/g, ""))
-        .filter((token) => token.length >= 3 && /\p{L}/u.test(token) && !SEARCH_STOP_WORDS.has(token)),
-    );
-    for (const token of tokens) frequency.set(token, (frequency.get(token) ?? 0) + 1);
+    for (const [word, form] of titleWords(title)) {
+      const entry = words.get(word) ?? { titles: 0, forms: new Map<string, number>() };
+      entry.titles += 1;
+      entry.forms.set(form, (entry.forms.get(form) ?? 0) + 1);
+      words.set(word, entry);
+    }
   }
-  const minimumOccurrences = titles.length > 1 ? 2 : 1;
-  return [...frequency.entries()]
-    .filter(([, occurrences]) => occurrences >= minimumOccurrences)
-    .sort((left, right) => right[1] - left[1] || compareText(left[0], right[0]))
+  const minimumOccurrences = titles.length >= minimumTitles ? minimumTitles : 1;
+  return [...words.entries()]
+    .filter(([, entry]) => entry.titles >= minimumOccurrences)
+    .sort(([leftWord, left], [rightWord, right]) => right.titles - left.titles || compareText(leftWord, rightWord))
     .slice(0, count)
-    .map(([term]) => term);
+    .map(([, entry]) => commonestForm(entry.forms));
+}
+
+// The words of a title, each folded word mapped to the form the title spells it in. Hyphens join words
+// ("Steal-a-Brainrot"); a possessive or a plural folds into the word ("Egg's" and "Eggs" into "egg"), but a double s
+// does not ("boss").
+function titleWords(title: string): Map<string, string> {
+  const words = new Map<string, string>();
+  for (const token of normalizeTitle(title).toLowerCase().split(/[\s-]+/)) {
+    const form = token.replace(/^['+]+|['+]+$/g, "").replace(/'s$/, "");
+    const word = form.length >= 4 && form.endsWith("s") && !form.endsWith("ss") ? form.slice(0, -1) : form;
+    if (word.length < 3 || !/\p{L}/u.test(word) || SEARCH_STOP_WORDS.has(word) || SEARCH_STOP_WORDS.has(form)) continue;
+    if (!words.has(word)) words.set(word, form);
+  }
+  return words;
+}
+
+// The search runs on the commonest spelling, so a word folded by mistake ("chaos") is still searched as written. A
+// tie goes to the shorter form: the singular over its plural.
+function commonestForm(forms: Map<string, number>): string {
+  const [[form]] = [...forms.entries()].sort(
+    ([leftForm, left], [rightForm, right]) => right - left || leftForm.length - rightForm.length || compareText(leftForm, rightForm),
+  );
+  return form;
 }
 
 export interface ExploreDependencies {
   roblox: Pick<RobloxApi, "getRecommendations" | "searchGames" | "getGameDetails">;
 }
 
-interface ExplorationOutcome {
+interface EndpointOutcome {
   candidates: PromotionCandidate[];
   requests: number;
   failures: number;
+  // Successful responses that listed no games: one is a quiet answer, all of them a format change.
+  emptyResponses: number;
   // Requests not made because an earlier one was rate limited.
-  skipped: number;
+  skippedRequests: number;
   rateLimited: boolean;
 }
 
@@ -73,30 +96,44 @@ async function exploreEndpoint(
   details: string[],
   minimumCcu: number,
   request: (detail: string) => Promise<RobloxChartGame[]>,
-): Promise<ExplorationOutcome> {
-  const outcome: ExplorationOutcome = { candidates: [], requests: 0, failures: 0, skipped: 0, rateLimited: false };
+): Promise<EndpointOutcome> {
+  const outcome: EndpointOutcome = { candidates: [], requests: 0, failures: 0, emptyResponses: 0, skippedRequests: 0, rateLimited: false };
   for (const [index, detail] of details.entries()) {
     outcome.requests += 1;
+    let listed: RobloxChartGame[];
     try {
-      for (const game of await request(detail)) {
-        if (game.playerCount >= minimumCcu) outcome.candidates.push({ universeId: game.universeId, source, detail });
-      }
+      listed = await request(detail);
     } catch (error) {
       outcome.failures += 1;
       logger.warn("Exploration request failed", { source, detail, error: errorMessage(error) });
       if (isRateLimited(error)) {
         outcome.rateLimited = true;
-        outcome.skipped = details.length - index - 1;
-        logger.warn("Exploration rate limited; skipping the remaining requests", { source, skipped: outcome.skipped });
+        outcome.skippedRequests = details.length - index - 1;
+        logger.warn("Exploration rate limited; skipping the remaining requests", { source, skipped: outcome.skippedRequests });
         break;
       }
+      continue;
+    }
+    if (!listed.length) outcome.emptyResponses += 1;
+    for (const game of listed) {
+      if (game.playerCount >= minimumCcu) outcome.candidates.push({ universeId: game.universeId, source, detail });
     }
   }
   return outcome;
 }
 
-// Expands the recommendations of rising young games and searches the words their titles share. Discoveries of games
-// already tracked are recorded too: they show how games relate, not only how they were first found.
+// An endpoint that answered no request with games is down or changed its format. Single failures stay isolated.
+function endpointFailed(outcome: EndpointOutcome): boolean {
+  return outcome.requests > 0 && outcome.failures + outcome.emptyResponses === outcome.requests;
+}
+
+function endpointStats({ candidates, ...stats }: EndpointOutcome) {
+  return { ...stats, candidates: candidates.length };
+}
+
+// Expands the recommendations of rising young games and searches the words shared by the titles of a wider set of
+// them. Discoveries of games already tracked are recorded too: they show how games relate, not only how they were
+// first found.
 export function createExploreJob(dependencies: ExploreDependencies): JobDefinition {
   const config = JOB_CONFIG.explore;
   return {
@@ -104,54 +141,66 @@ export function createExploreJob(dependencies: ExploreDependencies): JobDefiniti
     intervalMinutes: config.intervalMinutes,
     timeoutMs: config.timeoutMs,
     async run({ db, now }) {
-      const seeds = await selectRisingSeeds(db, now, config.seedCount, config.seedMaximumAgeDays);
-      const terms = selectSearchTerms(seeds.map((seed) => seed.name), config.searchTermCount);
+      // One query serves both: the top seeds for recommendations, every returned title for search terms.
+      const rising = await selectRisingSeeds(db, now, {
+        count: Math.max(config.seedCount, config.termTitleCount),
+        maximumAgeDays: config.seedMaximumAgeDays,
+        currentWindowHours: config.currentWindowHours,
+        previousWindowOffsetHours: config.previousWindowOffsetHours,
+        smoothingCcu: config.seedSmoothingCcu,
+        minimumCurrentCcu: config.seedMinimumCurrentCcu,
+      });
+      const seeds = rising.slice(0, config.seedCount);
+      const titles = rising.slice(0, config.termTitleCount).map((game) => game.name);
+      const terms = selectSearchTerms(titles, config.searchTermCount, config.minimumTermTitles);
       const httpBefore = getHttpRequestMetrics();
       // Recommendations and search are separate endpoints, so a rate limit on one does not stop the other.
-      const outcomes = [
-        await exploreEndpoint(
-          "recommendation",
-          seeds.map((seed) => String(seed.universeId)),
-          config.minimumDiscoveryCcu,
-          (seed) => dependencies.roblox.getRecommendations(seed, config.recommendationsPerSeed),
-        ),
-        await exploreEndpoint("search", terms, config.minimumDiscoveryCcu, (term) => dependencies.roblox.searchGames(term)),
-      ];
-      const candidates = outcomes.flatMap((outcome) => outcome.candidates);
-      const rateLimited = outcomes.some((outcome) => outcome.rateLimited);
+      const recommendation = await exploreEndpoint(
+        "recommendation",
+        seeds.map((seed) => String(seed.universeId)),
+        config.minimumDiscoveryCcu,
+        (seed) => dependencies.roblox.getRecommendations(seed, config.recommendationsPerSeed),
+      );
+      const search = await exploreEndpoint("search", terms, config.minimumDiscoveryCcu, (term) => dependencies.roblox.searchGames(term));
+      const candidates = [...recommendation.candidates, ...search.candidates];
+      const rateLimited = recommendation.rateLimited || search.rateLimited;
       let promoted = 0;
       let discoveries = 0;
       let promotionError: string | undefined;
-      try {
-        ({ promoted, discoveries } = await promoteUniverses(db, dependencies.roblox, candidates, now, { recordKnown: true }));
-      } catch (error) {
-        // Only a Games API failure is tolerated; a database error fails the run. The message already includes the cause.
-        if (!(error instanceof PromotionApiError)) throw error;
-        promotionError = error.message;
-        logger.error("Exploration promotion failed; retrying next run", { error: promotionError });
+      let promotionSkipped: "rateLimited" | undefined;
+      if (recommendation.rateLimited) {
+        // The Games API shares the recommendations host, which is still rate limited; the next run finds these again.
+        promotionSkipped = "rateLimited";
+        logger.warn("Exploration promotion skipped: the Games API host is rate limited", { candidates: candidates.length });
+      } else {
+        try {
+          ({ promoted, discoveries } = await promoteUniverses(db, dependencies.roblox, candidates, now, { recordKnown: true }));
+        } catch (error) {
+          // Only a Games API failure is tolerated; a database error fails the run. The message already includes the cause.
+          if (!(error instanceof PromotionApiError)) throw error;
+          promotionError = error.message;
+          logger.error("Exploration promotion failed; retrying next run", { error: promotionError });
+        }
       }
-      // One failed request is isolated; an endpoint that failed every request is down or changed its format.
-      const endpointFailed = outcomes.some((outcome) => outcome.requests > 0 && outcome.failures === outcome.requests);
+      const degraded =
+        endpointFailed(recommendation) || endpointFailed(search) || rateLimited || promotionError !== undefined || promotionSkipped !== undefined;
       return {
-        status: endpointFailed || rateLimited || promotionError !== undefined ? "degraded" : "success",
+        status: degraded ? "degraded" : "success",
         stats: {
           seeds: seeds.length,
+          titles: titles.length,
           terms,
-          requests: sum(outcomes, (outcome) => outcome.requests),
-          failures: sum(outcomes, (outcome) => outcome.failures),
-          skippedRequests: sum(outcomes, (outcome) => outcome.skipped),
+          recommendation: endpointStats(recommendation),
+          search: endpointStats(search),
           rateLimited,
-          candidates: candidates.length,
+          promotionRequested: new Set(candidates.map((candidate) => candidate.universeId)).size,
           promoted,
           discoveries,
           promotionError,
+          promotionSkipped,
           http: httpMetricsSince(httpBefore),
         },
       };
     },
   };
-}
-
-function sum<T>(items: T[], value: (item: T) => number): number {
-  return items.reduce((total, item) => total + value(item), 0);
 }

@@ -19,9 +19,12 @@ function listed(universeId: number, playerCount: number): RobloxChartGame {
   return { universeId, rootPlaceId: universeId * 10, name: `Game ${universeId}`, playerCount };
 }
 
+// A game under the minimum CCU: the response is not empty, but nothing in it is a candidate.
+const tiny = listed(99, 5);
+
 function exploreJob(roblox: Partial<Roblox>) {
   return createExploreJob({
-    roblox: { getRecommendations: async () => [], searchGames: async () => [], getGameDetails, ...roblox },
+    roblox: { getRecommendations: async () => [tiny], searchGames: async () => [tiny], getGameDetails, ...roblox },
   });
 }
 
@@ -44,7 +47,7 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
     await database.db.delete(jobRuns);
   });
 
-  // A young game that went from 100 CCU a day ago to `ccu` now.
+  // A young game that went from 100 CCU a day ago to `ccu` now; a larger `ccu` ranks higher.
   async function risingGame(universeId: number, name: string, ccu: number) {
     await upsertGameDetails(database.db, [gameDetail(universeId, { name, created: new Date("2026-10-15T00:00:00Z") })], now);
     await writeGameObservations(database.db, [
@@ -79,28 +82,49 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
     expect((await database.db.select({ universeId: games.universeId }).from(games)).map((game) => game.universeId).sort()).toEqual([1, 2]);
   });
 
-  it("searches the words rising titles share and records games already tracked", async () => {
-    await risingGame(1, "Steal An Egg", 5_000);
-    await risingGame(4, "Egg Obby", 3_000);
-    const searchGames = vi.fn<Roblox["searchGames"]>(async () => [listed(1, 5_000), listed(9, 800), listed(10, 10)]);
-    const job = exploreJob({
-      getRecommendations: async (seed) => (seed === "1" ? [listed(4, 3_000)] : []),
-      searchGames,
+  it("succeeds without requests when no young game is rising", async () => {
+    const getRecommendations = vi.fn<Roblox["getRecommendations"]>(async () => [tiny]);
+    const searchGames = vi.fn<Roblox["searchGames"]>(async () => [tiny]);
+    expect(await executeJob(exploreJob({ getRecommendations, searchGames }), database.db, now)).toBe("success");
+    expect(getRecommendations).not.toHaveBeenCalled();
+    expect(searchGames).not.toHaveBeenCalled();
+    expect((await lastRun()).stats).toMatchObject({
+      seeds: 0,
+      titles: 0,
+      terms: [],
+      recommendation: { requests: 0 },
+      search: { requests: 0 },
+      promotionRequested: 0,
     });
+  });
+
+  it("expands the top seeds and searches the words shared by the titles of more rising games", async () => {
+    // Twelve rising games: the top ten are seeds, and all twelve titles feed the search terms. "Brainrot" is in three
+    // titles, two of them outside the seeds; "Game" is generic and the numbers are not words.
+    await risingGame(1, "Steal a Brainrot", 12_000);
+    for (let universeId = 2; universeId <= 10; universeId += 1) await risingGame(universeId, `Game ${universeId}`, 13_000 - universeId * 1_000);
+    await risingGame(11, "Brainrot Evolution", 2_000);
+    await risingGame(12, "Brainrots Merge", 1_000);
+    const getRecommendations = vi.fn<Roblox["getRecommendations"]>(async (seed) => (seed === "1" ? [listed(4, 3_000)] : [tiny]));
+    const searchGames = vi.fn<Roblox["searchGames"]>(async () => [listed(1, 5_000), listed(50, 800), listed(51, 10)]);
+    const job = exploreJob({ getRecommendations, searchGames });
     expect(await executeJob(job, database.db, now)).toBe("success");
-    expect(searchGames.mock.calls).toEqual([["egg"]]);
+    expect(getRecommendations.mock.calls.map(([seed]) => Number(seed))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(searchGames.mock.calls).toEqual([["brainrot"]]);
+    // Games already tracked are recorded too: game 4 was recommended from seed 1, and the search found the seed.
     expect(await discoveries()).toEqual([
-      [1, "search", "egg"],
+      [1, "search", "brainrot"],
       [4, "recommendation", "1"],
-      [9, "search", "egg"],
+      [50, "search", "brainrot"],
     ]);
     expect((await lastRun()).stats).toMatchObject({
-      seeds: 2,
-      terms: ["egg"],
-      requests: 3,
-      failures: 0,
+      seeds: 10,
+      titles: 12,
+      terms: ["brainrot"],
+      recommendation: { requests: 10, failures: 0, emptyResponses: 0, candidates: 1 },
+      search: { requests: 1, failures: 0, emptyResponses: 0, candidates: 2 },
       rateLimited: false,
-      candidates: 3,
+      promotionRequested: 3,
       promoted: 1,
       discoveries: 3,
     });
@@ -114,14 +138,18 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
         if (seed === "1") throw new HttpError(503, "Service Unavailable", "https://games.roblox.com/v1/games/recommendations/game/1");
         return [listed(8, 600)];
       },
-      searchGames: async () => [listed(9, 800)],
+      searchGames: async (term) => (term === "egg" ? [listed(9, 800)] : [tiny]),
     });
     expect(await executeJob(job, database.db, now)).toBe("success");
     expect(await discoveries()).toEqual([
       [8, "recommendation", "4"],
       [9, "search", "egg"],
     ]);
-    expect((await lastRun()).stats).toMatchObject({ requests: 3, failures: 1, rateLimited: false });
+    expect((await lastRun()).stats).toMatchObject({
+      terms: ["egg", "steal"],
+      recommendation: { requests: 2, failures: 1, emptyResponses: 0 },
+      search: { requests: 2, failures: 0, emptyResponses: 0 },
+    });
   });
 
   it("degrades the run when an endpoint fails every request", async () => {
@@ -135,44 +163,105 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
     expect(await executeJob(job, database.db, now)).toBe("degraded");
     // What the other endpoint found is still promoted.
     expect(await discoveries()).toEqual([[8, "recommendation", "1"]]);
-    expect((await lastRun()).stats).toMatchObject({ terms: ["egg", "steal"], requests: 3, failures: 2, rateLimited: false, promoted: 1 });
+    expect((await lastRun()).stats).toMatchObject({
+      terms: ["egg", "steal"],
+      search: { requests: 2, failures: 2 },
+      rateLimited: false,
+      promoted: 1,
+    });
   });
 
-  it("stops an endpoint after a rate limit that outlasted the retries and degrades the run", async () => {
+  it("degrades the run when every recommendation response is empty", async () => {
+    await risingGame(1, "Steal An Egg", 5_000);
+    await risingGame(4, "Egg Obby", 3_000);
+    const job = exploreJob({ getRecommendations: async () => [], searchGames: async () => [listed(9, 800)] });
+    expect(await executeJob(job, database.db, now)).toBe("degraded");
+    expect(await discoveries()).toEqual([
+      [9, "search", "egg"],
+      [9, "search", "steal"],
+    ]);
+    expect((await lastRun()).stats).toMatchObject({
+      recommendation: { requests: 2, failures: 0, emptyResponses: 2 },
+      search: { requests: 2, failures: 0, emptyResponses: 0 },
+    });
+  });
+
+  it("counts empty responses and failures together", async () => {
+    await risingGame(1, "Steal An Egg", 5_000);
+    await risingGame(4, "Egg Obby", 3_000);
+    const job = exploreJob({
+      getRecommendations: async (seed) => {
+        if (seed === "1") throw new Error("unavailable");
+        return [];
+      },
+    });
+    expect(await executeJob(job, database.db, now)).toBe("degraded");
+    expect((await lastRun()).stats).toMatchObject({ recommendation: { requests: 2, failures: 1, emptyResponses: 1 } });
+  });
+
+  it("stops recommendations after a rate limit that outlasted the retries and skips promotion", async () => {
     await risingGame(1, "Steal An Egg", 5_000);
     await risingGame(4, "Egg Obby", 4_000);
     await risingGame(5, "Egg Farm", 3_000);
     const getRecommendations = vi.fn<Roblox["getRecommendations"]>(async () => {
       throw new HttpError(429, "Too Many Requests", "https://games.roblox.com/v1/games/recommendations/game/1");
     });
-    const job = exploreJob({ getRecommendations, searchGames: async () => [listed(9, 800)] });
+    const searchGames = vi.fn<Roblox["searchGames"]>(async () => [listed(9, 800)]);
+    const details = vi.fn(getGameDetails);
+    const job = exploreJob({ getRecommendations, searchGames, getGameDetails: details });
     expect(await executeJob(job, database.db, now)).toBe("degraded");
-    // The search endpoint is separate, so it still runs.
     expect(getRecommendations.mock.calls).toEqual([["1", 20]]);
-    expect(await discoveries()).toEqual([[9, "search", "egg"]]);
+    // Search is a separate endpoint, so it still runs; the Games API shares the rate-limited host, so it is not called.
+    expect(searchGames.mock.calls).toEqual([["egg"]]);
+    expect(details).not.toHaveBeenCalled();
+    expect(await discoveries()).toEqual([]);
     expect((await lastRun()).stats).toMatchObject({
       seeds: 3,
       terms: ["egg"],
-      requests: 2,
-      failures: 1,
-      skippedRequests: 2,
+      recommendation: { requests: 1, failures: 1, skippedRequests: 2, rateLimited: true },
+      search: { requests: 1, failures: 0, rateLimited: false },
       rateLimited: true,
-      promoted: 1,
+      promotionRequested: 1,
+      promoted: 0,
+      promotionSkipped: "rateLimited",
     });
   });
 
-  it("reports the error and degrades the run when promotion fails", async () => {
+  it("stops searching after a rate limit and still promotes", async () => {
     await risingGame(1, "Steal An Egg", 5_000);
+    const searchGames = vi.fn<Roblox["searchGames"]>(async () => {
+      throw new HttpError(429, "Too Many Requests", "https://apis.roblox.com/search-api/omni-search");
+    });
+    const job = exploreJob({ getRecommendations: async () => [listed(8, 600)], searchGames });
+    expect(await executeJob(job, database.db, now)).toBe("degraded");
+    expect(searchGames.mock.calls).toEqual([["egg"]]);
+    expect(await discoveries()).toEqual([[8, "recommendation", "1"]]);
+    expect((await lastRun()).stats).toMatchObject({
+      search: { requests: 1, failures: 1, skippedRequests: 1, rateLimited: true },
+      rateLimited: true,
+      promoted: 1,
+    });
+    expect((await lastRun()).stats).not.toHaveProperty("promotionSkipped");
+  });
+
+  it("reports the error, keeps the known discoveries and degrades the run when promotion fails", async () => {
+    await risingGame(1, "Steal An Egg", 5_000);
+    await risingGame(4, "Egg Obby", 3_000);
     const unavailable = new HttpError(503, "Service Unavailable", "https://games.roblox.com/v1/games");
     const job = exploreJob({
-      getRecommendations: async () => [listed(2, 3_000)],
+      getRecommendations: async (seed) => (seed === "1" ? [listed(4, 3_000), listed(2, 3_000)] : [listed(2, 3_000)]),
       getGameDetails: async () => {
         throw unavailable;
       },
     });
     expect(await executeJob(job, database.db, now)).toBe("degraded");
-    expect(await discoveries()).toEqual([]);
-    expect((await lastRun()).stats).toMatchObject({ promoted: 0, promotionError: new PromotionApiError(unavailable).message });
+    // Game 4 was already tracked, so its discovery is recorded before the Games API call; game 2 waits for a later run.
+    expect(await discoveries()).toEqual([[4, "recommendation", "1"]]);
+    expect((await lastRun()).stats).toMatchObject({
+      promotionRequested: 2,
+      promoted: 0,
+      promotionError: new PromotionApiError(unavailable).message,
+    });
   });
 
   it("fails the run when the database fails during promotion", async () => {
