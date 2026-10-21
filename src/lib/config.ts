@@ -53,6 +53,7 @@ export const JOB_CONFIG = {
     resolutionBudgetMs: 150_000,
     resolutionRetryDays: 7,
     maximumListSizeChange: 0.3,
+    baselineMaxAgeHours: 6,
   },
   poll: {
     intervalMinutes: 5,
