@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { logger } from "@/lib/logger";
 import { fetchJson } from "./http";
+import { describeIssue } from "./schema-issues";
 
 // Entries are validated one by one so that a single malformed game cannot discard the whole list.
 const rolimonsResponseSchema = z.object({
@@ -31,16 +32,25 @@ export function parseRolimonsResponse(value: unknown): RolimonsGameList {
   if (!parsed.success) throw new Error("Rolimon's returned an unsuccessful response");
   const games: RolimonsGame[] = [];
   const rejected: string[] = [];
+  // The first schema issue tells which field of the tuple changed.
+  let issue: string | undefined;
   for (const [placeId, raw] of Object.entries(parsed.games)) {
     const entry = rolimonsEntrySchema.safeParse(raw);
     if (!entry.success || !isPlaceId(placeId)) {
       rejected.push(placeId);
+      if (!entry.success) issue ??= describeIssue(entry.error.issues[0]);
       continue;
     }
     const [name, ccu, thumbnailUrl] = entry.data;
     games.push({ placeId, name, ccu, thumbnailUrl });
   }
-  if (rejected.length) logger.warn("Rejected malformed Rolimon's entries", { rejected: rejected.length, placeIds: rejected.slice(0, 3) });
+  if (rejected.length) {
+    logger.warn("Rejected malformed Rolimon's entries", {
+      rejected: rejected.length,
+      placeIds: rejected.slice(0, 3),
+      ...(issue === undefined ? {} : { issue }),
+    });
+  }
   return { games, rejected: rejected.length };
 }
 

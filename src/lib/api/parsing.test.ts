@@ -71,6 +71,12 @@ describe("Roblox API response parsing", () => {
     ]);
   });
 
+  it("describes an issue about the item itself without a path", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(parseGameVotesResponse({ data: ["x", { id: 101, upVotes: 900, downVotes: 100 }] })).toHaveLength(1);
+    expect(loggedDetails(warn)).toEqual({ skipped: 1, universeIds: [null], issues: ["Invalid input: expected object, received string"] });
+  });
+
   it("skips a malformed vote item without dropping the others", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const votes = parseGameVotesResponse({ data: [{ id: 102, upVotes: -1, downVotes: 0 }, { id: 101, upVotes: 900, downVotes: 100 }] });
@@ -218,7 +224,7 @@ describe("Rolimon's response parsing", () => {
       },
     });
     expect(list).toEqual({ games: [{ placeId: "1818", name: "Crossroads", ccu: 37, thumbnailUrl: "" }], rejected: 7 });
-    expect(loggedDetails(warn)).toEqual({ rejected: 7, placeIds: expect.any(Array) });
+    expect(loggedDetails(warn)).toEqual({ rejected: 7, placeIds: ["77", "88", "99"], issue: "1: Too small: expected number to be >=0" });
   });
 
   it("rejects a malformed envelope", () => {

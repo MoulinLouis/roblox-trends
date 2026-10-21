@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { errorMessage, logger } from "@/lib/logger";
 import { fetchJson } from "./http";
+import { describeIssue } from "./schema-issues";
 
 const chartGameSchema = z.object({
   universeId: z.number(),
@@ -141,7 +142,7 @@ function parseItems<T>(items: unknown[], schema: z.ZodType<T>, label: string): T
       continue;
     }
     if (!skippedUniverseIds.length) {
-      issues = result.error.issues.slice(0, 3).map((issue) => `${issue.path.map(String).join(".")}: ${issue.message}`);
+      issues = result.error.issues.slice(0, 3).map(describeIssue);
     }
     skippedUniverseIds.push(typeof item === "object" && item !== null && "id" in item ? item.id : null);
   }
