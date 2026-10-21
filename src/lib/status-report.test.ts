@@ -58,7 +58,7 @@ describe("formatStatusReport", () => {
             promotionError: "Game details request failed: 503 Service Unavailable",
           },
         },
-        recent: { runs: 3, degraded: 1, failed: 0, rateLimitedRuns: 0, http: null },
+        recent: { runs: 3, degraded: 1, failed: 0, rateLimitedRuns: 0, http: { rateLimitedResponses: 1, attempts: 360 } },
       }),
       summary("poll", {
         latest: { status: "failed", startedAt: new Date("2026-10-20T14:05:00Z") },
@@ -95,7 +95,7 @@ describe("formatStatusReport", () => {
         "",
         "Jobs (counts over the last 24 h)",
         "job      latest run       last completed    runs  degraded  failed  rate-limited  429s/requests",
-        "census   running 2m ago   degraded 10m ago     3         1       0             0",
+        "census   running 2m ago   degraded 10m ago     3         1       0             0          1/360",
         "         listQuality=success listed=4000 rejected=12 resolved=0 resolutionFailures=3 deferred=40 rateLimited=false",
         "         promotionError: Game details request failed: 503 Service Unavailable",
         "poll     failed 7m ago    success 11m ago    288         3       2             1      12/20,160",
@@ -106,7 +106,7 @@ describe("formatStatusReport", () => {
         "charts   success 72m ago  success 69m ago     24         0       0             0          0/528",
         "explore  never            never                0         0       0",
         "",
-        "429s over the last 24 h: 12/20,688 requests (0.06%); 1 rate-limited run",
+        "429s over the last 24 h: 13/21,048 requests (0.06%); 1 rate-limited run",
         "Coverage: 2,712/2,903 (93.4%) Rolimon's places at or above 100 CCU polled within 15 min; complete list 12m old",
         "Data: 41,233 games; last 24 h: 1,012,345 poll observations, 1,123,456 census rows",
       ].join("\n"),
@@ -180,7 +180,7 @@ describe("formatStatusReport", () => {
         rateLimited: true,
         promotionError: `Game details request failed: ${"503 Service Unavailable ".repeat(20)}`,
       },
-      null,
+      { rateLimitedResponses: 12_345, attempts: 123_456 },
     );
     const poll = busy(
       "poll",

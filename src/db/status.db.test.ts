@@ -87,7 +87,7 @@ describe.skipIf(!hasTestDatabase)("status queries", () => {
       startedAt: "2026-10-20T13:50:05Z",
       slot: completeList,
       finishedAt: "2026-10-20T13:51:00Z",
-      stats: { listQuality: "success", listed: 7_800, rateLimited: true },
+      stats: { listQuality: "success", listed: 7_800, rateLimited: true, http: { attempts: 120, retries: 2, rateLimitedResponses: 2 } },
     });
     await insertRun({
       job: "census",
@@ -194,7 +194,7 @@ describe.skipIf(!hasTestDatabase)("status queries", () => {
           finishedAt: new Date("2026-10-20T14:01:30Z"),
           stats: { listQuality: "degraded", listed: 2, rateLimited: false },
         },
-        recent: { runs: 4, degraded: 2, failed: 0, rateLimitedRuns: 1, http: null },
+        recent: { runs: 4, degraded: 2, failed: 0, rateLimitedRuns: 1, http: { rateLimitedResponses: 2, attempts: 120 } },
         lastError: null,
       },
       {

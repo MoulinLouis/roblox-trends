@@ -84,7 +84,7 @@ export function hasStat(stats: Record<string, unknown>, path: string): boolean {
   return true;
 }
 
-// Census records no HTTP stats, and failed runs keep none: the total is a lower bound of the requests on the IP.
+// Failed runs keep no stats: the total is a lower bound of the requests on the IP.
 function rateLimitLine(jobs: readonly JobSummary[], windowHours: number): string {
   const http = jobs.flatMap((job) => (job.recent.http ? [job.recent.http] : []));
   const responses = http.reduce((total, metrics) => total + metrics.rateLimitedResponses, 0);

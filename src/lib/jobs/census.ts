@@ -1,11 +1,12 @@
 import { latestRunWithStat } from "@/db/job-runs";
 import { writeCensusObservations } from "@/db/observations";
 import { placesToSkip, savePlaceResolution, unpromotedUniverses } from "@/db/places";
-import { HttpError } from "@/lib/api/http";
+import { getHttpRequestMetrics, HttpError } from "@/lib/api/http";
 import type { RobloxApi } from "@/lib/api/roblox";
 import type { RolimonsGame, RolimonsGameList } from "@/lib/api/rolimons";
 import { JOB_CONFIG } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
+import { httpMetricsSince } from "./batching";
 import { PromotionApiError, promoteUniverses } from "./promotion";
 import type { JobDefinition } from "./runner";
 
@@ -60,6 +61,8 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
     intervalMinutes: config.intervalMinutes,
     timeoutMs: config.timeoutMs,
     async run({ db, now, slot }) {
+      // Rolimon's, the place resolutions on apis.roblox.com and the Games API calls of promotion.
+      const httpBefore = getHttpRequestMetrics();
       let list: RolimonsGameList;
       try {
         list = await dependencies.fetchGames();
@@ -84,6 +87,7 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
             rateLimited: false,
             promotionRequested: 0,
             promoted: 0,
+            http: httpMetricsSince(httpBefore),
             listError,
           },
         };
@@ -182,6 +186,7 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
           rateLimited,
           promotionRequested: universes.length,
           promoted,
+          http: httpMetricsSince(httpBefore),
           ...(promotionError === undefined ? {} : { promotionError }),
         },
       };
