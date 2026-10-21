@@ -8,3 +8,11 @@ export async function assertNotLegacyDatabase(db: Database): Promise<void> {
     throw new Error("Refusing to run: this database still holds v1 radar tables");
   }
 }
+
+// Repositories rely on PostgreSQL 18 features such as RETURNING old.*.
+export async function assertSupportedPostgres(db: Database): Promise<void> {
+  const result = await db.execute<{ version: number }>(sql`select current_setting('server_version_num')::int as version`);
+  if ((result.rows[0]?.version ?? 0) < 180_000) {
+    throw new Error("PostgreSQL 18 or newer is required (RETURNING old.*)");
+  }
+}

@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { gameDetail } from "@/test/fixtures";
 import { recordDiscoveries } from "./discovery";
 import { knownUniverseIds, upsertGameDetails } from "./games";
+import { assertSupportedPostgres } from "./legacy-guard";
 import { placesToSkip, savePlaceResolution, unpromotedUniverses } from "./places";
 import { discoverySources, games, gameVersions, places } from "./schema";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "./test-database";
@@ -94,5 +95,9 @@ describe.skipIf(!hasTestDatabase)("game repositories", () => {
     const [row] = await database.db.select().from(discoverySources).where(eq(discoverySources.universeId, 1));
     expect(row.firstSeenAt.toISOString()).toBe(first.toISOString());
     expect(row.lastSeenAt.toISOString()).toBe(second.toISOString());
+  });
+
+  it("runs on a supported PostgreSQL version", async () => {
+    await expect(assertSupportedPostgres(database.db)).resolves.toBeUndefined();
   });
 });

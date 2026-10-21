@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { closeDatabase, getDatabase } from "@/db/client";
-import { assertNotLegacyDatabase } from "@/db/legacy-guard";
+import { assertNotLegacyDatabase, assertSupportedPostgres } from "@/db/legacy-guard";
 import { healthchecksPingBase, jobSlug, sendPing } from "@/lib/jobs/healthchecks";
 import { createJobs } from "@/lib/jobs/registry";
 import { executeJob } from "@/lib/jobs/runner";
@@ -30,6 +30,7 @@ try {
   // notices the client is gone), and a blocked lock fails fast instead of stalling the run.
   const database = getDatabase(slug, { statementTimeoutMs: definition.timeoutMs, lockTimeoutMs: 30_000 });
   await assertNotLegacyDatabase(database);
+  await assertSupportedPostgres(database);
   exitCode = (await executeJob(definition, database)) === "failed" ? 1 : 0;
 } catch (error) {
   const message = errorMessage(error);
