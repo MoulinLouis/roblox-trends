@@ -6,7 +6,7 @@ export interface BatchOutcome<R> {
   attempted: number;
   failedBatches: number;
   skippedItems: number;
-  // Why the remaining items were skipped; null when every batch was attempted.
+  // Why the run stopped early; null when no stop rule or deadline triggered.
   stoppedBy: "deadline" | "error" | "repeatedFailures" | null;
 }
 
