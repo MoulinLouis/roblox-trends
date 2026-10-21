@@ -21,9 +21,10 @@
 
 | Path | Owner, mode | Content |
 | --- | --- | --- |
-| `/opt/radar` | `radar` | Home of the `radar` system user (no login shell) |
-| `/opt/radar/repo.git` | `radar` | Mirror clone of the public repository |
-| `/opt/radar/releases/<sha>` | `radar` | One built release per deployed commit (the newest 3 are kept) |
+| `/opt/radar` | `root` | Releases and the deploy mirror; `radar` can write nothing here |
+| `/opt/radar/repo.git` | `root` | Mirror clone of the public repository; only root runs git on it |
+| `/opt/radar/releases/<sha>` | `root` | One built release per deployed commit (the newest 3 are kept); only `.next/cache` belongs to `radar` |
+| `/var/lib/radar` | `radar` | Home of the `radar` system user (no login shell): the npm cache |
 | `/opt/radar/current` | symlink | The live release; every unit runs from it |
 | `/etc/radar/radar.env` | `root:radar 640` | `DATABASE_URL` (peer authentication over the local socket), `NEXT_TELEMETRY_DISABLED=1` |
 | `/etc/radar/healthchecks.env` | `root 600` | `HEALTHCHECKS_PING_BASE` (written by the owner) |
@@ -114,8 +115,9 @@ ALTER ROLE radar_analysis CONNECTION LIMIT 5;
 
 ```sql
 -- Run as a superuser in the radar database by ops/bin/configure-database.sh, before the first migration; safe to run
--- again. The extension is created here because the owner role is not a superuser (the migration's CREATE EXTENSION
--- IF NOT EXISTS is then a no-op).
+-- again. TimescaleDB is a trusted extension that the owner could create itself; created here, it belongs to postgres,
+-- which runs its updates (ALTER EXTENSION timescaledb UPDATE), and the migration's CREATE EXTENSION IF NOT EXISTS is
+-- then a no-op.
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 DO $$
 BEGIN
@@ -1998,6 +2000,31 @@ Every step is a **Gate**. v1 keeps running untouched; nothing here writes to Aiv
   - Rollback starts by stopping the deploy timer; `configure-backups.sh --config-only` is the first step of a rebuild.
   - The import pauses the TimescaleDB policies, the deploy timer and the system check.
   - CI runs `shellcheck --severity=warning`.
+- Part A, committed and green in CI. Committed code is authoritative over the code blocks above.
+  - A1 (`475b0ab`, then `44e7b05`, `680f03c`, `23cffc2`, `771256a`). The production roles test migrates as the non-superuser owner, checks that the analysis role holds exactly SELECT on every public table, view and aggregate, and runs every TimescaleDB policy as `radar` on seeded data (compression, retention, refreshes). Drizzle wraps driver errors, so the server message is on `cause`.
+  - A2 (`fdc348f`). The API key is redacted from the quoted error bodies.
+  - A3 (`04f7c08`).
+    - `archive_mode = always` also counts as archiving.
+    - TimescaleDB 2.30.2 reports the aggregate name in `jobs.hypertable_name`, for refresh and compression policies alike.
+    - Every freshly created policy stores `-infinity`, which a db test pins.
+  - A4 (`27ccc0d`). The system check also refuses to run unmonitored when `RADAR_REQUIRE_HEALTHCHECKS=1`. The unit test checks:
+    - `Unit=` targets;
+    - `ExecStart` paths;
+    - that `tsx` and `next` are dependencies;
+    - the sandbox of every `User=radar` unit, drop-ins included.
+  - A5 (`b2e10dd`).
+  - Security (`189ecc2`, `24f8db8`). Root never runs anything `radar` can write:
+    - `radar`'s home is `/var/lib/radar`, and `/opt/radar`, the mirror and the releases belong to root.
+    - The build runs as `radar` in a release that root then takes back, removing `ops/` and re-extracting it from root's mirror.
+    - Symlinked `.next` or `.next/cache` blocks the commit.
+    - Every `radar` service has `ProtectSystem=strict`; `radar-web` may write only `.next/cache`.
+    - Runtime ISR would need `isrFlushToDisk: false` or a cache handler (comment in `next.config.ts`).
+- B1 (2026-10-21). Installed: PostgreSQL 18.6 (PGDG), TimescaleDB 2.30.2~ubuntu24.04-1806 (held), Node.js 24.22.0, npm 11.19.1, pgBackRest 2.59.3, Tailscale 1.104.2. `apt.postgresql.org.sh -y` works. `timescaledb-tune` (5 GB, 4 CPUs) set `shared_buffers` to 1.25 GB and `max_worker_processes` to 23. Every `90-radar.conf` setting wins, because `include_dir` sits at line 879, after the tuned lines.
+- B2.
+  - Tailscale: `radar-prod.tail6e77de.ts.net`, `100.103.240.76`, key expiry disabled, auto-update on. The WSL reaches the tailnet through the Windows client, with the same host key on both paths. `~/.ssh/config` points `radar-prod` and `radar-analysis` at the Tailscale address.
+  - SSH hardening. The image allowed password authentication for non-root users: no account had a password, but bots made 72 attempts in the first two hours. `/etc/ssh/sshd_config.d/01-radar.conf` now sets `PasswordAuthentication no`, `KbdInteractiveAuthentication no` and `PermitRootLogin prohibit-password`; `provision.sh` must write it too. Public port 22 is closed by ufw, with the marker in place.
+  - Hetzner had no Cloud Firewall. The owner creates one: inbound UDP 41641 only, no outbound rule.
+- B3. `configure-database.sh` ran. First deploy `24f8db8`: the build took about 30 s, then the migrations ran as `radar`. `systemd-analyze verify` is clean, and `radar status` answers. The analysis role reads with `default_transaction_read_only` on. `radar-web` serves through `tailscale serve` at `https://radar-prod.tail6e77de.ts.net`.
 
 ## Out of scope (later phases)
 
