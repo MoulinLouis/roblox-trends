@@ -103,6 +103,49 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
       expect(run.stats).toMatchObject({ active: 60, attempted: 50, returned: 50, failedBatches: 0, skipped: 10, shedBelowCcu: 1_849 });
     });
 
+    it("keeps going after a failed batch and stores the others", async () => {
+      let calls = 0;
+      const job = createPollJob({
+        roblox: {
+          getGameDetails: async (ids) => {
+            calls += 1;
+            if (calls === 1) throw new Error("socket hang up");
+            return ids.map((id) => gameDetail(Number(id)));
+          },
+        },
+      });
+      expect(await executeJob(job, database.db, now)).toBe("degraded");
+      expect(await observedUniverses()).toEqual(universeIds.slice(JOB_CONFIG.poll.batchSize));
+      const [run] = await database.db.select().from(jobRuns);
+      expect(run.stats).toMatchObject({
+        attempted: 60,
+        returned: 10,
+        failedBatches: 1,
+        skipped: 0,
+        stoppedBy: null,
+        rateLimited: false,
+        shedBelowCcu: null,
+      });
+    });
+
+    it("fails the run when observations cannot be stored", async () => {
+      let calls = 0;
+      const job = createPollJob({
+        roblox: {
+          // A player count beyond the integer column makes the observation insert fail in the database.
+          getGameDetails: async (ids) => {
+            calls += 1;
+            return ids.map((id) => gameDetail(Number(id), { playing: 3_000_000_000 }));
+          },
+        },
+      });
+      expect(await executeJob(job, database.db, now)).toBe("failed");
+      expect(calls).toBe(1);
+      expect(await observedUniverses()).toEqual([]);
+      const [run] = await database.db.select().from(jobRuns);
+      expect(run.error).toMatch(/out of range/);
+    });
+
     it("stops at a rate limit that outlasted the retries and skips the remaining games", async () => {
       let calls = 0;
       const job = createPollJob({
