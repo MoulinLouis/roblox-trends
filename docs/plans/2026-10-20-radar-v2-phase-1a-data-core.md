@@ -2737,7 +2737,8 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
         (error) => logger.warn("Poll batch failed", { error: errorMessage(error) }),
       );
       const details = outcome.results;
-      const upsert = await upsertGameDetails(db, details, now);
+      // Observations first: the hypertable has no foreign key, and a lock timeout or deadlock in the
+      // games upsert must not lose this 5-minute CCU slot.
       await writeGameObservations(
         db,
         details.map((detail) => ({
@@ -2748,6 +2749,7 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
           favorites: Math.round(detail.favoritedCount),
         })),
       );
+      const upsert = await upsertGameDetails(db, details, now);
       const status = evaluateCollectionQuality({
         requested: active.length,
         attempted: outcome.attempted,
@@ -3479,8 +3481,10 @@ export async function saveThumbnails(
   checkedAt: Date,
 ): Promise<{ changed: number }> {
   let changed = 0;
+  // Universe-id order, like upsertGameDetails, so concurrent writers to games never deadlock.
+  const ordered = [...targets].sort((a, b) => a.universeId - b.universeId);
   await db.transaction(async (transaction) => {
-    for (const target of targets) {
+    for (const target of ordered) {
       const id = String(target.universeId);
       const iconUrl = icons.get(id);
       const iconUpdate = iconUrl ? { iconUrl } : {};
@@ -4393,6 +4397,7 @@ Expected: CI green with every database suite executed.
 - After Task 2 review: fingerprints use `toLowerCase()` (never locale-dependent casing) and tests pin their exact values. Metadata versions compare against `games.metadata_fingerprint` through PostgreSQL 18 `RETURNING old.*`, so reverts are recorded; the `game_versions` unique key includes `observed_at` to keep retries and imports idempotent.
 - After Task 3 review: raw retention is 365 days; aggregates keep min/avg/max CCU and visits as a maximum; `game_hourly` and `census_hourly` compress after 30 days; `chart_placements` is segmented by game. Test databases are created from `template0` (so `CREATE EXTENSION` runs as in production) and pause TimescaleDB jobs after migrating. The pool logs idle-client errors, times out connections after 10 s and sets `application_name`. Jobs and `collect` refuse to run against a database holding v1 tables. The legacy import never re-imports raw rows older than the retention window. `@next/env` is a direct dependency, pinned to the installed `next` version.
 - After Task 4 review: `executeJob` pings start before touching the database and abandons stale `running` rows; `scripts/job.ts` sends a fail ping when a job cannot even start, refuses to run without `HEALTHCHECKS_PING_BASE` when `RADAR_REQUIRE_HEALTHCHECKS=1`, sets `statement_timeout`/`lock_timeout`, and bounds the final pool close. A fully successful run also pings `radar-<job>-quality`, so sustained degradation alerts through that check's period. `latestSuccessfulRun(db, job, since)` replaces `latestCompletedRun`; the census baseline is the latest successful run of the last 6 hours. `errorMessage` includes the `cause` chain.
+- After Task 6 review: `upsertGameDetails` sorts by id, ignores stale writes (`excluded.last_observed_at >= games.last_observed_at`), keeps `first_observed_at` as the minimum, reuses stored name/description when the fingerprint is unchanged, and fills null place mappings with a targeted UPDATE; `savePlaceResolution` never erases a known mapping; `recordDiscoveries` sorts and merges duplicate windows; `games` uses fillfactor 80 for HOT updates; PostgreSQL 18 is checked before migrating and before every job. The Task 6 code blocks above predate these changes; the committed code is authoritative.
 - After Task 5 re-review: thumbnails also report `"pending"` (processing or in review), Blocked counts as no thumbnail, `countPerUniverse=3` falls back to an approved image, icons are best-effort per batch, and a thumbnails run where Roblox answered for no game fails.
 - After Task 5 review: `getGameThumbnails` uses `defaults=false` (with `defaults=true`, games without media come back as shared generic `GameMediaItem` images marked Completed), parses items one by one, and returns a custom thumbnail, `null` (no custom thumbnail) or no entry (unknown). Thumbnail versions are keyed on the media asset id through `games.thumbnail_key` (migration 0002).
 - Before phase 3: analysis must exclude every slot whose run was not `success` (failed runs can leave partial writes), not only degraded ones.
@@ -4406,6 +4411,7 @@ Expected: CI green with every database suite executed.
 - Deploy from the `radar-v2` branch until cutover: merging it into `main` removes the v1 scheduler workflow.
 - Provision Healthchecks checks through the management API (`POST /api/v3/checks/` with `unique: ["slug"]`), derived from `JOB_CONFIG`: each job check uses the job's real period with a grace near `timeoutMs`; each `-quality` check uses the job's period with a grace equal to the tolerated degradation (about 60 minutes; add `qualityGraceMinutes` per job), which must stay below the census `baselineMaxAgeHours`. Auto-created checks default to a 1-day period and would alert about 25 hours late.
 - PostgreSQL tuning sets `client_connection_check_interval` (about 10 s) so statements of a killed job process stop server-side.
+- PostgreSQL tuning also sets `checkpoint_timeout` to at least 15 minutes and `wal_compression` on, to limit full-page images from the 5-minute `games` updates; monitor `n_tup_hot_upd / n_tup_upd` on `games`.
 - systemd units set `RADAR_REQUIRE_HEALTHCHECKS=1` and an `OnFailure=` unit that sends the fail ping for process deaths the code cannot report.
 - Provisioning creates both checks per job before the first run and sends one test ping to prove the ping key works; with `create=1` alone, a wrong key or a job degraded from its first run would never create its check.
 - Stagger the systemd timers so jobs sharing a Roblox host do not start in the same minute (HTTP spacing is per process).
