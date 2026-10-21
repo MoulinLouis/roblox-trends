@@ -183,6 +183,15 @@ describe.skipIf(!hasTestDatabase)("game repositories", () => {
     }
   });
 
+  it("ignores a game detail older than the stored observation", async () => {
+    await upsertGameDetails(database.db, [gameDetail(40, { playing: 700 })], second);
+    const result = await upsertGameDetails(database.db, [gameDetail(40, { name: "Game 40 (stale)", playing: 5 })], first);
+    expect(result).toEqual({ inserted: [], metadataChanged: [] });
+    const [game] = await database.db.select().from(games).where(eq(games.universeId, 40));
+    expect(game).toMatchObject({ name: "Game 40", lastCcu: 700, firstObservedAt: second, lastObservedAt: second });
+    expect(await versionCount([40])).toBe(1);
+  });
+
   it("skips resolved places and recent failures, and finds unpromoted universes", async () => {
     const now = new Date("2026-10-20T15:00:00Z");
     await savePlaceResolution(database.db, { placeId: 500, universeId: 50, resolvedAt: now, error: null });

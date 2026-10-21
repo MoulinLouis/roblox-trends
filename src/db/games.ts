@@ -38,12 +38,16 @@ export async function upsertGameDetails(db: Database, details: RobloxGameDetail[
             genre: sql`excluded.genre`,
             robloxCreatedAt: sql`excluded.roblox_created_at`,
             robloxUpdatedAt: sql`excluded.roblox_updated_at`,
-            lastObservedAt: sql`greatest(${games.lastObservedAt}, excluded.last_observed_at)`,
+            firstObservedAt: sql`least(${games.firstObservedAt}, excluded.first_observed_at)`,
+            lastObservedAt: sql`excluded.last_observed_at`,
             lastCcu: sql`excluded.last_ccu`,
             lastCcuAt: sql`excluded.last_ccu_at`,
             metadataFingerprint: sql`excluded.metadata_fingerprint`,
             contentFingerprint: sql`excluded.content_fingerprint`,
           },
+          // A detail older than the stored observation (a late retry) is ignored: the row is neither updated
+          // nor returned, so it counts as neither inserted nor changed.
+          setWhere: sql`excluded.last_observed_at >= ${games.lastObservedAt}`,
         })
         .returning({
           universeId: games.universeId,
