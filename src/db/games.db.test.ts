@@ -1,5 +1,6 @@
-import { eq } from "drizzle-orm";
+import { between, eq, inArray, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { rawFingerprint } from "@/lib/fingerprint";
 import { gameDetail } from "@/test/fixtures";
 import { recordDiscoveries } from "./discovery";
 import { knownUniverseIds, upsertGameDetails } from "./games";
@@ -20,6 +21,14 @@ describe.skipIf(!hasTestDatabase)("game repositories", () => {
   afterAll(async () => {
     await database?.drop();
   });
+
+  async function versionCount(universeIds: number[]): Promise<number> {
+    const [row] = await database.db
+      .select({ versions: sql<number>`count(*)::int` })
+      .from(gameVersions)
+      .where(inArray(gameVersions.universeId, universeIds));
+    return row.versions;
+  }
 
   it("inserts a new game with its first metadata version and place mapping", async () => {
     const result = await upsertGameDetails(database.db, [gameDetail(1, { name: "+1 Stone Skipping", playing: 900 })], first);
@@ -73,6 +82,74 @@ describe.skipIf(!hasTestDatabase)("game repositories", () => {
 
   it("lists known universes", async () => {
     expect(await knownUniverseIds(database.db, [1, 2, 3])).toEqual(new Set([1, 2]));
+  });
+
+  it("records versions only for new and changed games in a mixed batch", async () => {
+    await upsertGameDetails(database.db, [gameDetail(10), gameDetail(11)], first);
+    const result = await upsertGameDetails(
+      database.db,
+      [gameDetail(10), gameDetail(11, { name: "Game 11 [UPDATE]" }), gameDetail(12)],
+      second,
+    );
+    expect(result).toEqual({ inserted: [12], metadataChanged: [11] });
+    const versions = await database.db
+      .select({ universeId: gameVersions.universeId, name: gameVersions.name })
+      .from(gameVersions)
+      .where(inArray(gameVersions.universeId, [10, 11, 12]))
+      .orderBy(gameVersions.universeId, gameVersions.observedAt);
+    expect(versions).toEqual([
+      { universeId: 10, name: "Game 10" },
+      { universeId: 11, name: "Game 11" },
+      { universeId: 11, name: "Game 11 [UPDATE]" },
+      { universeId: 12, name: "Game 12" },
+    ]);
+    const stored = await database.db
+      .select({ universeId: games.universeId, name: games.name })
+      .from(games)
+      .where(inArray(games.universeId, [10, 11]))
+      .orderBy(games.universeId);
+    expect(stored).toEqual([
+      { universeId: 10, name: "Game 10" },
+      { universeId: 11, name: "Game 11 [UPDATE]" },
+    ]);
+  });
+
+  it("inserts every game of a batch that spans several chunks", async () => {
+    const details = Array.from({ length: 1_201 }, (_, index) => gameDetail(100_000 + index));
+    const result = await upsertGameDetails(database.db, details, first);
+    expect(result.inserted).toHaveLength(1_201);
+    const [stored] = await database.db
+      .select({ games: sql<number>`count(*)::int` })
+      .from(games)
+      .where(between(games.universeId, 100_000, 101_200));
+    expect(stored.games).toBe(1_201);
+    expect(await versionCount(details.map((detail) => detail.id))).toBe(1_201);
+  });
+
+  it("keeps the stored fingerprint when the version insert fails, so a retry records the version", async () => {
+    await upsertGameDetails(database.db, [gameDetail(20)], first);
+    const renamed = gameDetail(20, { name: "Game 20 [UPDATE]" });
+    await database.db.execute(
+      sql`create function fail_version_insert() returns trigger language plpgsql as $$ begin raise exception 'version insert failed'; end $$`,
+    );
+    await database.db.execute(
+      sql`create trigger fail_version_insert before insert on game_versions for each row execute function fail_version_insert()`,
+    );
+    try {
+      await expect(upsertGameDetails(database.db, [renamed], second)).rejects.toMatchObject({
+        cause: { message: "version insert failed" },
+      });
+    } finally {
+      await database.db.execute(sql`drop trigger fail_version_insert on game_versions`);
+      await database.db.execute(sql`drop function fail_version_insert()`);
+    }
+    const [game] = await database.db.select().from(games).where(eq(games.universeId, 20));
+    expect(game.metadataFingerprint).toBe(rawFingerprint("Game 20", ""));
+    expect(game.name).toBe("Game 20");
+
+    const retry = await upsertGameDetails(database.db, [renamed], second);
+    expect(retry.metadataChanged).toEqual([20]);
+    expect(await versionCount([20])).toBe(2);
   });
 
   it("skips resolved places and recent failures, and finds unpromoted universes", async () => {
