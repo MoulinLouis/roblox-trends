@@ -1,8 +1,10 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { desc } from "drizzle-orm";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertGameDetails } from "@/db/games";
 import { gameObservations, games, jobRuns } from "@/db/schema";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/test-database";
 import { HttpError } from "@/lib/api/http";
+import { RobloxClient } from "@/lib/api/roblox";
 import { JOB_CONFIG } from "@/lib/config";
 import { gameDetail } from "@/test/fixtures";
 import { createPollJob } from "./poll";
@@ -48,6 +50,27 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
       });
       expect(await executeJob(job, database.db, now)).toBe("degraded");
     });
+
+    it("reports the HTTP requests of the run", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request) => {
+          const ids = new URL(String(input)).searchParams.get("universeIds")?.split(",") ?? [];
+          return Response.json({ data: ids.map((id) => gameDetail(Number(id), { playing: 600 })) });
+        }),
+      );
+      try {
+        expect(await executeJob(createPollJob({ roblox: new RobloxClient() }), database.db, now)).toBe("success");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      const [run] = await database.db.select().from(jobRuns).orderBy(desc(jobRuns.startedAt)).limit(1);
+      expect(run.stats).toMatchObject({
+        returned: 2,
+        http: { attempts: 1, retries: 0, rateLimitedResponses: 0 },
+        shedBelowCcu: null,
+      });
+    });
   });
 
   describe("with more busy games than one batch", () => {
@@ -76,7 +99,8 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
       expect(await executeJob(job, database.db, now)).toBe("degraded");
       expect(await observedUniverses()).toEqual(firstBatch);
       const [run] = await database.db.select().from(jobRuns);
-      expect(run.stats).toMatchObject({ active: 60, attempted: 50, returned: 50, failedBatches: 0, skipped: 10 });
+      // Universe 151, the busiest game left out, has 2,000 - 151 players.
+      expect(run.stats).toMatchObject({ active: 60, attempted: 50, returned: 50, failedBatches: 0, skipped: 10, shedBelowCcu: 1_849 });
     });
 
     it("stops at a rate limit that outlasted the retries and skips the remaining games", async () => {
@@ -101,6 +125,7 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
         skipped: 10,
         rateLimited: true,
         stoppedBy: "error",
+        shedBelowCcu: 1_849,
       });
     });
 

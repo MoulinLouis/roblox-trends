@@ -1,7 +1,7 @@
 import { selectActiveUniverses } from "@/db/active-set";
 import { upsertGameDetails } from "@/db/games";
 import { writeGameObservations } from "@/db/observations";
-import { HttpError } from "@/lib/api/http";
+import { getHttpRequestMetrics, HttpError, type HttpRequestMetrics } from "@/lib/api/http";
 import type { RobloxApi } from "@/lib/api/roblox";
 import { JOB_CONFIG } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
@@ -23,6 +23,7 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
     timeoutMs: config.timeoutMs,
     async run({ db, now, slot }) {
       const active = await selectActiveUniverses(db, now);
+      const httpBefore = getHttpRequestMetrics();
       // The deadline stops new batches, but a batch already in its retries can outlast the timeout. Its observations
       // are therefore written batch by batch, so a run that times out keeps the CCU of every batch it finished.
       const outcome = await runBatchesWithDeadline(
@@ -76,6 +77,9 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
           stoppedBy: outcome.stoppedBy,
           // A rate limit is the only error that stops a poll.
           rateLimited: outcome.stoppedBy === "error",
+          // The priority of the busiest game left out: every game above it was attempted.
+          shedBelowCcu: outcome.skippedItems > 0 ? active[outcome.attempted].priority : null,
+          http: httpMetricsSince(httpBefore),
           newGames: upsert.inserted.length,
           metadataChanges: upsert.metadataChanged.length,
         },
@@ -86,4 +90,14 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
 
 function isRateLimited(error: unknown): boolean {
   return error instanceof HttpError && error.status === 429;
+}
+
+// The client's counters are process-wide; the difference isolates this run.
+function httpMetricsSince(before: HttpRequestMetrics): HttpRequestMetrics {
+  const after = getHttpRequestMetrics();
+  return {
+    attempts: after.attempts - before.attempts,
+    retries: after.retries - before.retries,
+    rateLimitedResponses: after.rateLimitedResponses - before.rateLimitedResponses,
+  };
 }
