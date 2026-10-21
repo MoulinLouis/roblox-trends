@@ -1,4 +1,4 @@
-import { between, eq, inArray, sql } from "drizzle-orm";
+import { and, between, eq, inArray, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { rawFingerprint } from "@/lib/fingerprint";
 import { gameDetail } from "@/test/fixtures";
@@ -225,6 +225,19 @@ describe.skipIf(!hasTestDatabase)("game repositories", () => {
     const [row] = await database.db.select().from(discoverySources).where(eq(discoverySources.universeId, 1));
     expect(row.firstSeenAt.toISOString()).toBe(first.toISOString());
     expect(row.lastSeenAt.toISOString()).toBe(second.toISOString());
+  });
+
+  it("merges duplicate discoveries within one call", async () => {
+    const recorded = await recordDiscoveries(database.db, [
+      { universeId: 1, source: "search", detail: "stone", firstSeenAt: second, lastSeenAt: second },
+      { universeId: 1, source: "search", detail: "stone", firstSeenAt: first, lastSeenAt: first },
+    ]);
+    expect(recorded).toBe(1);
+    const [row] = await database.db
+      .select()
+      .from(discoverySources)
+      .where(and(eq(discoverySources.universeId, 1), eq(discoverySources.source, "search")));
+    expect(row).toMatchObject({ firstSeenAt: first, lastSeenAt: second });
   });
 
   it("runs on a supported PostgreSQL version", async () => {
