@@ -1,10 +1,38 @@
-import { eq } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { censusObservations, discoverySources, games, places } from "@/db/schema";
+import { randomUUID } from "node:crypto";
+import { desc, eq } from "drizzle-orm";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { finishJobRun, startJobRun } from "@/db/job-runs";
+import { censusObservations, discoverySources, games, jobRuns, places } from "@/db/schema";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/test-database";
+import { HttpError } from "@/lib/api/http";
+import type { RolimonsGame } from "@/lib/api/rolimons";
+import { JOB_CONFIG } from "@/lib/config";
 import { gameDetail } from "@/test/fixtures";
-import { createCensusJob } from "./census";
+import { createCensusJob, type CensusDependencies } from "./census";
 import { executeJob } from "./runner";
+
+const config = JOB_CONFIG.census;
+const now = new Date("2026-10-20T14:13:00Z");
+const hourMs = 60 * 60 * 1000;
+const universesUrl = "https://apis.roblox.com/universes/v1/places";
+
+function place(placeId: number, ccu: number): RolimonsGame {
+  return { placeId: String(placeId), name: `Place ${placeId}`, ccu, thumbnailUrl: "" };
+}
+
+// Places below the promotion threshold: they bring the list to its minimum length and are never resolved.
+function filler(count = config.minimumListed): RolimonsGame[] {
+  return Array.from({ length: count }, (_, index) => place(100_000 + index, 10));
+}
+
+const roblox: CensusDependencies["roblox"] = {
+  resolveUniverseId: async (placeId) => String(Number(placeId) + 1_000),
+  getGameDetails: async (universeIds) => universeIds.map((universeId) => gameDetail(Number(universeId))),
+};
+
+function censusJob(listed: RolimonsGame[], overrides: Partial<CensusDependencies> = {}) {
+  return createCensusJob({ fetchGames: async () => ({ games: listed, rejected: 0 }), roblox, ...overrides });
+}
 
 describe.skipIf(!hasTestDatabase)("census job", () => {
   let database: TestDatabase;
@@ -17,47 +45,146 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
     await database?.drop();
   });
 
+  beforeEach(async () => {
+    await database.db.delete(jobRuns);
+    await database.db.delete(censusObservations);
+    await database.db.delete(places);
+    // Deleting games cascades to discovery_sources and game_versions.
+    await database.db.delete(games);
+  });
+
+  // A finished census run, started at a wall-clock time like the runner records it.
+  async function recordRun(status: "success" | "degraded", listed: number, startedAt: Date): Promise<void> {
+    const id = randomUUID();
+    await startJobRun(database.db, { id, job: "census", slot: startedAt, startedAt });
+    await finishJobRun(database.db, id, { status, finishedAt: startedAt, durationMs: 0, stats: { listed } });
+  }
+
+  async function lastRunStats(): Promise<Record<string, unknown>> {
+    const [run] = await database.db.select().from(jobRuns).orderBy(desc(jobRuns.startedAt)).limit(1);
+    return run.stats;
+  }
+
+  async function placeRow(placeId: number) {
+    const [row] = await database.db.select().from(places).where(eq(places.placeId, placeId));
+    return row;
+  }
+
   it("stores the list, resolves eligible places and promotes their universes", async () => {
+    const listed = [place(1, 500), place(2, 50), place(404, 300), place(400, 200), ...filler()];
     const job = createCensusJob({
-      fetchGames: async () => ({
-        games: [
-          { placeId: "1", name: "Big", ccu: 500, thumbnailUrl: "" },
-          { placeId: "2", name: "Small", ccu: 50, thumbnailUrl: "" },
-          { placeId: "404", name: "Gone", ccu: 300, thumbnailUrl: "" },
-        ],
-        rejected: 0,
-      }),
+      fetchGames: async () => ({ games: listed, rejected: 2 }),
       roblox: {
+        ...roblox,
         resolveUniverseId: async (placeId) => {
           if (placeId === "404") return null;
+          if (placeId === "400") throw new HttpError(400, "Bad Request", universesUrl);
           return String(Number(placeId) + 1_000);
         },
-        getGameDetails: async (universeIds) => universeIds.map((universeId) => gameDetail(Number(universeId))),
       },
     });
 
-    const status = await executeJob(job, database.db, new Date("2026-10-20T14:13:00Z"));
+    expect(await executeJob(job, database.db, now)).toBe("success");
 
-    expect(status).toBe("success");
-    expect(await database.db.select().from(censusObservations)).toHaveLength(3);
-    const [resolved] = await database.db.select().from(places).where(eq(places.placeId, 1));
-    expect(resolved.universeId).toBe(1_001);
-    const [unresolvable] = await database.db.select().from(places).where(eq(places.placeId, 404));
-    expect(unresolvable).toMatchObject({ universeId: null, error: "no universe" });
+    expect(await database.db.select().from(censusObservations)).toHaveLength(listed.length);
+    expect((await placeRow(1)).universeId).toBe(1_001);
+    expect(await placeRow(404)).toMatchObject({ universeId: null, error: "no universe" });
+    expect(await placeRow(400)).toMatchObject({ universeId: null, error: expect.stringContaining("400") });
+    expect(await placeRow(2)).toBeUndefined();
     expect((await database.db.select().from(games)).map((game) => game.universeId)).toEqual([1_001]);
     expect(await database.db.select().from(discoverySources)).toEqual([
       expect.objectContaining({ universeId: 1_001, source: "rolimons", detail: "" }),
     ]);
+    expect(await lastRunStats()).toEqual({
+      listed: listed.length,
+      rejected: 2,
+      listQuality: "success",
+      eligible: 3,
+      resolved: 1,
+      unresolvable: 2,
+      resolutionFailures: 0,
+      deferred: 0,
+      promoted: 1,
+    });
   });
 
-  it("marks a run degraded when the list shrinks sharply against the last successful run", async () => {
-    const job = createCensusJob({
-      fetchGames: async () => ({ games: [{ placeId: "1", name: "Big", ccu: 500, thumbnailUrl: "" }], rejected: 0 }),
+  it("degrades a list that shrinks sharply against a recent successful run", async () => {
+    await recordRun("success", config.minimumListed * 2, new Date(Date.now() - hourMs));
+
+    expect(await executeJob(censusJob(filler()), database.db, now)).toBe("degraded");
+    expect(await lastRunStats()).toMatchObject({ listQuality: "degraded" });
+  });
+
+  it("ignores a successful run older than the baseline window", async () => {
+    await recordRun("success", config.minimumListed * 2, new Date(Date.now() - (config.baselineMaxAgeHours + 1) * hourMs));
+
+    expect(await executeJob(censusJob(filler()), database.db, now)).toBe("success");
+  });
+
+  it("never takes a degraded run as the baseline", async () => {
+    await recordRun("success", config.minimumListed, new Date(Date.now() - 2 * hourMs));
+    await recordRun("degraded", config.minimumListed * 2, new Date(Date.now() - hourMs));
+
+    expect(await executeJob(censusJob(filler()), database.db, now)).toBe("success");
+  });
+
+  it("defers the remaining places when the resolution budget runs out", async () => {
+    // Each reading advances by two thirds of the budget, so only the first place fits in it.
+    let elapsedMs = 0;
+    const job = censusJob([place(1, 500), place(2, 400), place(3, 300), ...filler()], {
+      clock: () => (elapsedMs += (config.resolutionBudgetMs * 2) / 3),
+    });
+
+    expect(await executeJob(job, database.db, now)).toBe("success");
+    expect(await lastRunStats()).toMatchObject({ resolved: 1, deferred: 2 });
+    expect(await placeRow(2)).toBeUndefined();
+  });
+
+  it("retries a place whose resolution failed without failing the run", async () => {
+    const job = censusJob([place(1, 500), place(503, 400), ...filler()], {
       roblox: {
-        resolveUniverseId: async (placeId) => String(Number(placeId) + 1_000),
-        getGameDetails: async (universeIds) => universeIds.map((universeId) => gameDetail(Number(universeId))),
+        ...roblox,
+        resolveUniverseId: async (placeId) => {
+          if (placeId === "503") throw new HttpError(503, "Service Unavailable", universesUrl);
+          return String(Number(placeId) + 1_000);
+        },
       },
     });
-    expect(await executeJob(job, database.db, new Date("2026-10-20T14:23:00Z"))).toBe("degraded");
+
+    expect(await executeJob(job, database.db, now)).toBe("success");
+    expect(await placeRow(503)).toBeUndefined();
+    expect(await lastRunStats()).toMatchObject({ resolved: 1, resolutionFailures: 1 });
+  });
+
+  it("degrades the run when no attempted resolution succeeds", async () => {
+    const job = censusJob([place(1, 500), place(2, 400), ...filler()], {
+      roblox: {
+        ...roblox,
+        resolveUniverseId: async () => {
+          throw new Error("socket hang up");
+        },
+      },
+    });
+
+    expect(await executeJob(job, database.db, now)).toBe("degraded");
+    expect(await lastRunStats()).toMatchObject({ listQuality: "success", resolved: 0, resolutionFailures: 2 });
+  });
+
+  it("stops resolving for the run on a terminal rate limit", async () => {
+    const requested: string[] = [];
+    const job = censusJob([place(1, 500), place(2, 400), place(3, 300), ...filler()], {
+      roblox: {
+        ...roblox,
+        resolveUniverseId: async (placeId) => {
+          requested.push(placeId);
+          if (placeId === "2") throw new HttpError(429, "Too Many Requests", universesUrl);
+          return String(Number(placeId) + 1_000);
+        },
+      },
+    });
+
+    expect(await executeJob(job, database.db, now)).toBe("success");
+    expect(requested).toEqual(["1", "2"]);
+    expect(await lastRunStats()).toMatchObject({ resolved: 1, resolutionFailures: 1, deferred: 1 });
   });
 });
