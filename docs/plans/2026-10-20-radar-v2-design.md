@@ -57,26 +57,27 @@ Principles:
 - Identifiers and visits are 64-bit integers.
 - The database computes the aggregates.
 
-Time series (TimescaleDB hypertables, compressed after 7 days):
+Time series (TimescaleDB hypertables):
 
-| Table | Grain | Content | Raw retention |
-| --- | --- | --- | --- |
-| `game_observations` | universe × 5-minute slot | CCU, visits, favorites; up and down votes once per hour | 90 days |
-| `census_observations` | place × 10-minute slot | Rolimon's active players for every listed game (about 7,800) | 90 days |
-| `chart_placements` | sort × universe × hour | Rank in each of the 22 discovery sorts | Permanent |
+| Table | Grain | Content | Compressed after | Raw retention |
+| --- | --- | --- | --- | --- |
+| `game_observations` | universe × 5-minute slot | CCU, visits, favorites | 7 days | 365 days |
+| `census_observations` | place × 10-minute slot | Rolimon's active players for every listed game (about 7,800) | 7 days | 365 days |
+| `vote_observations` | universe × hour | Cumulative up and down votes | 30 days | Permanent |
+| `chart_placements` | sort × universe × hour | Rank, player count and sponsored flag in each of the 22 discovery sorts | 30 days | Permanent |
 
-Continuous aggregates, kept permanently:
+Continuous aggregates, kept permanently. They are real-time: buckets not yet materialized are computed from the raw rows.
 
-- `game_hourly`: minimum, average and maximum CCU per hour, so that one-hour admin-abuse peaks stay visible.
-- `game_daily`: average and peak CCU, new visits, new favorites.
-- `census_hourly`: hourly maximum and average active players per place.
+- `game_hourly`: minimum, average and maximum CCU per hour (`ccu_min`, `ccu_avg`, `ccu_max`), so that one-hour admin-abuse peaks stay visible, plus visits as a maximum (`visits_max`), the last favorites count (`favorites_last`) and `samples`. Compressed after 30 days.
+- `game_daily`: minimum, average and peak CCU (`ccu_min`, `ccu_avg`, `ccu_peak`), visits as a minimum and a maximum (`visits_min`, `visits_max`), `favorites_last` and `samples`. New visits and new favorites are derived from these.
+- `census_hourly`: hourly minimum, average and maximum active players per place (`ccu_min`, `ccu_avg`, `ccu_max`) and `samples`. Compressed after 30 days.
 
 Reference tables:
 
 - `games`: universe metadata, with the Roblox creation timestamp kept separate from the radar's first observation.
-- `places`: cached place-to-universe mapping, resolved once.
-- `game_versions`: history of titles, descriptions and thumbnails with observation times. Thumbnail changes are A/B tests and are worth keeping.
-- `discovery_sources`: how and when each game was found (chart, search query, recommendation seed, Rolimon's).
+- `places`: cached place-to-universe mapping, resolved once. A place without a universe is retried after 7 days.
+- `game_versions`: history of titles, descriptions and thumbnails with observation times. Thumbnail changes are A/B tests and are worth keeping. A thumbnail version is keyed on the media asset id (`games.thumbnail_key`), so a new CDN URL for the same image is not a change.
+- `discovery_sources`: how and when each game was found (chart, search query, recommendation seed, Rolimon's), one row per game, source and detail with its first and last sighting. `explore` also records sightings of games already tracked (`recordKnown`), so the table holds relations too: a row is the game's discovery path when its `first_seen_at` equals `games.first_observed_at`.
 - `game_features`: the AI classification (section 4).
 - `clusters` and `cluster_members`: groups of similar games.
 - `watchlist`: games and clusters the owner follows.
@@ -84,9 +85,10 @@ Reference tables:
 
 Legacy history import:
 
-- v1 hourly snapshots (from 2026-09-20) become `game_observations` rows with `source = 'legacy'`, deduplicated by universe and bucket.
-- v1 daily snapshots (2026-08-24 to 2026-09-19) go into `game_daily_legacy`.
-- A view `game_daily_all` merges `game_daily_legacy` with `game_daily`.
+- v1 hourly snapshots (from 2026-09-20) become `game_observations` rows with `source = 'legacy'`, deduplicated by universe and bucket, within the 365-day raw retention. Their votes go into `vote_observations`, and their chart ranks into `chart_placements` for the hours before the first v2 `charts` run. Data collected by v2 is never overwritten.
+- v1 daily snapshots (2026-08-24 to 2026-09-19) go into `game_daily_legacy`, which also keeps the v1 daily votes and best rank (migration 0004).
+- A view `game_daily_all` merges `game_daily_legacy` with `game_daily`; `game_daily` wins on days present in both.
+- v1 discoveries come from its hourly snapshots only. Games whose first v1 snapshots were compacted (older than 30 days in v1) therefore have no discovery path.
 
 The v1 trend, score, idea, artifact, alert and scheduler tables are dropped after cutover.
 
@@ -96,19 +98,19 @@ Estimated volume: about 1M rows per day in each of `game_observations` and `cens
 
 | Job | Interval | Work |
 | --- | --- | --- |
-| `census` | 10 min | Downloads the full Rolimon's game list in one request and writes `census_observations`. Every place at or above 100 CCU that is not yet tracked is resolved to a universe (mapping cached) and promoted to tracking, with no per-run cap. |
-| `poll` | 5 min | Calls the Games API in batches of 50 for every active game (about 3,000–4,000 games, 60–80 requests, about 40 seconds). Writes `game_observations` and records title and description changes in `game_versions`. |
-| `votes` | 1 h | Calls the votes endpoint for the active set. |
+| `census` | 10 min | Downloads the full Rolimon's game list in one request and writes `census_observations`. Every place at or above 100 CCU that is not yet tracked is resolved to a universe (mapping cached) and promoted to tracking, with no per-run cap on the count. Places are resolved busiest first; those left when the 150-second resolution budget runs out wait for the next run. |
+| `poll` | 5 min | Calls the Games API in batches of 50 for every active game, busiest first (about 3,000–4,000 games, 60–80 requests, about 40 seconds), with a 180-second deadline. Writes `game_observations` and records title and description changes in `game_versions`. |
+| `votes` | 1 h | Calls the votes endpoint for the active set and writes `vote_observations`. |
 | `charts` | 1 h | Reads the 22 discovery sorts, writes `chart_placements` and discovers new universes. |
-| `explore` | 1 h | Runs bounded Roblox searches and recommendation expansion from rising games. Search terms come from cluster vocabulary instead of a fixed taxonomy. |
-| `thumbnails` | On new or changed games | Downloads thumbnails for classification and display. |
+| `explore` | 1 h | Runs bounded Roblox searches and recommendation expansion from rising games. Search terms come from cluster vocabulary instead of a fixed taxonomy; until clusters exist (phase 2), they are the words shared by the titles of rising young games. |
+| `thumbnails` | 1 h | Records the 16:9 thumbnail and the icon of new games, and refreshes games at or above 50 CCU every 24 hours, in batches of 50 (at most 4,000 games per run), for classification and display. |
 
-A game is active when it reached 50 CCU or more in the last 24 hours, when it is at most 90 days old and shows activity, or when it is on the watchlist. Older games that revive show up in `census` first and then re-enter `poll`.
+A game is active when it reached 50 CCU or more in the last 24 hours, when it is at most 90 days old and had players in the last 7 days, or when it is on the watchlist. Older games that revive show up in `census` first and then re-enter `poll`.
 
 Reliability rules:
 
 - **Idempotency.** Every observation is keyed by its slot timestamp, so a retry within the same slot overwrites instead of duplicating.
-- **No overlap.** If `poll` cannot finish within its interval because of rate limits, it drops the lowest-CCU games first instead of running into the next slot.
+- **No overlap.** `poll` starts no batch after a 180-second deadline (its timeout is 270 seconds), after a rate limit that outlasted the retries, or after 3 failed batches in a row. Games are polled busiest first, so the lowest-CCU games are the ones left for the next run instead of running into the next slot.
 - **Quality gates.** A run is marked `degraded`, and excluded from analysis, when fewer than 95% of the requested games come back, or when the Rolimon's list size changes by more than 30% from one run to the next.
 - **Rate limits.** The existing HTTP client is kept: per-host spacing, retries, `Retry-After` handling, jittered exponential backoff. If rate limiting persists on the dedicated IP address, `poll` moves to 10 minutes.
 
