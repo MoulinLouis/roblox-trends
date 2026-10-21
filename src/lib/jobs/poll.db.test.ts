@@ -121,4 +121,27 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
       expect(await observedUniverses()).toEqual(firstBatch);
     });
   });
+
+  describe("without active games", () => {
+    beforeEach(async () => {
+      await database.db.delete(jobRuns);
+      await database.db.delete(games);
+    });
+
+    it("marks the run degraded", async () => {
+      let calls = 0;
+      const job = createPollJob({
+        roblox: {
+          getGameDetails: async () => {
+            calls += 1;
+            return [];
+          },
+        },
+      });
+      expect(await executeJob(job, database.db, now)).toBe("degraded");
+      expect(calls).toBe(0);
+      const [run] = await database.db.select().from(jobRuns);
+      expect(run.stats).toMatchObject({ active: 0, attempted: 0, returned: 0, failedBatches: 0, skipped: 0 });
+    });
+  });
 });

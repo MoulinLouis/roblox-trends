@@ -56,11 +56,15 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
       // Observations first: the hypertable has no foreign key, and a lock timeout or deadlock in the
       // games upsert must not lose this 5-minute CCU slot.
       const upsert = await upsertGameDetails(db, details, now);
-      const status = evaluateCollectionQuality({
-        requested: active.length,
-        returned: details.length,
-        minimumReturnedShare: config.minimumReturnedShare,
-      });
+      // Census promotes every busy game, so an empty active set means collection upstream is broken, not a quiet hour.
+      const status =
+        active.length === 0
+          ? "degraded"
+          : evaluateCollectionQuality({
+              requested: active.length,
+              returned: details.length,
+              minimumReturnedShare: config.minimumReturnedShare,
+            });
       return {
         status,
         stats: {
