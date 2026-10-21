@@ -2956,7 +2956,7 @@ git push && gh run watch --exit-status
 
 **Files:**
 - Create: `src/lib/jobs/charts.ts`, `src/lib/jobs/charts.test.ts`, `src/lib/jobs/charts.db.test.ts`
-- Modify: `src/lib/jobs/registry.ts`
+- Modify: `src/db/observations.ts` (add `replaceChartSlot`), `src/lib/jobs/registry.ts`
 
 **Step 1: Write the failing pure test**
 
@@ -2985,8 +2985,7 @@ describe("toChartPlacements", () => {
 **Step 2: Implement `src/lib/jobs/charts.ts`**
 
 ```ts
-import type { ChartPlacementRow } from "@/db/observations";
-import { writeChartPlacements } from "@/db/observations";
+import { replaceChartSlot, type ChartPlacementRow } from "@/db/observations";
 import type { RobloxApi, RobloxChartGame } from "@/lib/api/roblox";
 import { uniqueBy } from "@/lib/arrays";
 import { JOB_CONFIG, ROBLOX_DISCOVERY_CHARTS } from "@/lib/config";
@@ -3021,26 +3020,28 @@ export function createChartsJob(dependencies: ChartsDependencies): JobDefinition
     intervalMinutes: config.intervalMinutes,
     timeoutMs: config.timeoutMs,
     async run({ db, now, slot }) {
-      const placements: ChartPlacementRow[] = [];
+      const placementsBySort = new Map<string, ChartPlacementRow[]>();
       const candidates: PromotionCandidate[] = [];
       let failedSorts = 0;
       for (const sortId of sortIds) {
         try {
           const sort = await dependencies.roblox.getSortContent(sortId);
           const rows = toChartPlacements(sortId, sort.games, slot);
-          placements.push(...rows);
+          placementsBySort.set(sortId, rows);
           candidates.push(...rows.map((row) => ({ universeId: row.universeId, source: "chart" as const, detail: sortId })));
         } catch (error) {
           failedSorts += 1;
           logger.warn("Chart collection failed", { sortId, error: errorMessage(error) });
         }
       }
-      await writeChartPlacements(db, placements);
+      // A failed sort keeps whatever an earlier attempt in this hour stored for it.
+      let placements = 0;
+      for (const [sortId, rows] of placementsBySort) placements += await replaceChartSlot(db, sortId, slot, rows);
       const promotion = await promoteUniverses(db, dependencies.roblox, candidates, now);
       const succeededSorts = sortIds.length - failedSorts;
       return {
         status: sortIds.length && succeededSorts / sortIds.length >= config.minimumSortShare ? "success" : "degraded",
-        stats: { sorts: sortIds.length, failedSorts, placements: placements.length, promoted: promotion.promoted },
+        stats: { sorts: sortIds.length, failedSorts, placements, promoted: promotion.promoted },
       };
     },
   };
@@ -3093,6 +3094,61 @@ describe.skipIf(!hasTestDatabase)("charts job", () => {
   });
 });
 ```
+
+**Step 3b: Add `replaceChartSlot` to `src/db/observations.ts`**
+
+A chart is a ranking: a retry within the same hour must replace the whole slot of that sort, otherwise a game that dropped out between attempts keeps a stale rank next to the game that took it. Add `and, eq` to the `drizzle-orm` import and append:
+
+```ts
+// Replaces every placement of one sort in one slot, atomically. Rows are sorted by key, like the other writers.
+export async function replaceChartSlot(db: Database, sortId: string, observedAt: Date, rows: ChartPlacementRow[]): Promise<number> {
+  const unique = uniqueBy(rows, (row) => row.universeId).sort((a, b) => a.universeId - b.universeId);
+  return db.transaction(async (transaction) => {
+    await transaction
+      .delete(chartPlacements)
+      .where(and(eq(chartPlacements.sortId, sortId), eq(chartPlacements.observedAt, observedAt)));
+    let written = 0;
+    for (const part of chunk(unique, CHUNK_SIZE)) {
+      const result = await transaction.insert(chartPlacements).values(part);
+      written += result.rowCount ?? 0;
+    }
+    return written;
+  });
+}
+```
+
+Add to `src/lib/jobs/charts.db.test.ts`, inside the `describe`:
+
+```ts
+  it("replaces the whole slot of a sort when the same hour is collected again", async () => {
+    const lists: Record<number, number[]> = { 1: [7, 8], 2: [7] };
+    let attempt = 0;
+    const job = createChartsJob({
+      sortIds: ["up-and-coming"],
+      roblox: {
+        getSortContent: async (sortId) => {
+          attempt += 1;
+          return {
+            sortId,
+            sortDisplayName: sortId,
+            games: lists[attempt].map((universeId) => ({ universeId, rootPlaceId: universeId * 10, name: `Game ${universeId}`, playerCount: 100 })),
+          };
+        },
+        getGameDetails: async (ids) => ids.map((id) => gameDetail(Number(id))),
+      },
+    });
+    const at = new Date("2026-10-20T15:02:00Z");
+    await executeJob(job, database.db, at);
+    await executeJob(job, database.db, at);
+    const rows = await database.db
+      .select()
+      .from(chartPlacements)
+      .where(and(eq(chartPlacements.sortId, "up-and-coming"), eq(chartPlacements.observedAt, new Date("2026-10-20T15:00:00Z"))));
+    expect(rows.map((row) => row.universeId)).toEqual([7]);
+  });
+```
+
+Add `and, eq` from `drizzle-orm` to the test imports.
 
 **Step 4: Register, test, commit**
 
@@ -3996,6 +4052,7 @@ import { eq, sql } from "drizzle-orm";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chartPlacements, discoverySources, gameObservations, games, gameVersions, voteObservations } from "@/db/schema";
+import { writeGameObservations } from "@/db/observations";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/test-database";
 import { importLegacyHistory } from "./import";
 
@@ -4075,6 +4132,20 @@ describe.skipIf(!hasTestDatabase)("importLegacyHistory", () => {
     await importLegacyHistory(target.db, legacyPool, { now: FIXTURE_NOW });
     expect(await target.db.select().from(gameObservations)).toHaveLength(1);
     expect(await target.db.select().from(games)).toHaveLength(1);
+  });
+
+  it("never overwrites data collected by v2", async () => {
+    const collected = await createTestDatabase();
+    try {
+      await writeGameObservations(collected.db, [
+        { universeId: 10765298801, observedAt: new Date("2026-09-29T20:00:00Z"), ccu: 99_999, visits: 1, favorites: 1 },
+      ]);
+      await importLegacyHistory(collected.db, legacyPool, { now: FIXTURE_NOW });
+      const [row] = await collected.db.select().from(gameObservations);
+      expect(row).toMatchObject({ ccu: 99_999, source: "poll" });
+    } finally {
+      await collected.drop();
+    }
   });
 
   it("skips raw observations older than the retention window but keeps permanent tables", async () => {
@@ -4401,6 +4472,7 @@ Expected: CI green with every database suite executed.
 - After Task 3 review: raw retention is 365 days; aggregates keep min/avg/max CCU and visits as a maximum; `game_hourly` and `census_hourly` compress after 30 days; `chart_placements` is segmented by game. Test databases are created from `template0` (so `CREATE EXTENSION` runs as in production) and pause TimescaleDB jobs after migrating. The pool logs idle-client errors, times out connections after 10 s and sets `application_name`. Jobs and `collect` refuse to run against a database holding v1 tables. The legacy import never re-imports raw rows older than the retention window. `@next/env` is a direct dependency, pinned to the installed `next` version.
 - After Task 4 review: `executeJob` pings start before touching the database and abandons stale `running` rows; `scripts/job.ts` sends a fail ping when a job cannot even start, refuses to run without `HEALTHCHECKS_PING_BASE` when `RADAR_REQUIRE_HEALTHCHECKS=1`, sets `statement_timeout`/`lock_timeout`, and bounds the final pool close. A fully successful run also pings `radar-<job>-quality`, so sustained degradation alerts through that check's period. `latestSuccessfulRun(db, job, since)` replaces `latestCompletedRun`; the census baseline is the latest successful run of the last 6 hours. `errorMessage` includes the `cause` chain.
 - After Task 6 review: `upsertGameDetails` sorts by id, ignores stale writes (`excluded.last_observed_at >= games.last_observed_at`), keeps `first_observed_at` as the minimum, reuses stored name/description when the fingerprint is unchanged, and fills null place mappings with a targeted UPDATE; `savePlaceResolution` never erases a known mapping; `recordDiscoveries` sorts and merges duplicate windows; `games` uses fillfactor 80 for HOT updates; PostgreSQL 18 is checked before migrating and before every job. The Task 6 code blocks above predate these changes; the committed code is authoritative.
+- After Task 7 review: writers return rows actually written (`rowCount`), sort by full key, and are tested against compressed chunks; charts replace a sort's whole slot atomically on retry (`replaceChartSlot`); the legacy import must keep per-statement commits (TimescaleDB limits tuples decompressed per transaction) and is tested to never overwrite v2 data.
 - After Task 6 re-review: no writer may set `games.last_observed_at` later than real time (the stale-write guard compares against it); the legacy import reads v1 games in universe-id order. Migrations 0000 and 0001 were edited in place only because no persistent v2 database existed yet; from now on, schema changes go into new migrations.
 - After Task 5 re-review: thumbnails also report `"pending"` (processing or in review), Blocked counts as no thumbnail, `countPerUniverse=3` falls back to an approved image, icons are best-effort per batch, and a thumbnails run where Roblox answered for no game fails.
 - After Task 5 review: `getGameThumbnails` uses `defaults=false` (with `defaults=true`, games without media come back as shared generic `GameMediaItem` images marked Completed), parses items one by one, and returns a custom thumbnail, `null` (no custom thumbnail) or no entry (unknown). Thumbnail versions are keyed on the media asset id through `games.thumbnail_key` (migration 0002).
