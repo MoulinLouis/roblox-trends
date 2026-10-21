@@ -1,3 +1,4 @@
+import { getHttpRequestMetrics, HttpError, type HttpRequestMetrics } from "@/lib/api/http";
 import { chunk } from "@/lib/arrays";
 
 export interface BatchOutcome<R> {
@@ -74,4 +75,20 @@ export function evaluateCollectionQuality(input: {
   minimumReturnedShare: number;
 }): "success" | "degraded" {
   return input.requested === 0 || input.returned / input.requested >= input.minimumReturnedShare ? "success" : "degraded";
+}
+
+// A rate limit that outlasted the client's retries. A job that stops on nothing else reports `rateLimited` as
+// `stoppedBy === "error"`.
+export function isRateLimited(error: unknown): boolean {
+  return error instanceof HttpError && error.status === 429;
+}
+
+// The client's counters are process-wide; the difference isolates this run.
+export function httpMetricsSince(before: HttpRequestMetrics): HttpRequestMetrics {
+  const after = getHttpRequestMetrics();
+  return {
+    attempts: after.attempts - before.attempts,
+    retries: after.retries - before.retries,
+    rateLimitedResponses: after.rateLimitedResponses - before.rateLimitedResponses,
+  };
 }

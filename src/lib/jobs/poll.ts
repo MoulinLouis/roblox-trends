@@ -1,11 +1,11 @@
 import { selectActiveUniverses } from "@/db/active-set";
 import { upsertGameDetails } from "@/db/games";
 import { writeGameObservations } from "@/db/observations";
-import { getHttpRequestMetrics, HttpError, type HttpRequestMetrics } from "@/lib/api/http";
+import { getHttpRequestMetrics } from "@/lib/api/http";
 import type { RobloxApi } from "@/lib/api/roblox";
 import { JOB_CONFIG } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
-import { evaluateCollectionQuality, runBatchesWithDeadline } from "./batching";
+import { evaluateCollectionQuality, httpMetricsSince, isRateLimited, runBatchesWithDeadline } from "./batching";
 import type { JobDefinition } from "./runner";
 
 export interface PollDependencies {
@@ -75,7 +75,6 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
           failedBatches: outcome.failedBatches,
           skipped: outcome.skippedItems,
           stoppedBy: outcome.stoppedBy,
-          // A rate limit is the only error that stops a poll.
           rateLimited: outcome.stoppedBy === "error",
           // The priority of the busiest game left out: every game above it was attempted.
           shedBelowCcu: outcome.skippedItems > 0 ? active[outcome.attempted].priority : null,
@@ -85,19 +84,5 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
         },
       };
     },
-  };
-}
-
-function isRateLimited(error: unknown): boolean {
-  return error instanceof HttpError && error.status === 429;
-}
-
-// The client's counters are process-wide; the difference isolates this run.
-function httpMetricsSince(before: HttpRequestMetrics): HttpRequestMetrics {
-  const after = getHttpRequestMetrics();
-  return {
-    attempts: after.attempts - before.attempts,
-    retries: after.retries - before.retries,
-    rateLimitedResponses: after.rateLimitedResponses - before.rateLimitedResponses,
   };
 }
