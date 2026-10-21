@@ -23,12 +23,11 @@ describe.skipIf(!hasTestDatabase)("selectActiveUniverses", () => {
     ], now);
     // Game 7 was busy when last returned, two days ago: Roblox has not returned it since (deleted, or malformed).
     await upsertGameDetails(database.db, [gameDetail(7, { playing: 3_000, created: old })], new Date("2026-10-18T14:00:00Z"));
-    // Game 8 is young, but its last activity is older than the activity window.
-    await upsertGameDetails(
-      database.db,
-      [gameDetail(8, { playing: 20, created: new Date("2026-09-01T00:00:00Z") })],
-      new Date("2026-10-10T14:00:00Z"),
-    );
+    // Games 8 and 9 are young and empty now. Game 9 had players two days ago; game 8 had none for eight days.
+    const young = new Date("2026-09-15T00:00:00Z");
+    await upsertGameDetails(database.db, [gameDetail(8, { playing: 20, created: young })], new Date("2026-10-12T14:00:00Z"));
+    await upsertGameDetails(database.db, [gameDetail(9, { playing: 20, created: young })], new Date("2026-10-18T14:00:00Z"));
+    await upsertGameDetails(database.db, [gameDetail(8, { playing: 0, created: young }), gameDetail(9, { playing: 0, created: young })], now);
     // Game 2 peaked earlier today; game 3 only appears in the census; game 5 is quiet and its census count is too old;
     // game 6 peaked two days ago.
     await writeGameObservations(database.db, [
@@ -54,6 +53,7 @@ describe.skipIf(!hasTestDatabase)("selectActiveUniverses", () => {
       { universeId: 2, priority: 800 },
       { universeId: 3, priority: 120 },
       { universeId: 4, priority: 10 },
+      { universeId: 9, priority: 0 },
     ]);
   });
 });

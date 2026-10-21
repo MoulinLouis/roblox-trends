@@ -11,6 +11,7 @@ export interface ActiveUniverse {
 // A game's priority is its best CCU evidence from the lookback windows: its hourly peaks, its census count and the
 // CCU stored by its latest poll or promotion. The stored CCU counts only while it is recent: a game that Roblox stops
 // returning (deleted, or malformed in every response) would otherwise stay active forever and degrade every run.
+// A young game stays active for a week after its last players, so one empty poll does not drop it.
 export async function selectActiveUniverses(db: Database, now: Date): Promise<ActiveUniverse[]> {
   const config = ACTIVE_SET_CONFIG;
   const at = now.toISOString();
@@ -33,8 +34,7 @@ export async function selectActiveUniverses(db: Database, now: Date): Promise<Ac
       select
         g.universe_id,
         g.roblox_created_at,
-        g.last_ccu,
-        g.last_ccu_at,
+        g.last_active_at,
         greatest(
           coalesce(r.peak, 0),
           coalesce(c.ccu, 0),
@@ -52,8 +52,7 @@ export async function selectActiveUniverses(db: Database, now: Date): Promise<Ac
     where priority >= ${config.minimumCcu}
        or (
          roblox_created_at > ${at}::timestamptz - make_interval(days => ${config.recentGameMaximumAgeDays}::int)
-         and last_ccu > 0
-         and last_ccu_at > ${at}::timestamptz - make_interval(days => ${config.recentGameActivityDays}::int)
+         and last_active_at > ${at}::timestamptz - make_interval(days => ${config.recentGameActivityDays}::int)
        )
     order by priority desc, universe_id
   `);
