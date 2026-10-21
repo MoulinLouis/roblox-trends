@@ -40,7 +40,7 @@ describe.skipIf(!hasTestDatabase)("thumbnails job", () => {
     await database?.drop();
   });
 
-  // Each run follows a poll of games 1 to 4, as in production.
+  // Each run follows a poll of games 1 to 4, as in production: a checked game is refreshed only while its CCU is recent.
   async function polledRun(at: string, definition: ReturnType<typeof job>) {
     const now = new Date(at);
     await upsertGameDetails(database.db, [1, 2, 3, 4].map((id) => gameDetail(id)), now);
@@ -147,7 +147,7 @@ describe.skipIf(!hasTestDatabase)("thumbnails job", () => {
   });
 });
 
-describe.skipIf(!hasTestDatabase)("thumbnails job batches", () => {
+describe.skipIf(!hasTestDatabase)("thumbnails job batches and game selection", () => {
   let database: TestDatabase;
   const now = new Date("2026-10-20T14:45:00Z");
 
@@ -191,6 +191,7 @@ describe.skipIf(!hasTestDatabase)("thumbnails job batches", () => {
     return selectGamesNeedingThumbnails(database.db, now, {
       refreshHours: config.refreshHours,
       refreshMinimumCcu: config.refreshMinimumCcu,
+      refreshMaximumCcuAgeHours: config.refreshMaximumCcuAgeHours,
       limit: config.maximumGamesPerRun,
     });
   }
@@ -258,5 +259,19 @@ describe.skipIf(!hasTestDatabase)("thumbnails job batches", () => {
     expect(await executeJob(job({ "1": "error", "2": "error" }), database.db, now)).toBe("success");
     expect(await runStats()).toMatchObject({ requested: 2, answered: 2, errored: 2, withThumbnail: 0 });
     expect(await due()).toEqual([1, 2]);
+  });
+
+  it("does not refresh a busy game whose CCU is stale", async () => {
+    // Game 1 has not been polled for weeks: Roblox may have stopped returning it.
+    await upsertGameDetails(database.db, [gameDetail(1, { playing: 5_000 })], new Date("2026-10-01T00:00:00Z"));
+    await upsertGameDetails(database.db, [gameDetail(2)], new Date("2026-10-20T14:00:00Z"));
+    await database.db.update(games).set({ thumbnailsCheckedAt: new Date("2026-10-02T00:00:00Z") });
+    expect(await due()).toEqual([2]);
+  });
+
+  it("selects a never-checked game without a CCU time", async () => {
+    await insertGames(1);
+    await database.db.update(games).set({ lastCcuAt: null });
+    expect(await due()).toEqual([1]);
   });
 });

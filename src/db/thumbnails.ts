@@ -17,12 +17,14 @@ export function thumbnailKey(thumbnail: GameThumbnail): string {
   return thumbnail.mediaId !== null ? `media:${thumbnail.mediaId}` : `url:${urlFingerprint(thumbnail.imageUrl)}`;
 }
 
-// Games never checked come first, busiest first, then busy games whose last check is older than the refresh interval.
-// A game left pending, erroring or unanswered keeps its check time, so it stays due and the next run retries it.
+// Games never checked come first, busiest first, whatever their CCU time. A checked game is refreshed when its last
+// check is older than the refresh interval and it is busy now: its CCU must be recent, because a game that Roblox stops
+// returning keeps its last CCU forever. A game left pending, erroring or unanswered keeps its check time, so it stays
+// due and the next run retries it.
 export async function selectGamesNeedingThumbnails(
   db: Database,
   now: Date,
-  options: { refreshHours: number; refreshMinimumCcu: number; limit: number },
+  options: { refreshHours: number; refreshMinimumCcu: number; refreshMaximumCcuAgeHours: number; limit: number },
 ): Promise<number[]> {
   const at = now.toISOString();
   const result = await db.execute<{ universe_id: string }>(sql`
@@ -30,7 +32,8 @@ export async function selectGamesNeedingThumbnails(
     from games
     where thumbnails_checked_at is null
        or (thumbnails_checked_at < ${at}::timestamptz - make_interval(hours => ${options.refreshHours}::int)
-           and last_ccu >= ${options.refreshMinimumCcu})
+           and last_ccu >= ${options.refreshMinimumCcu}
+           and last_ccu_at > ${at}::timestamptz - make_interval(hours => ${options.refreshMaximumCcuAgeHours}::int))
     order by thumbnails_checked_at nulls first, last_ccu desc, universe_id
     limit ${options.limit}
   `);

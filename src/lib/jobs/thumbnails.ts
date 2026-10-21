@@ -25,6 +25,7 @@ export function createThumbnailsJob(dependencies: ThumbnailsDependencies): JobDe
       const universeIds = await selectGamesNeedingThumbnails(db, now, {
         refreshHours: config.refreshHours,
         refreshMinimumCcu: config.refreshMinimumCcu,
+        refreshMaximumCcuAgeHours: config.refreshMaximumCcuAgeHours,
         limit: config.maximumGamesPerRun,
       });
       const httpBefore = getHttpRequestMetrics();

@@ -114,6 +114,8 @@ export const JOB_CONFIG = {
     maximumConsecutiveFailedBatches: 3,
     refreshHours: 24,
     refreshMinimumCcu: 50,
+    // A checked game is refreshed only while its CCU is this recent: a game Roblox stops returning keeps its last CCU.
+    refreshMaximumCcuAgeHours: 24,
     maximumGamesPerRun: 4_000,
     // Every answer counts, including "no custom thumbnail", "pending" and "error"; only unanswered games are missing.
     minimumAnsweredShare: 0.9,
