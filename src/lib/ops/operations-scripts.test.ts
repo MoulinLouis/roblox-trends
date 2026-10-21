@@ -32,10 +32,20 @@ describe("operations scripts", () => {
     expect(script("provision.sh")).toContain("useradd --system --create-home --home-dir /var/lib/radar ");
     expect(script("provision.sh")).toContain("install -d -o root -g root -m 755 /opt/radar /opt/radar/releases");
     const deploy = script("deploy.sh");
-    expect(deploy).toContain("readonly mirror=/var/lib/radar/repo.git");
-    // Root takes the release once it is built, before marking it built.
-    expect(deploy).toContain('chown -R root:root "${release}"');
-    expect(deploy.indexOf('chown -R root:root "${release}"')).toBeLessThan(deploy.indexOf('touch "${release}/.built"'));
+    // Root's own clone, outside the radar home; radar never runs git on it.
+    expect(deploy).toContain('readonly mirror="${root}/repo.git"');
+    expect(deploy).not.toContain("as_radar git");
+    // After the build, root takes the release, replaces the operations files with its own copy, then marks it built.
+    const steps = [
+      'chown -R root:root "${release}"',
+      'rm -rf "${release}/ops"',
+      'git -C "${mirror}" archive "${target}" ops | tar -xf - -C "${release}"',
+      'touch "${release}/.built"',
+    ].map((step) => deploy.indexOf(step));
+    expect(steps).not.toContain(-1);
+    expect(steps).toEqual([...steps].sort((a, b) => a - b));
+    // A planted symbolic link would make root's chown of the cache, or systemd's ReadWritePaths, reach outside.
+    expect(deploy).toContain('if [[ -L "${release}/.next" || -L "${release}/.next/cache" ]]; then');
     expect(deploy).not.toContain("as_radar touch");
   });
 

@@ -7,8 +7,8 @@ set -euo pipefail
 readonly repository=MoulinLouis/roblox-trends
 readonly branch="${RADAR_DEPLOY_BRANCH:-radar-v2}"
 readonly root=/opt/radar
-# In the radar home: the radar user fetches and exports, root never runs git on it.
-readonly mirror=/var/lib/radar/repo.git
+# Root's own clone, outside the radar home: the radar user can change neither what is deployed nor what root runs.
+readonly mirror="${root}/repo.git"
 readonly releases="${root}/releases"
 readonly current="${root}/current"
 readonly keep_releases=3
@@ -65,15 +65,15 @@ set -a
 set +a
 
 if [[ ! -d "${mirror}" ]]; then
-  as_radar git clone --quiet --mirror "https://github.com/${repository}.git" "${mirror}" || fail "Could not clone ${repository}"
+  git clone --quiet --mirror "https://github.com/${repository}.git" "${mirror}" || fail "Could not clone ${repository}"
 fi
 # GitHub can be briefly unreachable: the next run retries, and nothing is deployed meanwhile.
-if ! as_radar git -C "${mirror}" fetch --quiet --prune origin; then
+if ! git -C "${mirror}" fetch --quiet --prune origin; then
   log "git fetch failed; retrying on the next run"
   ping "" "git fetch failed; nothing deployed"
   exit 0
 fi
-target="$(as_radar git -C "${mirror}" rev-parse --verify "refs/heads/${branch}^{commit}")"
+target="$(git -C "${mirror}" rev-parse --verify "refs/heads/${branch}^{commit}")"
 live_path="$(readlink -e "${current}" || true)"
 live="${live_path:+$(basename "${live_path}")}"
 # .deployed is written last, so a deploy that stopped after the switch is completed by the next run.
@@ -107,10 +107,10 @@ release="${releases}/${target}"
 if [[ ! -f "${release}/.built" ]]; then
   log "Building ${target}"
   rm -rf "${release}"
-  # The build runs as radar in a directory created for it. The export is piped: radar cannot write a file into the
-  # root-owned releases directory.
-  install -d -o radar -g radar "${release}"
-  as_radar git -C "${mirror}" archive "${target}" | as_radar tar -xf - -C "${release}" || fail "Could not export ${target}"
+  install -d -m 755 "${release}"
+  git -C "${mirror}" archive "${target}" | tar -xf - -C "${release}" || fail "Could not export ${target}"
+  # The build runs as radar, so it can write its dependencies and output.
+  chown -R radar:radar "${release}"
   build_log="${releases}/${target}.log"
   if ! as_radar env -C "${release}" nice -n 10 npm ci --no-audit --no-fund >"${build_log}" 2>&1 \
     || ! as_radar env -C "${release}" nice -n 10 npm run build >>"${build_log}" 2>&1; then
@@ -119,9 +119,17 @@ if [[ ! -f "${release}/.built" ]]; then
     fail "Build of ${target} failed: $(tail -c 2000 "${releases}/${target}.failed")"
   fi
   rm -f "${build_log}"
-  # Root takes the built release, so no process of the radar user can change what root runs from it (ops/bin,
-  # ops/systemd), and hands back only what Next.js writes at runtime (radar-web.service, ReadWritePaths).
+  # Code that runs during the build (npm install scripts, next build) runs as radar: it must not plant anything root
+  # later runs or follows. Root takes the release, replaces ops/ (ops/bin, ops/systemd) with its own copy, drops any
+  # planted marker and refuses a planted symlink before handing back only what Next.js writes at runtime.
   chown -R root:root "${release}"
+  rm -rf "${release}/ops" "${release}/.built" "${release}/.deployed"
+  git -C "${mirror}" archive "${target}" ops | tar -xf - -C "${release}" || fail "Could not export the operations files of ${target}"
+  if [[ -L "${release}/.next" || -L "${release}/.next/cache" ]]; then
+    echo "The build left a symbolic link at .next or .next/cache" >"${releases}/${target}.failed"
+    rm -rf "${release}"
+    fail "The build of ${target} left a symbolic link at .next or .next/cache"
+  fi
   if [[ -d "${release}/.next/cache" ]]; then
     chown -R radar:radar "${release}/.next/cache"
   else
@@ -131,7 +139,7 @@ if [[ ! -f "${release}/.built" ]]; then
 fi
 
 # Job timers pause only when the release brings migrations, so a schema change never races a job's statements.
-if [[ -z "${live}" ]] || ! as_radar git -C "${mirror}" diff --quiet "${live}" "${target}" -- drizzle; then
+if [[ -z "${live}" ]] || ! git -C "${mirror}" diff --quiet "${live}" "${target}" -- drizzle; then
   for timer in "${job_timers[@]}"; do systemctl stop "${timer}" 2>/dev/null || true; done
   # Running jobs keep their own release (never pruned while young); waiting lets the migration take its locks.
   waited=0

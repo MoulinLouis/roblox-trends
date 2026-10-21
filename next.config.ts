@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 
+// radar-web may write only .next/cache: when phase 4 adds ISR, set experimental.isrFlushToDisk: false or a cacheHandler.
 const nextConfig: NextConfig = {
   serverExternalPackages: ["pg"],
   images: {

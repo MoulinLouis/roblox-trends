@@ -45,7 +45,7 @@ apt-get install -y -q --allow-change-held-packages postgresql-18 postgresql-clie
   pgbackrest nodejs tailscale
 apt-mark hold timescaledb-2-postgresql-18 timescaledb-2-loader-postgresql-18 >/dev/null
 
-# Users and directories. The radar home holds the npm cache and the mirror clone; root owns the releases, so the radar
+# Users and directories. The radar home holds the npm cache; root owns the mirror clone and the releases, so the radar
 # user can neither re-point /opt/radar/current nor change what root runs from a release (deploy.sh).
 id radar >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/radar --shell /usr/sbin/nologin radar
 id analysis >/dev/null 2>&1 || useradd --create-home --shell /bin/bash analysis
