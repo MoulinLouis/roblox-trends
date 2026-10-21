@@ -1,6 +1,5 @@
 import { replaceChartSlot, type ChartPlacementRow } from "@/db/observations";
-import type { RobloxApi, RobloxChartGame, RobloxSort } from "@/lib/api/roblox";
-import { uniqueBy } from "@/lib/arrays";
+import type { RobloxApi, RobloxSort, RobloxSortGame } from "@/lib/api/roblox";
 import { JOB_CONFIG, ROBLOX_DISCOVERY_CHARTS } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
 import { PromotionApiError, promoteUniverses, type PromotionCandidate } from "./promotion";
@@ -11,19 +10,24 @@ export interface ChartsDependencies {
   sortIds?: readonly string[];
 }
 
-// Ranks follow the order Roblox lists the games, from 1. A game listed twice keeps its first, best rank.
-export function toChartPlacements(sortId: string, chartGames: RobloxChartGame[], observedAt: Date): ChartPlacementRow[] {
-  return uniqueBy(
-    chartGames.map((game, index) => ({
+// The rank is the position Roblox listed the game at, so a malformed entry the parser skipped leaves a gap. A game
+// listed more than once keeps its organic placement over a sponsored one (an unknown flag counts as organic), and
+// otherwise its first placement.
+export function toChartPlacements(sortId: string, chartGames: RobloxSortGame[], observedAt: Date): ChartPlacementRow[] {
+  const chosen = new Map<number, ChartPlacementRow>();
+  for (const game of chartGames) {
+    const placement = {
       sortId,
       universeId: game.universeId,
       observedAt,
-      rank: index + 1,
+      rank: game.position,
       playerCount: Math.round(game.playerCount),
       isSponsored: game.isSponsored ?? null,
-    })),
-    (row) => row.universeId,
-  );
+    };
+    const current = chosen.get(game.universeId);
+    if (!current || (current.isSponsored === true && placement.isSponsored !== true)) chosen.set(game.universeId, placement);
+  }
+  return [...chosen.values()].sort((left, right) => left.rank - right.rank);
 }
 
 export function createChartsJob(dependencies: ChartsDependencies): JobDefinition {
