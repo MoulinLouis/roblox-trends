@@ -26,23 +26,25 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
       // are therefore written batch by batch, so a run that times out keeps the CCU of every batch it finished.
       const outcome = await runBatchesWithDeadline(
         active.map((item) => String(item.universeId)),
-        config.batchSize,
-        clock() + config.deadlineMs,
-        clock,
-        (batch) => dependencies.roblox.getGameDetails(batch),
-        (error, batch) =>
-          logger.warn("Poll batch failed", { universes: batch.length, firstUniverseId: batch[0], error: errorMessage(error) }),
-        async (details) => {
-          await writeGameObservations(
-            db,
-            details.map((detail) => ({
-              universeId: detail.id,
-              observedAt: slot,
-              ccu: Math.round(detail.playing),
-              visits: Math.round(detail.visits),
-              favorites: Math.round(detail.favoritedCount),
-            })),
-          );
+        {
+          batchSize: config.batchSize,
+          deadline: clock() + config.deadlineMs,
+          clock,
+          work: (batch) => dependencies.roblox.getGameDetails(batch),
+          onError: (error, batch) =>
+            logger.warn("Poll batch failed", { universes: batch.length, firstUniverseId: batch[0], error: errorMessage(error) }),
+          store: async (details) => {
+            await writeGameObservations(
+              db,
+              details.map((detail) => ({
+                universeId: detail.id,
+                observedAt: slot,
+                ccu: Math.round(detail.playing),
+                visits: Math.round(detail.visits),
+                favorites: Math.round(detail.favoritedCount),
+              })),
+            );
+          },
         },
       );
       const details = outcome.results;

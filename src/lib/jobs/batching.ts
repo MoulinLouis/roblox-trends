@@ -7,19 +7,22 @@ export interface BatchOutcome<R> {
   skippedItems: number;
 }
 
+export interface BatchOptions<I, R> {
+  batchSize: number;
+  // No batch starts once clock() is past the deadline.
+  deadline: number;
+  clock: () => number;
+  // The API call. A failure counts as a failed batch and the run moves on.
+  work: (batch: I[]) => Promise<R[]>;
+  onError?: (error: unknown, batch: I[]) => void;
+  // Runs after each successful batch, outside the guard: a run that overruns its timeout keeps the batches it
+  // finished, and a failure here is a database error, which must fail the run instead of passing for an API failure.
+  store?: (results: R[]) => Promise<void>;
+}
+
 // Items arrive in priority order, so a missed deadline sheds the least important ones.
-// Only `work` (the API call) is guarded: a failure there counts as a failed batch and the run moves on. `store` runs
-// after each successful batch, so a run that overruns its timeout keeps the batches it finished; a failure there is a
-// database error, which must fail the run instead of passing for an API failure.
-export async function runBatchesWithDeadline<I, R>(
-  items: I[],
-  batchSize: number,
-  deadline: number,
-  clock: () => number,
-  work: (batch: I[]) => Promise<R[]>,
-  onError?: (error: unknown, batch: I[]) => void,
-  store?: (results: R[]) => Promise<void>,
-): Promise<BatchOutcome<R>> {
+export async function runBatchesWithDeadline<I, R>(items: I[], options: BatchOptions<I, R>): Promise<BatchOutcome<R>> {
+  const { batchSize, deadline, clock, work, onError, store } = options;
   const results: R[] = [];
   const batches = chunk(items, batchSize);
   let attempted = 0;

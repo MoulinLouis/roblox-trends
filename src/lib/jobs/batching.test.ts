@@ -1,26 +1,44 @@
 import { describe, expect, it } from "vitest";
-import { evaluateCollectionQuality, runBatchesWithDeadline } from "./batching";
+import { evaluateCollectionQuality, runBatchesWithDeadline, type BatchOptions } from "./batching";
+
+// One-item batches, a clock that never moves, and work that echoes the batch.
+function options(overrides: Partial<BatchOptions<number, number>> = {}): BatchOptions<number, number> {
+  return { batchSize: 1, deadline: 100, clock: () => 0, work: async (batch) => batch, ...overrides };
+}
 
 describe("runBatchesWithDeadline", () => {
   it("processes every batch when time allows", async () => {
-    const outcome = await runBatchesWithDeadline([1, 2, 3], 2, 100, () => 0, async (batch) => batch.map((item) => item * 10));
+    const outcome = await runBatchesWithDeadline([1, 2, 3], options({ batchSize: 2, work: async (batch) => batch.map((item) => item * 10) }));
     expect(outcome).toEqual({ results: [10, 20, 30], attempted: 3, failedBatches: 0, skippedItems: 0 });
   });
 
   it("skips the remaining items once the deadline passes", async () => {
     let now = 0;
-    const outcome = await runBatchesWithDeadline([1, 2, 3, 4, 5], 2, 10, () => now, async (batch) => {
-      now += 20;
-      return batch;
-    });
+    const outcome = await runBatchesWithDeadline(
+      [1, 2, 3, 4, 5],
+      options({
+        batchSize: 2,
+        deadline: 10,
+        clock: () => now,
+        work: async (batch) => {
+          now += 20;
+          return batch;
+        },
+      }),
+    );
     expect(outcome).toEqual({ results: [1, 2], attempted: 2, failedBatches: 0, skippedItems: 3 });
   });
 
   it("counts failed batches and keeps going", async () => {
-    const outcome = await runBatchesWithDeadline([1, 2, 3], 1, 100, () => 0, async (batch) => {
-      if (batch[0] === 2) throw new Error("boom");
-      return batch;
-    });
+    const outcome = await runBatchesWithDeadline(
+      [1, 2, 3],
+      options({
+        work: async (batch) => {
+          if (batch[0] === 2) throw new Error("boom");
+          return batch;
+        },
+      }),
+    );
     expect(outcome).toEqual({ results: [1, 3], attempted: 3, failedBatches: 1, skippedItems: 0 });
   });
 
@@ -28,17 +46,16 @@ describe("runBatchesWithDeadline", () => {
     const events: string[] = [];
     const outcome = await runBatchesWithDeadline(
       [1, 2, 3],
-      2,
-      100,
-      () => 0,
-      async (batch) => {
-        events.push(`work ${batch.join(",")}`);
-        return batch;
-      },
-      undefined,
-      async (results) => {
-        events.push(`store ${results.join(",")}`);
-      },
+      options({
+        batchSize: 2,
+        work: async (batch) => {
+          events.push(`work ${batch.join(",")}`);
+          return batch;
+        },
+        store: async (results) => {
+          events.push(`store ${results.join(",")}`);
+        },
+      }),
     );
     expect(events).toEqual(["work 1,2", "store 1,2", "work 3", "store 3"]);
     expect(outcome.results).toEqual([1, 2, 3]);
@@ -49,17 +66,16 @@ describe("runBatchesWithDeadline", () => {
     const stored: number[][] = [];
     await runBatchesWithDeadline(
       [1, 2, 3],
-      1,
-      100,
-      () => 0,
-      async (batch) => {
-        if (batch[0] === 2) throw new Error("boom");
-        return batch;
-      },
-      (error, batch) => errors.push([error instanceof Error ? error.message : String(error), batch]),
-      async (results) => {
-        stored.push(results);
-      },
+      options({
+        work: async (batch) => {
+          if (batch[0] === 2) throw new Error("boom");
+          return batch;
+        },
+        onError: (error, batch) => errors.push([error instanceof Error ? error.message : String(error), batch]),
+        store: async (results) => {
+          stored.push(results);
+        },
+      }),
     );
     expect(errors).toEqual([["boom", [2]]]);
     expect(stored).toEqual([[1], [3]]);
@@ -69,17 +85,15 @@ describe("runBatchesWithDeadline", () => {
     const worked: number[][] = [];
     const run = runBatchesWithDeadline(
       [1, 2],
-      1,
-      100,
-      () => 0,
-      async (batch) => {
-        worked.push(batch);
-        return batch;
-      },
-      undefined,
-      async () => {
-        throw new Error("database unavailable");
-      },
+      options({
+        work: async (batch) => {
+          worked.push(batch);
+          return batch;
+        },
+        store: async () => {
+          throw new Error("database unavailable");
+        },
+      }),
     );
     await expect(run).rejects.toThrow("database unavailable");
     expect(worked).toEqual([[1]]);
