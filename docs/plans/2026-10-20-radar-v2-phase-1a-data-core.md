@@ -2886,19 +2886,23 @@ describe.skipIf(!hasTestDatabase)("votes job", () => {
 });
 ```
 
-**Step 2: Implement `src/lib/jobs/votes.ts`**
+**Step 2: Share the rate-limit and HTTP metric helpers, then implement `src/lib/jobs/votes.ts`**
+
+Move `isRateLimited` and `httpMetricsSince` from `src/lib/jobs/poll.ts` into `src/lib/jobs/batching.ts` as exports (unchanged), and import them in `poll.ts` (a `refactor:` commit of its own). Then create `src/lib/jobs/votes.ts`, following the committed poll job: votes are written batch by batch, a terminal 429 stops the run, repeated batch failures stop it, and quality is gated on requested games.
 
 ```ts
 import { selectActiveUniverses } from "@/db/active-set";
 import { writeVoteObservations } from "@/db/observations";
+import { getHttpRequestMetrics } from "@/lib/api/http";
 import type { RobloxApi } from "@/lib/api/roblox";
 import { JOB_CONFIG } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
-import { evaluateCollectionQuality, runBatchesWithDeadline } from "./batching";
+import { evaluateCollectionQuality, httpMetricsSince, isRateLimited, runBatchesWithDeadline } from "./batching";
 import type { JobDefinition } from "./runner";
 
 export interface VotesDependencies {
   roblox: Pick<RobloxApi, "getGameVotes">;
+  // Measures the deadline only.
   clock?: () => number;
 }
 
@@ -2911,41 +2915,61 @@ export function createVotesJob(dependencies: VotesDependencies): JobDefinition {
     timeoutMs: config.timeoutMs,
     async run({ db, now, slot }) {
       const active = await selectActiveUniverses(db, now);
+      const httpBefore = getHttpRequestMetrics();
       const outcome = await runBatchesWithDeadline(
         active.map((item) => String(item.universeId)),
-        config.batchSize,
-        clock() + config.deadlineMs,
-        clock,
-        (batch) => dependencies.roblox.getGameVotes(batch),
-        (error) => logger.warn("Votes batch failed", { error: errorMessage(error) }),
+        {
+          batchSize: config.batchSize,
+          deadline: clock() + config.deadlineMs,
+          clock,
+          work: (batch) => dependencies.roblox.getGameVotes(batch),
+          onError: (error, batch) =>
+            logger.warn("Votes batch failed", { universes: batch.length, firstUniverseId: batch[0], error: errorMessage(error) }),
+          stopOn: isRateLimited,
+          maximumConsecutiveFailedBatches: config.maximumConsecutiveFailedBatches,
+          store: async (votes) => {
+            await writeVoteObservations(
+              db,
+              votes.map((vote) => ({ universeId: vote.id, observedAt: slot, upVotes: vote.upVotes, downVotes: vote.downVotes })),
+            );
+          },
+        },
       );
-      await writeVoteObservations(
-        db,
-        outcome.results.map((vote) => ({ universeId: vote.id, observedAt: slot, upVotes: vote.upVotes, downVotes: vote.downVotes })),
-      );
-      const status = evaluateCollectionQuality({
-        requested: active.length,
-        attempted: outcome.attempted,
-        returned: outcome.results.length,
-        minimumReturnedShare: config.minimumReturnedShare,
-        maximumSkippedShare: config.maximumSkippedShare,
-      });
+      const status =
+        active.length === 0
+          ? "degraded"
+          : evaluateCollectionQuality({
+              requested: active.length,
+              returned: outcome.results.length,
+              minimumReturnedShare: config.minimumReturnedShare,
+            });
       return {
         status,
-        stats: { active: active.length, attempted: outcome.attempted, returned: outcome.results.length, failedBatches: outcome.failedBatches, skipped: outcome.skippedItems },
+        stats: {
+          active: active.length,
+          attempted: outcome.attempted,
+          returned: outcome.results.length,
+          failedBatches: outcome.failedBatches,
+          skipped: outcome.skippedItems,
+          stoppedBy: outcome.stoppedBy,
+          rateLimited: outcome.stoppedBy === "error",
+          http: httpMetricsSince(httpBefore),
+        },
       };
     },
   };
 }
 ```
 
+Add to `src/lib/jobs/votes.db.test.ts` a test where the fake throws `new HttpError(429, "Too Many Requests", "https://games.roblox.com/v1/games/votes")` for the first batch: the run is `degraded`, `rateLimited` is true in `job_runs.stats`, and no vote row is written.
+
 **Step 3: Register, test, commit**
 
 Add `createVotesJob({ roblox })` to the array in `src/lib/jobs/registry.ts` (import from `./votes`).
 
 ```bash
-npx vitest run src/lib/jobs/votes.db.test.ts && npm run typecheck
-git add src/lib/jobs
+npx vitest run src/lib/jobs/votes.db.test.ts src/lib/jobs/poll.db.test.ts && npm run typecheck
+git add src/lib/jobs/votes.ts src/lib/jobs/votes.db.test.ts src/lib/jobs/registry.ts
 git commit -m "feat(jobs): add hourly votes collector"
 git push && gh run watch --exit-status
 ```
@@ -3405,7 +3429,7 @@ git push && gh run watch --exit-status
 
 **Files:**
 - Modify: `src/db/schema.ts` (new `games.thumbnail_key` column), `src/lib/jobs/registry.ts`
-- Generate: `drizzle/0002_thumbnail_key.sql`
+- Generate: `drizzle/0003_thumbnail_key.sql`
 - Create: `src/db/thumbnails.ts`, `src/lib/jobs/thumbnails.ts`, `src/lib/jobs/thumbnails.db.test.ts`
 
 Roblox's thumbnail map (Task 5) has four cases per universe: a custom thumbnail `{ imageUrl, mediaId }`; `null` (no usable custom thumbnail: none uploaded, or blocked by moderation); `"pending"` (still processing or in review: retried next run, but an answer, not a failure); or no entry (error, malformed item or failed batch). Coverage counts every answer, so only source failures degrade a run, and a run where Roblox answered for no game at all fails. A thumbnail version is keyed on the media asset id, so a CDN URL change for the same image never records a fake A/B test. When Roblox answers `null`, the previous thumbnail URL and key are kept on purpose: a transient empty answer must not erase history or record a fake change.
@@ -3420,7 +3444,7 @@ In `src/db/schema.ts`, in `games`, add after `iconUrl`:
 ```
 
 Run: `npx drizzle-kit generate --name=thumbnail_key`
-Expected: `drizzle/0002_thumbnail_key.sql` containing only `ALTER TABLE "games" ADD COLUMN "thumbnail_key" text;`. Do not edit 0000 or 0001.
+Expected: `drizzle/0003_thumbnail_key.sql` containing only `ALTER TABLE "games" ADD COLUMN "thumbnail_key" text;`. Never edit an existing migration.
 
 **Step 2: Write the failing database test**
 
@@ -4058,6 +4082,19 @@ async function backfillLastCcu(target: Database): Promise<void> {
     ) latest
     where latest.universe_id = g.universe_id and g.last_ccu_at is null
   `);
+  // The young-game rule needs the last time a game had players, not only its latest reading.
+  await target.execute(sql`
+    update games g
+    set last_active_at = active.observed_at
+    from (
+      select universe_id, max(observed_at) as observed_at
+      from game_observations
+      where ccu > 0
+      group by universe_id
+    ) active
+    where active.universe_id = g.universe_id
+      and (g.last_active_at is null or g.last_active_at < active.observed_at)
+  `);
 }
 ```
 
@@ -4131,6 +4168,7 @@ describe.skipIf(!hasTestDatabase)("importLegacyHistory", () => {
     expect(game.universeId).toBe(10765298801);
     expect(game.iconUrl).toBe("https://tr.rbxcdn.com/icon");
     expect(game.lastCcu).toBe(13473);
+    expect(game.lastActiveAt?.toISOString()).toBe("2026-09-29T20:00:00.000Z");
 
     const [observation] = await target.db.select().from(gameObservations);
     expect(observation).toMatchObject({ ccu: 13473, visits: 5000100, source: "legacy" });
@@ -4492,8 +4530,9 @@ Expected: CI green with every database suite executed.
 - After Task 6 review: `upsertGameDetails` sorts by id, ignores stale writes (`excluded.last_observed_at >= games.last_observed_at`), keeps `first_observed_at` as the minimum, reuses stored name/description when the fingerprint is unchanged, and fills null place mappings with a targeted UPDATE; `savePlaceResolution` never erases a known mapping; `recordDiscoveries` sorts and merges duplicate windows; `games` uses fillfactor 80 for HOT updates; PostgreSQL 18 is checked before migrating and before every job. The Task 6 code blocks above predate these changes; the committed code is authoritative.
 - After Task 7 review: writers return rows actually written (`rowCount`), sort by full key, and are tested against compressed chunks; charts replace a sort's whole slot atomically on retry (`replaceChartSlot`); the legacy import must keep per-statement commits (TimescaleDB limits tuples decompressed per transaction) and is tested to never overwrite v2 data.
 - After Task 6 re-review: no writer may set `games.last_observed_at` later than real time (the stale-write guard compares against it); the legacy import reads v1 games in universe-id order. Migrations 0000 and 0001 were edited in place only because no persistent v2 database existed yet; from now on, schema changes go into new migrations.
+- After Task 9 review: poll and votes gate quality on `returned / requested >= minimumReturnedShare` (no shedding allowance); `runBatchesWithDeadline` stops on a terminal 429 (`stopOn`) or after `maximumConsecutiveFailedBatches` failed batches in a row; poll's deadline is 180 s; observations are written per batch; the active set ignores `last_ccu` older than 24 h, uses `bucket >= time_bucket(1 hour, now - 24h)`, and keeps young games for 7 days after their last non-zero CCU (`games.last_active_at`, migration 0002); an empty active set degrades poll; poll stats carry HTTP metrics and `shedBelowCcu`. Task 10 (votes) must use the same stop rules (`stopOn` 429, consecutive failures) as committed in `batching.ts`. `runBatchesWithDeadline` takes an options object and `evaluateCollectionQuality` takes `{ requested, returned, minimumReturnedShare }`; the Task 9 code blocks above predate this, the committed code is authoritative. The legacy import also backfills `last_active_at`. On a fresh database, poll reports degraded until census has promoted games.
 - After Task 5 re-review: thumbnails also report `"pending"` (processing or in review), Blocked counts as no thumbnail, `countPerUniverse=3` falls back to an approved image, icons are best-effort per batch, and a thumbnails run where Roblox answered for no game fails.
-- After Task 5 review: `getGameThumbnails` uses `defaults=false` (with `defaults=true`, games without media come back as shared generic `GameMediaItem` images marked Completed), parses items one by one, and returns a custom thumbnail, `null` (no custom thumbnail) or no entry (unknown). Thumbnail versions are keyed on the media asset id through `games.thumbnail_key` (migration 0002).
+- After Task 5 review: `getGameThumbnails` uses `defaults=false` (with `defaults=true`, games without media come back as shared generic `GameMediaItem` images marked Completed), parses items one by one, and returns a custom thumbnail, `null` (no custom thumbnail) or no entry (unknown). Thumbnail versions are keyed on the media asset id through `games.thumbnail_key` (migration 0003).
 - Before phase 3: analysis must exclude every slot whose run was not `success` (failed runs can leave partial writes), not only degraded ones. Exception: census slots are filtered on `job_runs.stats.listQuality`, because a census run can be degraded by resolution or promotion problems while its list is complete.
 - After Task 8 review: game details, votes and Rolimon's entries are validated item by item (a malformed item is skipped and logged, a broken envelope still throws); a missing place resolves to `{"universeId": null}` with HTTP 200 (not 404), stored as unresolvable; census degrades when the Games API fails during promotion (`PromotionApiError`; database errors fail the run), or when resolution is stalled (nothing answered and either rate-limited, out of budget, or at least `stalledResolutionFailures` failures; resolving stops after that many consecutive failures); its list is degraded below `minimumListed` or above `maximumRejectedShare` rejected entries; charts and explore catch only `PromotionApiError`. The Task 8 code blocks above predate these changes; the committed code is authoritative.
 - Before phase 3: raw SQL over aggregates returns `int8`, `numeric` and `timestamptz` as strings; convert with `Number()`/`new Date()` or declare the views with `pgView(...).existing()`. Exclude the partial current UTC day from daily analysis; `game_daily` computes it in real time.
@@ -4508,6 +4547,8 @@ Expected: CI green with every database suite executed.
 - PostgreSQL tuning sets `client_connection_check_interval` (about 10 s) so statements of a killed job process stop server-side.
 - PostgreSQL tuning also sets `checkpoint_timeout` to at least 15 minutes and `wal_compression` on, to limit full-page images from the 5-minute `games` updates; monitor `n_tup_hot_upd / n_tup_upd` on `games`.
 - systemd units set `RADAR_REQUIRE_HEALTHCHECKS=1` and an `OnFailure=` unit that sends the fail ping for process deaths the code cannot report.
+- Timers use `AccuracySec=1s` (the 1-minute default can push a 270 s run into the next tick, which systemd then merges silently) and are offset so jobs sharing a Roblox host (poll, votes, census promotion, charts, explore) do not start in the same minute; HTTP spacing is per process.
+- Run `EXPLAIN (ANALYZE, BUFFERS)` on the active-set query with real data to confirm chunk exclusion in the real-time half of `game_hourly`.
 - Provisioning creates both checks per job before the first run and sends one test ping to prove the ping key works; with `create=1` alone, a wrong key or a job degraded from its first run would never create its check.
 - Stagger the systemd timers so jobs sharing a Roblox host do not start in the same minute (HTTP spacing is per process).
 - Server provisioning script, PostgreSQL roles (application owner, read-only analysis role), TimescaleDB tuning, Node 24 LTS.
