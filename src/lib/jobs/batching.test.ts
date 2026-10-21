@@ -101,21 +101,26 @@ describe("runBatchesWithDeadline", () => {
 });
 
 describe("evaluateCollectionQuality", () => {
-  const thresholds = { minimumReturnedShare: 0.95, maximumSkippedShare: 0.1 };
+  const minimumReturnedShare = 0.95;
 
   it("accepts a complete run", () => {
-    expect(evaluateCollectionQuality({ requested: 100, attempted: 100, returned: 98, ...thresholds })).toBe("success");
+    expect(evaluateCollectionQuality({ requested: 100, returned: 98, minimumReturnedShare })).toBe("success");
+  });
+
+  it("accepts a run that returns exactly the minimum share of the requested games", () => {
+    expect(evaluateCollectionQuality({ requested: 100, returned: 95, minimumReturnedShare })).toBe("success");
   });
 
   it("flags missing responses", () => {
-    expect(evaluateCollectionQuality({ requested: 100, attempted: 100, returned: 90, ...thresholds })).toBe("degraded");
+    expect(evaluateCollectionQuality({ requested: 100, returned: 90, minimumReturnedShare })).toBe("degraded");
   });
 
-  it("flags heavy shedding", () => {
-    expect(evaluateCollectionQuality({ requested: 100, attempted: 80, returned: 80, ...thresholds })).toBe("degraded");
+  // 90 attempted and 86 returned: 96% of the attempted games, but only 86% of the requested ones.
+  it("counts shed games as missing", () => {
+    expect(evaluateCollectionQuality({ requested: 100, returned: 86, minimumReturnedShare })).toBe("degraded");
   });
 
   it("accepts an empty run", () => {
-    expect(evaluateCollectionQuality({ requested: 0, attempted: 0, returned: 0, ...thresholds })).toBe("success");
+    expect(evaluateCollectionQuality({ requested: 0, returned: 0, minimumReturnedShare })).toBe("success");
   });
 });

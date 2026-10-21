@@ -67,7 +67,6 @@ export const JOB_CONFIG = {
     deadlineMs: 240_000,
     batchSize: 50,
     minimumReturnedShare: 0.95,
-    maximumSkippedShare: 0.1,
   },
   votes: {
     intervalMinutes: 60,
@@ -75,7 +74,6 @@ export const JOB_CONFIG = {
     deadlineMs: 25 * 60_000,
     batchSize: 50,
     minimumReturnedShare: 0.95,
-    maximumSkippedShare: 0.1,
   },
   charts: {
     intervalMinutes: 60,

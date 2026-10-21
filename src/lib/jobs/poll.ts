@@ -53,10 +53,8 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
       const upsert = await upsertGameDetails(db, details, now);
       const status = evaluateCollectionQuality({
         requested: active.length,
-        attempted: outcome.attempted,
         returned: details.length,
         minimumReturnedShare: config.minimumReturnedShare,
-        maximumSkippedShare: config.maximumSkippedShare,
       });
       return {
         status,

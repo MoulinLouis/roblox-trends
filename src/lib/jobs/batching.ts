@@ -48,15 +48,12 @@ export async function runBatchesWithDeadline<I, R>(items: I[], options: BatchOpt
   return { results, attempted, failedBatches, skippedItems };
 }
 
+// Shed and failed games count as missing, as the design's quality gate requires: a run is degraded when fewer than
+// the minimum share of the requested games come back.
 export function evaluateCollectionQuality(input: {
   requested: number;
-  attempted: number;
   returned: number;
   minimumReturnedShare: number;
-  maximumSkippedShare: number;
 }): "success" | "degraded" {
-  if (input.requested === 0) return "success";
-  const returnedShare = input.attempted ? input.returned / input.attempted : 0;
-  const skippedShare = (input.requested - input.attempted) / input.requested;
-  return returnedShare >= input.minimumReturnedShare && skippedShare <= input.maximumSkippedShare ? "success" : "degraded";
+  return input.requested === 0 || input.returned / input.requested >= input.minimumReturnedShare ? "success" : "degraded";
 }
