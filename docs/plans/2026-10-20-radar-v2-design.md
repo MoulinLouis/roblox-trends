@@ -62,7 +62,7 @@ Time series (TimescaleDB hypertables):
 
 | Table | Grain | Content | Compressed after | Raw retention |
 | --- | --- | --- | --- | --- |
-| `game_observations` | universe × 5-minute slot | CCU, visits, favorites | 7 days | 365 days |
+| `game_observations` | universe × 10-minute slot | CCU, visits, favorites | 7 days | 365 days |
 | `census_observations` | place × 10-minute slot | Rolimon's active players for every listed game (about 7,800) | 7 days | 365 days |
 | `vote_observations` | universe × hour | Cumulative up and down votes | 30 days | Permanent |
 | `chart_placements` | sort × universe × hour | Rank, player count and sponsored flag in each of the 22 discovery sorts | 30 days | Permanent |
@@ -93,14 +93,14 @@ Legacy history import:
 
 The v1 trend, score, idea, artifact, alert and scheduler tables are dropped after cutover.
 
-Estimated volume: about 1M rows per day in each of `game_observations` and `census_observations`. After compression this is a few gigabytes per year, well within the 80 GB disk.
+Estimated volume: about 1M rows per day in `census_observations` and about 0.5M in `game_observations` (3,000–4,000 games every 10 minutes). After compression this is a few gigabytes per year, well within the 80 GB disk.
 
 ## 3. Collection
 
 | Job | Interval | Work |
 | --- | --- | --- |
 | `census` | 10 min | Downloads the full Rolimon's game list in one request and writes `census_observations`. Every place at or above 100 CCU that is not yet tracked is resolved to a universe (mapping cached) and promoted to tracking, with no per-run cap on the count. Places are resolved busiest first; those left when the 150-second resolution budget runs out wait for the next run. |
-| `poll` | 5 min | Calls the Games API in batches of 50 for every active game, busiest first (about 3,000–4,000 games, 60–80 requests, about 40 seconds), with a 180-second deadline. Writes `game_observations` and records title and description changes in `game_versions`. |
+| `poll` | 10 min | Calls the Games API in batches of 50 for every active game, busiest first (about 3,000–4,000 games, 60–80 requests), one request every 7 seconds, with a 7.5-minute deadline that holds about 64 requests (3,200 games). Writes `game_observations` and records title and description changes in `game_versions`. It ran every 5 minutes until 2026-10-21, when the game details endpoint proved to allow only about 500 ids per minute per IP address. |
 | `votes` | 1 h | Calls the votes endpoint for the active set and writes `vote_observations`. |
 | `charts` | 1 h | Reads the 22 discovery sorts, writes `chart_placements` and discovers new universes. |
 | `explore` | 1 h | Runs bounded Roblox searches and recommendation expansion from rising games. Search terms come from cluster vocabulary instead of a fixed taxonomy; until clusters exist (phase 2), they are the words shared by the titles of rising young games. |
@@ -111,9 +111,9 @@ A game is active when it reached 50 CCU or more in the last 24 hours, when it is
 Reliability rules:
 
 - **Idempotency.** Every observation is keyed by its slot timestamp, so a retry within the same slot overwrites instead of duplicating.
-- **No overlap.** `poll` starts no batch after a 180-second deadline (its timeout is 270 seconds), after a rate limit that outlasted the retries, or after 3 failed batches in a row. Games are polled busiest first, so the lowest-CCU games are the ones left for the next run instead of running into the next slot.
+- **No overlap.** `poll` starts no batch after a 7.5-minute deadline (its timeout is 9 minutes), after a rate limit that outlasted the retries, or after 3 failed batches in a row. Games are polled busiest first, so the lowest-CCU games are the ones left for the next run instead of running into the next slot.
 - **Quality gates.** A run is marked `degraded`, and excluded from analysis, when fewer than 95% of the requested games come back, or when the Rolimon's list has fewer than 1,000 places, more than 5% malformed entries, or a size more than 30% away from the latest list of the last 6 hours that passed this check.
-- **Rate limits.** The existing HTTP client is kept: per-host spacing, retries, `Retry-After` handling, jittered exponential backoff. If rate limiting persists on the dedicated IP address, `poll` moves to 10 minutes.
+- **Rate limits.** The existing HTTP client is kept: per-host spacing, retries, `Retry-After` handling, jittered exponential backoff. Rate limiting did persist on the dedicated IP address: the game details endpoint has a hidden limit of about 500 ids per minute that its `x-ratelimit-*` headers do not show (measured on 2026-10-21), so `poll` moved to 10 minutes, and the client spaces that endpoint alone 7 seconds apart and slows it down by 1.5 times, up to 30 seconds, on each 429.
 
 To measure in the first week:
 
@@ -186,7 +186,7 @@ Next.js server components read the section 5 views directly. The existing chart 
 1. **Radar** (home): rising games, showing thumbnail, title, real age, current and peak CCU, weekday-safe growth, velocity, clusters and an event badge. Filters: age (14, 30 or 90 days), minimum CCU, cluster and watchlist.
 2. **Clusters**: a sortable table of the section 5C metrics with a four-week share sparkline, filterable by cluster type. A cluster page lists its members in order of entry, with how each one performed.
 3. **Game**:
-   - 5-minute curve for 14 days, then hourly and daily curves;
+   - 10-minute curve for 14 days, then hourly and daily curves;
    - annotations for title and thumbnail changes and chart entries;
    - an editable classification card;
    - engagement and monetization signals;

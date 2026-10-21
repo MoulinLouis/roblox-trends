@@ -59,7 +59,7 @@ Users: `radar` (application, PostgreSQL role `radar` by peer authentication), `a
 
 | Unit | Runs |
 | --- | --- |
-| `radar-job@<job>.service` | `scripts/job.ts <job>` as `radar`. `TimeoutStartSec` from its drop-in (census 570 s, poll 300 s, the hourly jobs 1830 s); on a unit failure, `radar-job-failed@<job>.service` sends the `/fail` ping |
+| `radar-job@<job>.service` | `scripts/job.ts <job>` as `radar`. `TimeoutStartSec` from its drop-in (census and poll 570 s, the hourly jobs 1830 s); on a unit failure, `radar-job-failed@<job>.service` sends the `/fail` ping |
 | `radar-web.service` | `next start` on `127.0.0.1:3000` as `radar`, restarted on failure; writes only `.next/cache` |
 | `radar-deploy.service` | `ops/bin/deploy.sh` as root |
 | `radar-system-check.service` | `scripts/system-check.ts` as `radar` |
@@ -72,7 +72,7 @@ Jobs sharing Roblox hosts never start in the same minute (HTTP spacing is per pr
 
 | Unit | OnCalendar | Slot offset |
 | --- | --- | --- |
-| `radar-poll.timer` | `*:0/5:20` | +0:20 of each 5-minute slot |
+| `radar-poll.timer` | `*:0/10:20` | +0:20 of each 10-minute slot |
 | `radar-census.timer` | `*:2/10:40` | +2:40 of each 10-minute slot |
 | `radar-votes.timer` | `*:07:30` | +7:30 |
 | `radar-charts.timer` | `*:16:30` | +16:30 |
@@ -353,6 +353,20 @@ runuser -u postgres -- psql -X -d radar -c "select j.job_id, j.proc_name, j.hype
 ```
 
 A policy left paused (by an import, for example) resumes with `runuser -u postgres -- psql -X -d radar -c 'select alter_job(<job_id>, scheduled => true)'`.
+
+### Games API limit
+
+The game details endpoint, `GET games.roblox.com/v1/games?universeIds=…`, has a hidden per-IP limit that counts universe ids: about 500 per minute, measured on 2026-10-21 (README, verified API behavior). Its `x-ratelimit-*` headers do not show it, and the votes endpoint on the same host does not share it. `poll` reads it every 10 minutes with one request of 50 ids every 7 s; the promotions of `census`, `charts` and `explore` call it too, from their own processes, and spend the same budget. Each 429 multiplies the endpoint's spacing by 1.5 for the rest of the process, up to 30 s; the next run, a new process, starts again at 7 s.
+
+A 429 storm in `radar status`:
+
+- On the `poll` row, `degraded` and `rate-limited` grow, and `429s/requests` rises from about 0 to a few per run.
+- The watched stats of the last completed run show `http.rateLimitedResponses` above 0 and `http.endpointIntervalMs={"games.roblox.com/v1/games":…}` above 7000 (10500, 15750, 23625, then 30000). With `rateLimited=true stoppedBy=error`, a 429 outlasted the retries and the rest of the active set was skipped; with `stoppedBy=deadline`, the slower spacing ran out of time. Either way `skipped` and `shedBelowCcu` show the quietest games left out.
+- Coverage falls below its usual share.
+
+The journal (`journalctl -u radar-job@poll -n 100 -o cat`) shows `External service throttled or unavailable; retrying` with a `retryDelayMs` of about 30–60 s (the limit's reset), and one `Slowed down a rate-limited endpoint for the rest of the process` line per new spacing.
+
+A 429 now and then needs nothing. When most runs slow down, check first whether another job's promotion ran during the poll run (census at +2:40 of each slot, charts at :16:30, explore at :26:30), then raise the 7 s of `EXTERNAL_REQUEST_CONFIG.minimumIntervalByEndpoint` in the repository: `JOB_CONFIG.poll` holds the arithmetic of how many games the deadline then covers.
 
 ## 8. Maintenance
 
