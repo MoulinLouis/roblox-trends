@@ -31,6 +31,13 @@ const roblox: CensusDependencies["roblox"] = {
   getGameDetails: async (universeIds) => universeIds.map((universeId) => gameDetail(Number(universeId))),
 };
 
+const failingRoblox: CensusDependencies["roblox"] = {
+  ...roblox,
+  resolveUniverseId: async () => {
+    throw new Error("socket hang up");
+  },
+};
+
 function censusJob(listed: RolimonsGame[], overrides: Partial<CensusDependencies> = {}) {
   return createCensusJob({ fetchGames: async () => ({ games: listed, rejected: 0 }), roblox, ...overrides });
 }
@@ -113,6 +120,7 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
       unresolvable: 2,
       resolutionFailures: 0,
       deferred: 0,
+      rateLimited: false,
       promotionRequested: 1,
       promoted: 1,
     });
@@ -175,13 +183,6 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
     expect(await lastRunStats()).toMatchObject({ resolved: 1, resolutionFailures: 1 });
   });
 
-  const failingRoblox: CensusDependencies["roblox"] = {
-    ...roblox,
-    resolveUniverseId: async () => {
-      throw new Error("socket hang up");
-    },
-  };
-
   it("keeps the run successful when a single place keeps failing", async () => {
     const job = censusJob([place(1, 500), ...filler()], { roblox: failingRoblox });
 
@@ -216,7 +217,32 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
 
     expect(await executeJob(job, database.db, now)).toBe("success");
     expect(requested).toEqual(["1", "2"]);
-    expect(await lastRunStats()).toMatchObject({ resolved: 1, resolutionFailures: 1, deferred: 1 });
+    expect(await lastRunStats()).toMatchObject({ resolved: 1, resolutionFailures: 1, deferred: 1, rateLimited: true });
+  });
+
+  it("degrades the run when a rate limit stops resolution before any answer", async () => {
+    const job = censusJob([place(1, 500), place(2, 400), place(3, 300), ...filler()], {
+      roblox: {
+        ...roblox,
+        resolveUniverseId: async () => {
+          throw new HttpError(429, "Too Many Requests", universesUrl);
+        },
+      },
+    });
+
+    expect(await executeJob(job, database.db, now)).toBe("degraded");
+    expect(await lastRunStats()).toMatchObject({ resolved: 0, resolutionFailures: 1, deferred: 2, rateLimited: true });
+  });
+
+  it("degrades the run when the budget runs out before any answer", async () => {
+    let elapsedMs = 0;
+    const job = censusJob([place(1, 500), place(2, 400), place(3, 300), ...filler()], {
+      roblox: failingRoblox,
+      clock: () => (elapsedMs += (config.resolutionBudgetMs * 2) / 3),
+    });
+
+    expect(await executeJob(job, database.db, now)).toBe("degraded");
+    expect(await lastRunStats()).toMatchObject({ resolved: 0, resolutionFailures: 1, deferred: 2, rateLimited: false });
   });
 
   it("keeps the census and reports the error when promotion fails", async () => {

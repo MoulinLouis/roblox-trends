@@ -82,6 +82,7 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
       let unresolvable = 0;
       let resolutionFailures = 0;
       let deferred = 0;
+      let rateLimited = false;
       for (const [index, candidate] of candidates.entries()) {
         if (clock() > deadline) {
           deferred = candidates.length - index;
@@ -94,6 +95,7 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
           const error = errorMessage(resolution.failure);
           // The request was already retried: the remaining places wait for the next run instead of hitting the limit.
           if (resolution.failure instanceof HttpError && resolution.failure.status === 429) {
+            rateLimited = true;
             deferred = candidates.length - index - 1;
             logger.warn("Place resolution rate limited; deferring the remaining places", { placeId, deferred, error });
             break;
@@ -122,8 +124,13 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
         promotionError = errorMessage(error);
         logger.error("Promotion failed; retrying next run", { universes: universes.length, error: promotionError });
       }
-      // Several attempts and no answer: the resolution API is failing, which a successful status would hide.
-      const resolutionStalled = resolutionFailures >= config.stalledResolutionFailures && resolved + unresolvable === 0;
+      // No answer, and the run either stopped early (rate limit, budget) or failed repeatedly: the resolution API is
+      // failing, which a successful status would hide. A single failing place is not enough evidence.
+      const answered = resolved + unresolvable;
+      const resolutionStalled =
+        answered === 0 &&
+        resolutionFailures > 0 &&
+        (rateLimited || deferred > 0 || resolutionFailures >= config.stalledResolutionFailures);
       return {
         status: listQuality === "degraded" || resolutionStalled || promotionError !== undefined ? "degraded" : "success",
         stats: {
@@ -136,6 +143,7 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
           unresolvable,
           resolutionFailures,
           deferred,
+          rateLimited,
           promotionRequested: universes.length,
           promoted,
           ...(promotionError === undefined ? {} : { promotionError }),
