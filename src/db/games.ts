@@ -5,6 +5,7 @@ import { contentFingerprint, rawFingerprint } from "@/lib/fingerprint";
 import type { Database } from "./client";
 import { games, gameVersions, places } from "./schema";
 
+// A game row binds 16 parameters, and CHUNK_SIZE × 16 must stay under PostgreSQL's limit of 65,535 per statement.
 const CHUNK_SIZE = 500;
 
 export interface GameUpsertResult {
@@ -12,6 +13,8 @@ export interface GameUpsertResult {
   metadataChanged: number[];
 }
 
+// Each chunk commits on its own. If a later chunk throws, the ids of chunks already committed are not returned:
+// callers use them for stats only, and promotion re-reads the known ids afterwards.
 export async function upsertGameDetails(db: Database, details: RobloxGameDetail[], observedAt: Date): Promise<GameUpsertResult> {
   const inserted: number[] = [];
   const metadataChanged: number[] = [];
