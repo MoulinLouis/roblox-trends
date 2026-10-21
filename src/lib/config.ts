@@ -82,6 +82,8 @@ export const JOB_CONFIG = {
     intervalMinutes: 60,
     timeoutMs: 30 * 60_000,
     minimumSortShare: 0.8,
+    // A sort with a larger share of malformed entries is too incomplete to stand for the ranking: it counts as failed.
+    maximumMalformedShare: 0.2,
   },
   explore: {
     intervalMinutes: 60,

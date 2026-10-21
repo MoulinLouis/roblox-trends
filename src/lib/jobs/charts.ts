@@ -30,6 +30,15 @@ export function toChartPlacements(sortId: string, chartGames: RobloxSortGame[], 
   return [...chosen.values()].sort((left, right) => left.rank - right.rank);
 }
 
+// Every collected sort is a live ranking: an empty one, or one with too many malformed entries, is a failed answer.
+// Storing it would also erase what an earlier attempt of this hour stored.
+function sortProblem(sort: RobloxSort, maximumMalformedShare: number): string | null {
+  const listed = sort.games.length + sort.skipped;
+  if (listed === 0) return "The sort returned no games";
+  if (sort.skipped / listed > maximumMalformedShare) return `${sort.skipped} of ${listed} entries were malformed`;
+  return null;
+}
+
 export function createChartsJob(dependencies: ChartsDependencies): JobDefinition {
   const config = JOB_CONFIG.charts;
   const sortIds = dependencies.sortIds ?? ROBLOX_DISCOVERY_CHARTS;
@@ -40,18 +49,23 @@ export function createChartsJob(dependencies: ChartsDependencies): JobDefinition
     async run({ db, now, slot }) {
       const candidates: PromotionCandidate[] = [];
       let failedSorts = 0;
+      let skippedItems = 0;
       let placements = 0;
       for (const sortId of sortIds) {
         let sort: RobloxSort;
         try {
           sort = await dependencies.roblox.getSortContent(sortId);
-          // Every collected sort is a live ranking, so an empty one is a failed answer. Storing it would also erase
-          // what an earlier attempt of this hour stored.
-          if (!sort.games.length) throw new Error("The sort returned no games");
         } catch (error) {
           // A failed sort keeps whatever an earlier attempt in this hour stored for it.
           failedSorts += 1;
           logger.warn("Chart collection failed", { sortId, error: errorMessage(error) });
+          continue;
+        }
+        skippedItems += sort.skipped;
+        const problem = sortProblem(sort, config.maximumMalformedShare);
+        if (problem) {
+          failedSorts += 1;
+          logger.warn("Chart collection failed", { sortId, error: problem });
           continue;
         }
         // Stored as soon as it is read, so a run that times out keeps the sorts it finished. A database error is not
@@ -78,6 +92,7 @@ export function createChartsJob(dependencies: ChartsDependencies): JobDefinition
         stats: {
           sorts: sortIds.length,
           failedSorts,
+          skippedItems,
           placements,
           promotionRequested: new Set(candidates.map((candidate) => candidate.universeId)).size,
           promoted,

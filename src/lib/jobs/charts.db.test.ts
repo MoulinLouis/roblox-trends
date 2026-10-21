@@ -160,6 +160,22 @@ describe.skipIf(!hasTestDatabase)("charts job", () => {
     expect((await lastRun()).stats).toMatchObject({ sorts: 1, failedSorts: 1, placements: 0 });
   });
 
+  it("counts a sort with too many malformed entries as failed and keeps what an earlier attempt stored", async () => {
+    const at = new Date("2026-10-20T14:02:00Z");
+    const slot = new Date("2026-10-20T14:00:00Z");
+    expect(await executeJob(chartsJob({ "top-trending": [chartGame(7)], "up-and-coming": [chartGame(8)] }), database.db, at)).toBe("success");
+    const job = chartsJob({
+      // 1 malformed entry out of 5 is exactly the maximum share of 0.2: the sort is stored.
+      "top-trending": { games: [chartGame(7), chartGame(9), chartGame(10), chartGame(11)], skipped: 1 },
+      // 1 out of 4 is above it.
+      "up-and-coming": { games: [chartGame(12), chartGame(13), chartGame(14)], skipped: 1 },
+    });
+    expect(await executeJob(job, database.db, at)).toBe("degraded");
+    expect(await storedUniverses("top-trending", slot)).toEqual([7, 9, 10, 11]);
+    expect(await storedUniverses("up-and-coming", slot)).toEqual([8]);
+    expect((await lastRun()).stats).toMatchObject({ failedSorts: 1, skippedItems: 2, placements: 4 });
+  });
+
   it("keeps the placements and reports the error when promotion fails", async () => {
     const unavailable = new HttpError(503, "Service Unavailable", "https://games.roblox.com/v1/games");
     const job = chartsJob(
