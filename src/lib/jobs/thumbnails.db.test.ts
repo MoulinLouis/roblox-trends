@@ -1,21 +1,30 @@
 import { eq, isNotNull } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { upsertGameDetails } from "@/db/games";
 import { games, gameVersions, jobRuns } from "@/db/schema";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/test-database";
-import type { GameThumbnailAnswer } from "@/lib/api/roblox";
+import type { GameThumbnail, GameThumbnailAnswer } from "@/lib/api/roblox";
+import { JOB_CONFIG } from "@/lib/config";
 import { gameDetail } from "@/test/fixtures";
 import { executeJob } from "./runner";
-import { createThumbnailsJob } from "./thumbnails";
+import { createThumbnailsJob, type ThumbnailsDependencies } from "./thumbnails";
 
-const getThumbnails = async (ids: string[]) => new Map(ids.map((id) => [id, `https://tr.rbxcdn.com/icon-${id}`]));
+type Roblox = ThumbnailsDependencies["roblox"];
+
+const { batchSize, deadlineMs, maximumConsecutiveFailedBatches } = JOB_CONFIG.thumbnails;
+
+const iconsFor: Roblox["getThumbnails"] = async (ids) => new Map(ids.map((id) => [id, `https://tr.rbxcdn.com/icon-${id}`]));
+
+function image(name: string, mediaId: number): GameThumbnail {
+  return { imageUrl: `https://tr.rbxcdn.com/${name}/Image`, mediaId };
+}
 
 function answersFrom(thumbnails: Record<string, GameThumbnailAnswer>, ids: string[]): Map<string, GameThumbnailAnswer> {
   return new Map(ids.filter((id) => id in thumbnails).map((id) => [id, thumbnails[id]]));
 }
 
 function job(thumbnails: Record<string, GameThumbnailAnswer>) {
-  return createThumbnailsJob({ roblox: { getGameThumbnails: async (ids) => answersFrom(thumbnails, ids), getThumbnails } });
+  return createThumbnailsJob({ roblox: { getGameThumbnails: async (ids) => answersFrom(thumbnails, ids), getThumbnails: iconsFor } });
 }
 
 describe.skipIf(!hasTestDatabase)("thumbnails job", () => {
@@ -23,12 +32,18 @@ describe.skipIf(!hasTestDatabase)("thumbnails job", () => {
 
   beforeAll(async () => {
     database = await createTestDatabase();
-    await upsertGameDetails(database.db, [gameDetail(1), gameDetail(2), gameDetail(3), gameDetail(4)], new Date("2026-10-20T13:00:00Z"));
   });
 
   afterAll(async () => {
     await database?.drop();
   });
+
+  // Each run follows a poll of games 1 to 4, as in production.
+  async function polledRun(at: string, definition: ReturnType<typeof job>) {
+    const now = new Date(at);
+    await upsertGameDetails(database.db, [1, 2, 3, 4].map((id) => gameDetail(id)), now);
+    return executeJob(definition, database.db, now);
+  }
 
   async function game(universeId: number) {
     const [row] = await database.db.select().from(games).where(eq(games.universeId, universeId));
@@ -45,11 +60,7 @@ describe.skipIf(!hasTestDatabase)("thumbnails job", () => {
   }
 
   it("stores a custom thumbnail, marks a game without one as checked, and retries pending and unknown games", async () => {
-    const status = await executeJob(
-      job({ "1": { imageUrl: "https://tr.rbxcdn.com/a/Image", mediaId: 101 }, "2": null, "4": "pending" }),
-      database.db,
-      new Date("2026-10-20T14:45:00Z"),
-    );
+    const status = await polledRun("2026-10-20T14:45:00Z", job({ "1": image("a", 101), "2": null, "4": "pending" }));
     expect(status).toBe("degraded"); // game 3 is unknown: 3 of 4 answered (pending counts as an answer)
     expect(await game(1)).toMatchObject({ thumbnailUrl: "https://tr.rbxcdn.com/a/Image", thumbnailKey: "media:101", iconUrl: "https://tr.rbxcdn.com/icon-1" });
     expect((await game(1)).thumbnailsCheckedAt).toEqual(new Date("2026-10-20T14:45:00Z"));
@@ -64,39 +75,35 @@ describe.skipIf(!hasTestDatabase)("thumbnails job", () => {
     const [run] = await database.db.select().from(jobRuns);
     expect(run.stats).toMatchObject({
       requested: 4,
+      attempted: 4,
       answered: 3,
       withThumbnail: 1,
       withoutThumbnail: 1,
       pending: 1,
       icons: 4,
       changed: 1,
+      failedBatches: 0,
+      skipped: 0,
+      stoppedBy: null,
       http: { attempts: 0, retries: 0, rateLimitedResponses: 0 },
     });
   });
 
   it("keys versions on the media id: a new URL for the same image is not a new version", async () => {
-    const status = await executeJob(
-      job({ "1": { imageUrl: "https://tr.rbxcdn.com/b/Image", mediaId: 101 }, "2": null, "3": null, "4": "pending" }),
-      database.db,
-      new Date("2026-10-21T16:00:00Z"),
-    );
+    const status = await polledRun("2026-10-21T16:00:00Z", job({ "1": image("b", 101), "2": null, "3": null, "4": "pending" }));
     expect(status).toBe("success"); // every game answered, one of them pending
     expect((await game(1)).thumbnailUrl).toBe("https://tr.rbxcdn.com/b/Image");
     expect(await thumbnailVersions(1)).toHaveLength(1);
   });
 
   it("records a version when the image changes", async () => {
-    await executeJob(job({ "1": { imageUrl: "https://tr.rbxcdn.com/c/Image", mediaId: 202 } }), database.db, new Date("2026-10-22T17:00:00Z"));
+    await polledRun("2026-10-22T17:00:00Z", job({ "1": image("c", 202) }));
     expect((await game(1)).thumbnailKey).toBe("media:202");
     expect(await thumbnailVersions(1)).toHaveLength(2);
   });
 
   it("keeps the previous thumbnail on an empty answer and keeps a pending game due", async () => {
-    const status = await executeJob(
-      job({ "1": null, "2": "pending", "3": null, "4": "pending" }),
-      database.db,
-      new Date("2026-10-23T18:00:00Z"),
-    );
+    const status = await polledRun("2026-10-23T18:00:00Z", job({ "1": null, "2": "pending", "3": null, "4": "pending" }));
     expect(status).toBe("success");
     expect(await game(1)).toMatchObject({
       thumbnailUrl: "https://tr.rbxcdn.com/c/Image",
@@ -109,11 +116,13 @@ describe.skipIf(!hasTestDatabase)("thumbnails job", () => {
   });
 
   it("fails when Roblox answers for no game at all", async () => {
-    expect(await executeJob(job({}), database.db, new Date("2026-10-24T19:00:00Z"))).toBe("failed");
+    expect(await polledRun("2026-10-24T19:00:00Z", job({}))).toBe("failed");
+    const [run] = await database.db.select().from(jobRuns).where(eq(jobRuns.status, "failed"));
+    expect(run.error).toContain("answered for none of 4 games");
   });
 
   it("records an image change once when two runs overlap", async () => {
-    const answers = { "1": { imageUrl: "https://tr.rbxcdn.com/d/Image", mediaId: 303 } };
+    const answers = { "1": image("d", 303) };
     // The outer run selects its games, then the inner run saves the same change before the outer run saves it.
     const outer = createThumbnailsJob({
       roblox: {
@@ -121,10 +130,10 @@ describe.skipIf(!hasTestDatabase)("thumbnails job", () => {
           await executeJob(job(answers), database.db, new Date("2026-10-25T20:01:00Z"));
           return answersFrom(answers, ids);
         },
-        getThumbnails,
+        getThumbnails: iconsFor,
       },
     });
-    await executeJob(outer, database.db, new Date("2026-10-25T20:00:00Z"));
+    await polledRun("2026-10-25T20:00:00Z", outer);
     expect((await game(1)).thumbnailKey).toBe("media:303");
     expect(await thumbnailVersions(1)).toMatchObject([
       { rawFingerprint: "media:101" },
@@ -134,24 +143,100 @@ describe.skipIf(!hasTestDatabase)("thumbnails job", () => {
   });
 });
 
-describe.skipIf(!hasTestDatabase)("thumbnails job with more games than one transaction", () => {
+describe.skipIf(!hasTestDatabase)("thumbnails job batches", () => {
   let database: TestDatabase;
-  const universeIds = Array.from({ length: 1_200 }, (_, index) => index + 1);
+  const now = new Date("2026-10-20T14:45:00Z");
 
   beforeAll(async () => {
     database = await createTestDatabase();
-    await upsertGameDetails(database.db, universeIds.map((id) => gameDetail(id)), new Date("2026-10-20T13:00:00Z"));
   });
 
   afterAll(async () => {
     await database?.drop();
   });
 
-  it("saves every game and its version", async () => {
-    const answers = Object.fromEntries(universeIds.map((id) => [String(id), { imageUrl: `https://tr.rbxcdn.com/${id}/Image`, mediaId: id }]));
-    expect(await executeJob(job(answers), database.db, new Date("2026-10-20T14:45:00Z"))).toBe("success");
-    const checked = await database.db.select({ universeId: games.universeId }).from(games).where(isNotNull(games.thumbnailKey));
-    expect(checked).toHaveLength(universeIds.length);
+  beforeEach(async () => {
+    // Deleting games cascades to game_versions.
+    await database.db.delete(games);
+    await database.db.delete(jobRuns);
+  });
+
+  // Never checked and busiest first, so the first batch holds the lowest universe ids.
+  async function insertGames(count: number, observedAt = now): Promise<number[]> {
+    const universeIds = Array.from({ length: count }, (_, index) => index + 1);
+    await upsertGameDetails(database.db, universeIds.map((id) => gameDetail(id, { playing: 10_000 - id })), observedAt);
+    return universeIds;
+  }
+
+  function allAnswered(universeIds: number[]): Record<string, GameThumbnailAnswer> {
+    return Object.fromEntries(universeIds.map((id) => [String(id), image(String(id), id)]));
+  }
+
+  async function keyedGames(): Promise<number[]> {
+    const rows = await database.db.select({ universeId: games.universeId }).from(games).where(isNotNull(games.thumbnailKey));
+    return rows.map((row) => row.universeId).sort((left, right) => left - right);
+  }
+
+  async function runStats() {
+    const [run] = await database.db.select().from(jobRuns);
+    return run.stats;
+  }
+
+  it("saves every batch", async () => {
+    const universeIds = await insertGames(3 * batchSize);
+    expect(await executeJob(job(allAnswered(universeIds)), database.db, now)).toBe("success");
+    expect(await keyedGames()).toEqual(universeIds);
     expect(await database.db.select().from(gameVersions).where(eq(gameVersions.kind, "thumbnail"))).toHaveLength(universeIds.length);
+  });
+
+  it("stops after repeated unanswered batches and keeps the batch it saved", async () => {
+    // One answered batch, then one unanswered batch more than the stop allows: the stop skips the last batch.
+    const universeIds = await insertGames((maximumConsecutiveFailedBatches + 2) * batchSize);
+    const firstBatch = universeIds.slice(0, batchSize);
+    let thumbnailCalls = 0;
+    let iconCalls = 0;
+    const definition = createThumbnailsJob({
+      roblox: {
+        getGameThumbnails: async (ids) => {
+          thumbnailCalls += 1;
+          return thumbnailCalls === 1 ? answersFrom(allAnswered(universeIds), ids) : new Map();
+        },
+        getThumbnails: async (ids) => {
+          iconCalls += 1;
+          return iconsFor(ids);
+        },
+      },
+    });
+    expect(await executeJob(definition, database.db, now)).toBe("degraded");
+    expect(await keyedGames()).toEqual(firstBatch);
+    expect(thumbnailCalls).toBe(1 + maximumConsecutiveFailedBatches);
+    expect(iconCalls).toBe(1); // an unanswered batch fails before its icons are requested
+    expect(await runStats()).toMatchObject({
+      requested: universeIds.length,
+      attempted: (1 + maximumConsecutiveFailedBatches) * batchSize,
+      answered: batchSize,
+      icons: batchSize,
+      failedBatches: maximumConsecutiveFailedBatches,
+      skipped: batchSize,
+      stoppedBy: "repeatedFailures",
+    });
+  });
+
+  it("stops at the deadline and keeps the batch it saved", async () => {
+    const universeIds = await insertGames(2 * batchSize);
+    let time = 0;
+    const definition = createThumbnailsJob({
+      clock: () => time,
+      roblox: {
+        getGameThumbnails: async (ids) => {
+          time += deadlineMs + 1;
+          return answersFrom(allAnswered(universeIds), ids);
+        },
+        getThumbnails: iconsFor,
+      },
+    });
+    expect(await executeJob(definition, database.db, now)).toBe("degraded");
+    expect(await keyedGames()).toEqual(universeIds.slice(0, batchSize));
+    expect(await runStats()).toMatchObject({ attempted: batchSize, answered: batchSize, skipped: batchSize, stoppedBy: "deadline" });
   });
 });

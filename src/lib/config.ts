@@ -107,6 +107,11 @@ export const JOB_CONFIG = {
   thumbnails: {
     intervalMinutes: 60,
     timeoutMs: 30 * 60_000,
+    // Leaves room before the timeout for a batch that started just before the deadline and is still in its retries.
+    deadlineMs: 20 * 60_000,
+    batchSize: 50,
+    // Unanswered batches in a row that point to an outage of the thumbnail endpoint rather than to bad games.
+    maximumConsecutiveFailedBatches: 3,
     refreshHours: 24,
     refreshMinimumCcu: 50,
     maximumGamesPerRun: 4_000,
