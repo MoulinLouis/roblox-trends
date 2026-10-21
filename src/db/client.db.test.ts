@@ -33,4 +33,16 @@ describe.skipIf(!hasTestDatabase)("createDatabase", () => {
   it("leaves the server defaults when no timeout is given", async () => {
     expect(await sessionTimeouts({})).toEqual({ statement: "0", lock: "0" });
   });
+
+  it("sends session settings when the connection opens", async () => {
+    const { db, pool } = createDatabase(database.url, { settings: { work_mem: "8MB", search_path: "pg_catalog, public" } });
+    try {
+      const result = await db.execute<{ workMem: string; searchPath: string }>(
+        sql`select current_setting('work_mem') as "workMem", current_setting('search_path') as "searchPath"`,
+      );
+      expect(result.rows[0]).toEqual({ workMem: "8MB", searchPath: "pg_catalog, public" });
+    } finally {
+      await pool.end();
+    }
+  });
 });

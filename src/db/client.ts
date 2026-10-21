@@ -20,6 +20,8 @@ export interface DatabaseOptions {
   // Sent as session settings when the connection opens, so a stuck query cannot outlive its job.
   statementTimeoutMs?: number;
   lockTimeoutMs?: number;
+  // Other session settings, sent the same way (as `-c name=value` startup options).
+  settings?: Readonly<Record<string, string>>;
 }
 
 export function createDatabase(connectionString: string, options: DatabaseOptions = {}): { db: Database; pool: Pool } {
@@ -30,10 +32,21 @@ export function createDatabase(connectionString: string, options: DatabaseOption
     application_name: options.applicationName ?? "radar",
     statement_timeout: options.statementTimeoutMs,
     lock_timeout: options.lockTimeoutMs,
+    options: options.settings ? startupOptions(options.settings) : undefined,
   });
   // Idle clients report errors (for example a server restart) on the pool; unhandled, they crash the process.
   pool.on("error", (error) => logger.warn("Idle PostgreSQL client error", { error: errorMessage(error) }));
   return { db: drizzle(pool, { schema }), pool };
+}
+
+// Names are plain (possibly dotted) identifiers; spaces and backslashes in values are escaped as libpq expects.
+function startupOptions(settings: Readonly<Record<string, string>>): string {
+  return Object.entries(settings)
+    .map(([name, value]) => {
+      if (!/^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?$/i.test(name)) throw new Error(`Invalid session setting name: ${name}`);
+      return `-c ${name}=${value.replace(/[\\ ]/g, "\\$&")}`;
+    })
+    .join(" ");
 }
 
 let shared: { db: Database; pool: Pool; options: DatabaseOptions } | null = null;
@@ -58,7 +71,14 @@ export function getDatabase(applicationName = "radar", options: Omit<DatabaseOpt
 
 function sameOptions(left: DatabaseOptions, right: DatabaseOptions): boolean {
   const keys = new Set([...Object.keys(left), ...Object.keys(right)]) as Set<keyof DatabaseOptions>;
-  return [...keys].every((key) => left[key] === right[key]);
+  return [...keys].every((key) =>
+    key === "settings" ? sameSettings(left.settings, right.settings) : left[key] === right[key],
+  );
+}
+
+function sameSettings(left: DatabaseOptions["settings"] = {}, right: DatabaseOptions["settings"] = {}): boolean {
+  const names = new Set([...Object.keys(left), ...Object.keys(right)]);
+  return [...names].every((name) => left[name] === right[name]);
 }
 
 export async function closeDatabase(): Promise<void> {

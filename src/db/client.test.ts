@@ -1,6 +1,6 @@
 import { Pool } from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeDatabase, closeDatabaseWithin, getDatabase } from "./client";
+import { closeDatabase, closeDatabaseWithin, createDatabase, getDatabase } from "./client";
 
 // The pool connects lazily and these tests run no query, so the unreachable URL is never contacted.
 describe("getDatabase", () => {
@@ -24,6 +24,21 @@ describe("getDatabase", () => {
     expect(() => getDatabase("radar-poll", { statementTimeoutMs: 2_000, lockTimeoutMs: 30_000 })).toThrow(/shared database/);
     expect(() => getDatabase("radar-poll", { statementTimeoutMs: 1_000 })).toThrow(/shared database/);
     expect(() => getDatabase()).toThrow(/shared database/);
+  });
+
+  it("compares session settings by value", () => {
+    const first = getDatabase("radar-import-legacy", { settings: { work_mem: "8MB" } });
+    expect(getDatabase("radar-import-legacy", { settings: { work_mem: "8MB" } })).toBe(first);
+    expect(() => getDatabase("radar-import-legacy", { settings: { work_mem: "16MB" } })).toThrow(/shared database/);
+    expect(() => getDatabase("radar-import-legacy")).toThrow(/shared database/);
+  });
+});
+
+describe("createDatabase", () => {
+  it("rejects a setting name that could smuggle in other options", () => {
+    expect(() => createDatabase("postgresql://radar@127.0.0.1:1/radar", { settings: { "work_mem=1MB -c role": "x" } })).toThrow(
+      /Invalid session setting name/,
+    );
   });
 });
 
