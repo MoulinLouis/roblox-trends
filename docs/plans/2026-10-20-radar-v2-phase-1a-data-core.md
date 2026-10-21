@@ -4063,8 +4063,10 @@ async function importPlacements(target: Database, source: Pool, window: TimeWind
   const to = cutoff && cutoff < window.to ? cutoff : window.to;
   if (to <= window.from) return 0;
   const result = await source.query<{ chart: string; universe_id: string; bucket_at: Date; rank: number; ccu: number; is_sponsored: boolean | null }>(
-    `select chart, universe_id, bucket_at, min(rank) as rank, max(ccu) as ccu, bool_or(is_sponsored) as is_sponsored
-     from snapshots where source = 'roblox-charts' and rank is not null and bucket_at >= $1 and bucket_at < $2 group by 1, 2, 3`,
+    // Same rule as v2's toChartPlacements: one row per chart, game and bucket, organic before sponsored, then best rank.
+    `select distinct on (chart, universe_id, bucket_at) chart, universe_id, bucket_at, rank, ccu, is_sponsored
+     from snapshots where source = 'roblox-charts' and rank is not null and bucket_at >= $1 and bucket_at < $2
+     order by chart, universe_id, bucket_at, (is_sponsored is true), rank`,
     [window.from, to],
   );
   const rows = result.rows.flatMap((row) => {
