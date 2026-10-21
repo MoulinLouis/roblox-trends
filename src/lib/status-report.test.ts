@@ -107,7 +107,7 @@ describe("formatStatusReport", () => {
         "explore  never            never                0         0       0",
         "",
         "429s over the last 24 h: 12/20,688 requests (0.06%); 1 rate-limited run",
-        "Coverage: 2,712/2,903 Rolimon's places at or above 100 CCU polled in the last 15 min (93.4%); complete census list 12m old",
+        "Coverage: 2,712/2,903 (93.4%) Rolimon's places at or above 100 CCU polled within 15 min; complete list 12m old",
         "Data: 41,233 games; last 24 h: 1,012,345 poll observations, 1,123,456 census rows",
       ].join("\n"),
     );
@@ -121,6 +121,72 @@ describe("formatStatusReport", () => {
     expect(lines).toContain("rateLimited=false stoppedBy=- http.rateLimitedResponses=- skipped=0 shedBelowCcu=-");
     expect(lines).toContain("listQuality=success listed=7800 rejected=- resolved=- resolutionFailures=- deferred=- rateLimited=-");
     expect(lines.some((line) => line.startsWith("promotionError"))).toBe(false);
+  });
+
+  it("wraps watched stats that do not fit on one line", () => {
+    const stats = {
+      listQuality: "success",
+      listed: 12_345,
+      rejected: 12_345,
+      resolved: 12_345,
+      resolutionFailures: 12_345,
+      deferred: 12_345,
+      rateLimited: false,
+    };
+    const lines = reportLines([completed("census", stats)]);
+    const first = lines.indexOf("listQuality=success listed=12345 rejected=12345 resolved=12345 resolutionFailures=12345 deferred=12345");
+    expect(first).toBeGreaterThan(0);
+    expect(lines[first + 1]).toBe("rateLimited=false");
+  });
+
+  it("keeps every line of a busy report within 120 columns", () => {
+    const longQuery = `insert into "games" ("universe_id", "name") values ${Array.from({ length: 200 }, (_, index) => `($${index})`).join(", ")}`;
+    const lockTimeout = errorMessage(
+      new DrizzleQueryError(longQuery, [1, 2, 3], new Error("canceling statement due to lock timeout")),
+    );
+    const busy = (job: JobName, stats: Record<string, unknown>, http: JobSummary["recent"]["http"]): JobSummary => ({
+      job,
+      latest: { status: "degraded", startedAt: new Date("2026-10-20T12:13:00Z") },
+      lastCompleted: { status: "degraded", finishedAt: new Date("2026-10-20T12:13:00Z"), stats },
+      recent: { runs: 288, degraded: 288, failed: 288, rateLimitedRuns: 288, http },
+      lastError: { startedAt: new Date("2026-10-20T12:13:00Z"), message: lockTimeout },
+    });
+    const census = busy(
+      "census",
+      {
+        listQuality: "success",
+        listed: 12_345,
+        rejected: 12_345,
+        resolved: 12_345,
+        resolutionFailures: 12_345,
+        deferred: 12_345,
+        rateLimited: true,
+        promotionError: `Game details request failed: ${"503 Service Unavailable ".repeat(20)}`,
+      },
+      null,
+    );
+    const poll = busy(
+      "poll",
+      { rateLimited: true, stoppedBy: "repeatedFailures", http: { rateLimitedResponses: 12_345 }, skipped: 12_345, shedBelowCcu: 12_345 },
+      { rateLimitedResponses: 123_456, attempts: 1_234_567 },
+    );
+    const others = (["votes", "charts", "explore", "thumbnails"] as const).map((job) =>
+      busy(job, {}, { rateLimitedResponses: 12_345, attempts: 123_456 }),
+    );
+    const report = formatStatusReport({
+      now,
+      windowHours: 24,
+      jobs: [census, poll, ...others],
+      coverage: { slot: new Date("2026-10-20T12:13:00Z"), listed: 12_345, tracked: 12_345, minimumCcu: 100, withinMinutes: 15 },
+      totals: { games: 123_456, pollObservations: 12_345_678, censusRows: 12_345_678 },
+    });
+    const lines = report.split("\n");
+    expect(lines.filter((line) => line.length > 120)).toEqual([]);
+    // The budget is met by the preview, not by dropping the cause.
+    const errors = lines.filter((line) => line.trimStart().startsWith("error 119m ago: "));
+    expect(errors).toHaveLength(6);
+    for (const line of errors) expect(line.endsWith("canceling statement due to lock timeout")).toBe(true);
+    expect(lines.filter((line) => line.trimStart().startsWith("promotionError: Game details request failed: 503"))).toHaveLength(1);
   });
 
   it("keeps a short error whole on one line", () => {
@@ -137,7 +203,7 @@ describe("formatStatusReport", () => {
     const params = Array.from({ length: 150 }, (_, index) => index);
     const message = errorMessage(new DrizzleQueryError(query, params, new Error("canceling statement due to lock timeout")));
     expect(reportLines([failed("poll", message)])).toContain(
-      'error 7m ago: Failed query: insert into "games" ("univ … "universe_id")…(535 more characters): canceling statement due to lock timeout',
+      'error 7m ago: Failed query: insert into "games" ("univ … more characters): canceling statement due to lock timeout',
     );
   });
 
@@ -159,7 +225,7 @@ describe("formatStatusReport", () => {
 
   it("labels coverage with the criteria it was counted with", () => {
     expect(reportLines([], { ...coverage, listed: 0, tracked: 0, minimumCcu: 50, withinMinutes: 10 })).toContain(
-      "Coverage: 0/0 Rolimon's places at or above 50 CCU polled in the last 10 min (n/a); complete census list 12m old",
+      "Coverage: 0/0 (n/a) Rolimon's places at or above 50 CCU polled within 10 min; complete list 12m old",
     );
   });
 });

@@ -23,10 +23,11 @@ export const WATCHED_STATS: Partial<Record<JobName, { values: readonly string[];
   poll: { values: ["rateLimited", "stoppedBy", "http.rateLimitedResponses", "skipped", "shedBelowCcu"] },
 };
 
-// One line per error: the head says what failed, the tail holds the root cause (errorMessage appends causes last).
-const maximumErrorLength = 120;
-const errorHeadLength = 40;
-const errorSeparator = " … ";
+// Every line fits a 120-column terminal: watched stats wrap, and a message preview takes the room its line leaves.
+const maximumLineWidth = 120;
+// One line per message: the head says what failed, the tail holds the root cause (errorMessage appends causes last).
+const messageHeadLength = 40;
+const messageSeparator = " … ";
 const columnGap = "  ";
 const counts = new Intl.NumberFormat("en-US");
 
@@ -52,13 +53,13 @@ export function formatStatusReport({ now, windowHours, jobs, coverage, totals }:
     const watched = WATCHED_STATS[job.job];
     if (watched && job.lastCompleted) {
       const stats = job.lastCompleted.stats;
-      table.push(indent + watched.values.map((path) => `${path}=${formatStat(statAt(stats, path))}`).join(" "));
+      table.push(...wrap(indent, watched.values.map((path) => `${path}=${formatStat(statAt(stats, path))}`)));
       for (const path of watched.messages ?? []) {
-        if (hasStat(stats, path)) table.push(`${indent}${path}: ${preview(formatStat(statAt(stats, path)))}`);
+        if (hasStat(stats, path)) table.push(messageLine(`${indent}${path}: `, formatStat(statAt(stats, path))));
       }
     }
     if (job.lastError) {
-      table.push(`${indent}error ${elapsed(now, job.lastError.startedAt)} ago: ${preview(job.lastError.message)}`);
+      table.push(messageLine(`${indent}error ${elapsed(now, job.lastError.startedAt)} ago: `, job.lastError.message));
     }
   });
   return [
@@ -97,9 +98,9 @@ function coverageLine(now: Date, coverage: CensusCoverage, windowHours: number):
   if (!coverage.slot) return `Coverage: no complete census list in the last ${windowHours} h`;
   const share = coverage.listed ? `${Math.round((coverage.tracked / coverage.listed) * 1_000) / 10}%` : "n/a";
   return (
-    `Coverage: ${counts.format(coverage.tracked)}/${counts.format(coverage.listed)} Rolimon's places at or above ` +
-    `${coverage.minimumCcu} CCU polled in the last ${coverage.withinMinutes} min (${share}); ` +
-    `complete census list ${elapsed(now, coverage.slot)} old`
+    `Coverage: ${counts.format(coverage.tracked)}/${counts.format(coverage.listed)} (${share}) Rolimon's places at or ` +
+    `above ${coverage.minimumCcu} CCU polled within ${coverage.withinMinutes} min; ` +
+    `complete list ${elapsed(now, coverage.slot)} old`
   );
 }
 
@@ -135,12 +136,33 @@ function formatStat(value: unknown): string {
   return typeof value === "object" ? JSON.stringify(value) : String(value);
 }
 
+// Packs the items into as few lines as fit the width; an item longer than a line gets a line of its own.
+function wrap(indent: string, items: readonly string[]): string[] {
+  const lines: string[] = [];
+  let line = "";
+  for (const item of items) {
+    if (line && indent.length + line.length + 1 + item.length > maximumLineWidth) {
+      lines.push(indent + line);
+      line = item;
+    } else {
+      line = line ? `${line} ${item}` : item;
+    }
+  }
+  if (line) lines.push(indent + line);
+  return lines;
+}
+
 // Messages can span lines (a cause chain, a failed query and its parameters); the view keeps one line per message.
-function preview(message: string): string {
+function messageLine(prefix: string, message: string): string {
+  return prefix + preview(message, maximumLineWidth - prefix.length);
+}
+
+function preview(message: string, width: number): string {
   const line = message.replace(/\s+/g, " ").trim();
-  if (line.length <= maximumErrorLength) return line;
-  const tailLength = maximumErrorLength - errorHeadLength - errorSeparator.length;
-  return `${line.slice(0, errorHeadLength).trimEnd()}${errorSeparator}${line.slice(-tailLength).trimStart()}`;
+  if (line.length <= width) return line;
+  const headLength = Math.min(messageHeadLength, Math.floor((width - messageSeparator.length) / 2));
+  const tailLength = Math.max(0, width - headLength - messageSeparator.length);
+  return `${line.slice(0, headLength).trimEnd()}${messageSeparator}${line.slice(line.length - tailLength).trimStart()}`;
 }
 
 // A clock skew between the job host and this one must not print a negative age.
