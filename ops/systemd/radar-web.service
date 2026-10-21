@@ -13,7 +13,10 @@ Restart=on-failure
 RestartSec=5s
 NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=full
+# The release is root-owned and read-only; only the Next.js cache is writable. systemd resolves the current symlink
+# when the service starts, which is why deploy.sh restarts it on every deploy.
+ProtectSystem=strict
+ReadWritePaths=-/opt/radar/current/.next/cache
 ProtectHome=yes
 
 [Install]

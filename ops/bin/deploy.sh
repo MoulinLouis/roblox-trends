@@ -7,7 +7,8 @@ set -euo pipefail
 readonly repository=MoulinLouis/roblox-trends
 readonly branch="${RADAR_DEPLOY_BRANCH:-radar-v2}"
 readonly root=/opt/radar
-readonly mirror="${root}/repo.git"
+# In the radar home: the radar user fetches and exports, root never runs git on it.
+readonly mirror=/var/lib/radar/repo.git
 readonly releases="${root}/releases"
 readonly current="${root}/current"
 readonly keep_releases=3
@@ -105,11 +106,11 @@ fi
 release="${releases}/${target}"
 if [[ ! -f "${release}/.built" ]]; then
   log "Building ${target}"
-  rm -rf "${release}" "${release}.tar"
+  rm -rf "${release}"
+  # The build runs as radar in a directory created for it. The export is piped: radar cannot write a file into the
+  # root-owned releases directory.
   install -d -o radar -g radar "${release}"
-  as_radar git -C "${mirror}" archive --output="${release}.tar" "${target}" || fail "Could not export ${target}"
-  as_radar tar -xf "${release}.tar" -C "${release}" || fail "Could not extract ${target}"
-  rm -f "${release}.tar"
+  as_radar git -C "${mirror}" archive "${target}" | as_radar tar -xf - -C "${release}" || fail "Could not export ${target}"
   build_log="${releases}/${target}.log"
   if ! as_radar env -C "${release}" nice -n 10 npm ci --no-audit --no-fund >"${build_log}" 2>&1 \
     || ! as_radar env -C "${release}" nice -n 10 npm run build >>"${build_log}" 2>&1; then
@@ -118,7 +119,15 @@ if [[ ! -f "${release}/.built" ]]; then
     fail "Build of ${target} failed: $(tail -c 2000 "${releases}/${target}.failed")"
   fi
   rm -f "${build_log}"
-  as_radar touch "${release}/.built"
+  # Root takes the built release, so no process of the radar user can change what root runs from it (ops/bin,
+  # ops/systemd), and hands back only what Next.js writes at runtime (radar-web.service, ReadWritePaths).
+  chown -R root:root "${release}"
+  if [[ -d "${release}/.next/cache" ]]; then
+    chown -R radar:radar "${release}/.next/cache"
+  else
+    install -d -o radar -g radar "${release}/.next/cache"
+  fi
+  touch "${release}/.built"
 fi
 
 # Job timers pause only when the release brings migrations, so a schema change never races a job's statements.
@@ -162,7 +171,7 @@ if systemctl is-enabled --quiet radar-web.service; then
   curl --fail --silent --max-time 5 --output /dev/null http://127.0.0.1:3000/ || fail "The dashboard of ${target} does not answer"
 fi
 start_job_timers
-as_radar touch "${release}/.deployed"
+touch "${release}/.deployed"
 
 # Keep the newest releases, the live one and every release young enough to still run a job or an import.
 find "${releases}" -mindepth 1 -maxdepth 1 -type d -mmin "+${minimum_release_age_minutes}" -printf '%T@ %p\n' \

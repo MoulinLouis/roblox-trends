@@ -28,6 +28,17 @@ describe("operations scripts", () => {
     expect(script("job-failed.sh")).toContain("/radar-${job}/fail");
   });
 
+  it("keeps the releases root-owned, so no process of the radar user can change what root runs", () => {
+    expect(script("provision.sh")).toContain("useradd --system --create-home --home-dir /var/lib/radar ");
+    expect(script("provision.sh")).toContain("install -d -o root -g root -m 755 /opt/radar /opt/radar/releases");
+    const deploy = script("deploy.sh");
+    expect(deploy).toContain("readonly mirror=/var/lib/radar/repo.git");
+    // Root takes the release once it is built, before marking it built.
+    expect(deploy).toContain('chown -R root:root "${release}"');
+    expect(deploy.indexOf('chown -R root:root "${release}"')).toBeLessThan(deploy.indexOf('touch "${release}/.built"'));
+    expect(deploy).not.toContain("as_radar touch");
+  });
+
   it("pins the TimescaleDB version of the CI image", () => {
     const image = /timescale\/timescaledb:([\d.]+)-pg18/.exec(readFileSync(new URL("../../../.github/workflows/ci.yml", import.meta.url), "utf8"));
     expect(script("provision.sh")).toContain(`readonly timescaledb_version=${image?.[1]}`);

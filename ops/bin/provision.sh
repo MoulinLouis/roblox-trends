@@ -45,15 +45,16 @@ apt-get install -y -q --allow-change-held-packages postgresql-18 postgresql-clie
   pgbackrest nodejs tailscale
 apt-mark hold timescaledb-2-postgresql-18 timescaledb-2-loader-postgresql-18 >/dev/null
 
-# Users and directories.
-id radar >/dev/null 2>&1 || useradd --system --create-home --home-dir /opt/radar --shell /usr/sbin/nologin radar
+# Users and directories. The radar home holds the npm cache and the mirror clone; root owns the releases, so the radar
+# user can neither re-point /opt/radar/current nor change what root runs from a release (deploy.sh).
+id radar >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/radar --shell /usr/sbin/nologin radar
 id analysis >/dev/null 2>&1 || useradd --create-home --shell /bin/bash analysis
 install -d -o analysis -g analysis -m 700 /home/analysis/.ssh
 if [[ ! -f /home/analysis/.ssh/authorized_keys ]]; then
   install -o analysis -g analysis -m 600 /root/.ssh/authorized_keys /home/analysis/.ssh/authorized_keys
 fi
 install -d -o root -g radar -m 750 /etc/radar
-install -d -o radar -g radar -m 755 /opt/radar/releases
+install -d -o root -g root -m 755 /opt/radar /opt/radar/releases
 
 # PostgreSQL: memory sized to leave room for the Node.js jobs, the dashboard and a build.
 # A missing file (conf.d is empty on a fresh cluster) must not stop the script under pipefail.

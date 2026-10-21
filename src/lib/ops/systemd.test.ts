@@ -5,9 +5,10 @@ import { JOB_NAMES, type JobName } from "@/lib/jobs/types";
 
 const repository = new URL("../../../", import.meta.url);
 const units = new URL("ops/systemd/", repository);
-const unitFiles = readdirSync(units, { withFileTypes: true })
-  .filter((entry) => entry.isFile())
-  .map((entry) => entry.name);
+const unitEntries = readdirSync(units, { withFileTypes: true });
+const unitFiles = unitEntries.filter((entry) => entry.isFile()).map((entry) => entry.name);
+const dropInDirectories = unitEntries.filter((entry) => entry.isDirectory() && entry.name.endsWith(".d")).map((entry) => entry.name);
+const services = unitFiles.filter((name) => name.endsWith(".service")).sort();
 const dependencies = Object.keys(
   (JSON.parse(readFileSync(new URL("package.json", repository), "utf8")) as { dependencies?: Record<string, string> })
     .dependencies ?? {},
@@ -19,6 +20,20 @@ function readUnit(path: string): Map<string, string[]> {
   for (const line of readFileSync(new URL(path, units), "utf8").split("\n")) {
     const match = /^([A-Za-z]+)=(.*)$/.exec(line.trim());
     if (match) settings.set(match[1], [...(settings.get(match[1]) ?? []), match[2]]);
+  }
+  return settings;
+}
+
+// A service with its drop-ins; for a template, the drop-ins of every instance (radar-job@poll.service.d) count.
+function readServiceWithDropIns(name: string): Map<string, string[]> {
+  const settings = readUnit(name);
+  const instancePrefix = name.endsWith("@.service") ? name.slice(0, -".service".length) : undefined;
+  for (const directory of dropInDirectories) {
+    const unit = directory.slice(0, -".d".length);
+    if (unit !== name && !(instancePrefix && unit.startsWith(instancePrefix))) continue;
+    for (const file of readdirSync(new URL(`${directory}/`, units)).filter((entry) => entry.endsWith(".conf"))) {
+      for (const [key, values] of readUnit(`${directory}/${file}`)) settings.set(key, [...(settings.get(key) ?? []), ...values]);
+    }
   }
   return settings;
 }
@@ -106,10 +121,34 @@ describe("system check service", () => {
   });
 });
 
+// Root runs ops/bin and installs ops/systemd from the live release: no process of the radar user may write there.
+describe("services of the radar user", () => {
+  const cache = "/opt/radar/current/.next/cache";
+  const radarServices = services.filter((name) => readServiceWithDropIns(name).get("User")?.includes("radar"));
+
+  it("finds them", () => {
+    expect(radarServices).toEqual(["radar-job@.service", "radar-system-check.service", "radar-web.service"]);
+  });
+
+  it.each(radarServices)("%s sees a read-only system, except the Next.js cache, and cannot gain privileges", (name) => {
+    const service = readServiceWithDropIns(name);
+    expect([...new Set(service.get("ProtectSystem"))]).toEqual(["strict"]);
+    expect([...new Set(service.get("NoNewPrivileges"))]).toEqual(["yes"]);
+    const writable = (service.get("ReadWritePaths") ?? [])
+      .flatMap((value) => value.split(/\s+/))
+      .filter(Boolean)
+      .map((path) => path.replace(/^[-+]+/, ""));
+    for (const path of writable) expect(path, name).toBe(cache);
+  });
+
+  it("lets the dashboard write its cache", () => {
+    expect(readUnit("radar-web.service").get("ReadWritePaths")).toEqual([`-${cache}`]);
+  });
+});
+
 // The units cannot run in CI: these checks catch a misspelled unit or path before the server does.
 describe("unit references", () => {
   const timers = unitFiles.filter((name) => name.endsWith(".timer"));
-  const services = unitFiles.filter((name) => name.endsWith(".service"));
   const release = "/opt/radar/current/";
   // The binaries a unit may run from the release, by the package that installs them.
   const binaries: Record<string, string> = { "node_modules/.bin/tsx": "tsx", "node_modules/.bin/next": "next" };
