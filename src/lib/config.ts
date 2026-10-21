@@ -44,7 +44,7 @@ export const ROBLOX_REGION = {
   device: process.env.ROBLOX_DEVICE || "computer",
 } as const;
 
-// Intervals must match the systemd timers installed in phase 1b.
+// Intervals and timeouts must match ops/systemd (src/lib/ops/systemd.test.ts checks them).
 export const JOB_CONFIG = {
   census: {
     intervalMinutes: 10,

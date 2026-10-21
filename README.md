@@ -114,7 +114,7 @@ npm run status
 | `TEST_DATABASE_URL` | Server for the database test suites, set in `.env.test.local` (see Tests). |
 | `LEGACY_DATABASE_URL` | The v1 production database, read only by `npm run import:legacy`. Never use it as `DATABASE_URL`. |
 | `HEALTHCHECKS_PING_BASE` | Healthchecks.io ping base, for example `https://hc-ping.com/<ping-key>`. Checks are created on first ping with Healthchecks' default 1-day period, so they alert about 25 hours late until phase 1b provisions the real periods. Without it, no ping is sent. |
-| `RADAR_REQUIRE_HEALTHCHECKS` | `1` makes `npm run job` refuse to run without `HEALTHCHECKS_PING_BASE`. |
+| `RADAR_REQUIRE_HEALTHCHECKS` | `1` makes `npm run job` and `npm run system-check` refuse to run without `HEALTHCHECKS_PING_BASE`. |
 | `ROBLOX_COUNTRY`, `ROBLOX_DEVICE` | Charts filters; default `all` and `computer`. |
 
 Every command that connects to the database refuses one that still holds v1 tables, and requires PostgreSQL 18 (`RETURNING old.*`).

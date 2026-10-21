@@ -1,0 +1,18 @@
+[Unit]
+Description=Radar system check (disk, WAL archiving, TimescaleDB policies)
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=radar
+Group=radar
+WorkingDirectory=/opt/radar/current
+EnvironmentFile=/etc/radar/radar.env
+EnvironmentFile=-/etc/radar/healthchecks.env
+Environment=RADAR_REQUIRE_HEALTHCHECKS=1
+ExecStart=/opt/radar/current/node_modules/.bin/tsx scripts/system-check.ts
+TimeoutStartSec=2min
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes

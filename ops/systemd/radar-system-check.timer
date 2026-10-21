@@ -1,0 +1,10 @@
+[Unit]
+Description=Radar system check every 15 minutes
+
+[Timer]
+OnCalendar=*:4/15:00
+Persistent=false
+Unit=radar-system-check.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily differential backup of the radar database
+
+[Timer]
+OnCalendar=Mon..Sat *-*-* 03:10:00
+Persistent=true
+Unit=radar-backup@diff.service
+
+[Install]
+WantedBy=timers.target

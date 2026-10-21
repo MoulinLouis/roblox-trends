@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for a new radar release every 5 minutes
+
+[Timer]
+OnCalendar=*:1/5:30
+Persistent=false
+Unit=radar-deploy.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=pgBackRest %i backup of the radar database
+After=postgresql.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/radar/healthchecks.env
+ExecStart=/opt/radar/current/ops/bin/backup.sh %i
+TimeoutStartSec=3h
+Nice=10

@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly full backup of the radar database
+
+[Timer]
+OnCalendar=Sun *-*-* 03:10:00
+Persistent=true
+Unit=radar-backup@full.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Restore the latest radar backup into a scratch cluster and check it
+After=postgresql.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/radar/healthchecks.env
+ExecStart=/opt/radar/current/ops/bin/restore-test.sh
+TimeoutStartSec=4h
+Nice=10

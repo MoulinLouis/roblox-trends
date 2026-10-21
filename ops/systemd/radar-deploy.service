@@ -1,0 +1,11 @@
+[Unit]
+Description=Deploy the newest green commit of the deploy branch
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/radar/healthchecks.env
+EnvironmentFile=-/etc/radar/deploy.env
+ExecStart=/opt/radar/current/ops/bin/deploy.sh
+TimeoutStartSec=30min

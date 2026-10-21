@@ -1,0 +1,11 @@
+[Unit]
+Description=Radar charts every hour
+
+[Timer]
+OnCalendar=*:16:30
+AccuracySec=1s
+Persistent=false
+Unit=radar-job@charts.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Radar poll every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5:20
+AccuracySec=1s
+Persistent=false
+Unit=radar-job@poll.service
+
+[Install]
+WantedBy=timers.target

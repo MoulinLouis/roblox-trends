@@ -1,0 +1,11 @@
+[Unit]
+Description=Radar explore every hour
+
+[Timer]
+OnCalendar=*:26:30
+AccuracySec=1s
+Persistent=false
+Unit=radar-job@explore.service
+
+[Install]
+WantedBy=timers.target

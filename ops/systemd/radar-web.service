@@ -1,0 +1,20 @@
+[Unit]
+Description=Radar dashboard (Next.js), served on the tailnet by tailscale serve
+Wants=network-online.target
+After=network-online.target postgresql.service
+
+[Service]
+User=radar
+Group=radar
+WorkingDirectory=/opt/radar/current
+EnvironmentFile=/etc/radar/radar.env
+ExecStart=/opt/radar/current/node_modules/.bin/next start --hostname 127.0.0.1 --port 3000
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

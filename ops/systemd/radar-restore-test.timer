@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly restore test of the radar backups
+
+[Timer]
+OnCalendar=Sun *-*-* 05:30:00
+Persistent=true
+Unit=radar-restore-test.service
+
+[Install]
+WantedBy=timers.target

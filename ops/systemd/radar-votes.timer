@@ -1,0 +1,11 @@
+[Unit]
+Description=Radar votes every hour
+
+[Timer]
+OnCalendar=*:07:30
+AccuracySec=1s
+Persistent=false
+Unit=radar-job@votes.service
+
+[Install]
+WantedBy=timers.target

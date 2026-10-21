@@ -1,0 +1,24 @@
+[Unit]
+Description=Radar collection job %i
+Documentation=https://github.com/MoulinLouis/roblox-trends/blob/radar-v2/docs/operations.md
+Wants=network-online.target
+After=network-online.target postgresql.service
+# Reports deaths the job cannot report itself: killed at TimeoutStartSec, crashed, or unable to start.
+OnFailure=radar-job-failed@%i.service
+
+[Service]
+Type=oneshot
+User=radar
+Group=radar
+WorkingDirectory=/opt/radar/current
+EnvironmentFile=/etc/radar/radar.env
+EnvironmentFile=-/etc/radar/healthchecks.env
+Environment=RADAR_REQUIRE_HEALTHCHECKS=1
+ExecStart=/opt/radar/current/node_modules/.bin/tsx scripts/job.ts %i
+# The job stops itself at its timeoutMs; TimeoutStartSec (radar-job@<job>.service.d/timeout.conf) is the backstop.
+TimeoutStopSec=30s
+Nice=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes

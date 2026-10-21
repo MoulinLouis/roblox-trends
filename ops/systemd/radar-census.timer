@@ -1,0 +1,11 @@
+[Unit]
+Description=Radar census every 10 minutes
+
+[Timer]
+OnCalendar=*:2/10:40
+AccuracySec=1s
+Persistent=false
+Unit=radar-job@census.service
+
+[Install]
+WantedBy=timers.target

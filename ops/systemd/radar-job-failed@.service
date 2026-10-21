@@ -1,0 +1,7 @@
+[Unit]
+Description=Report the failed radar job %i to Healthchecks
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/radar/healthchecks.env
+ExecStart=/opt/radar/current/ops/bin/job-failed.sh %i

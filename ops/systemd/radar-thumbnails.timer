@@ -1,0 +1,11 @@
+[Unit]
+Description=Radar thumbnails every hour
+
+[Timer]
+OnCalendar=*:36:30
+AccuracySec=1s
+Persistent=false
+Unit=radar-job@thumbnails.service
+
+[Install]
+WantedBy=timers.target
