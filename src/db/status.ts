@@ -89,7 +89,7 @@ export async function jobSummaries(db: Database, now: Date, windowHours: number)
         (count(*) filter (where status = 'degraded'))::int as degraded,
         (count(*) filter (where status = 'failed'))::int as failed,
         (count(*) filter (where jsonb_typeof(stats #> '{rateLimited}') = 'boolean'))::int as rate_limit_reports,
-        (count(*) filter (where stats #>> '{rateLimited}' = 'true'))::int as rate_limited_runs,
+        (count(*) filter (where stats -> 'rateLimited' = 'true'::jsonb))::int as rate_limited_runs,
         (count(*) filter (where jsonb_typeof(stats #> '{http}') = 'object'))::int as http_reports,
         coalesce(sum(
           case when jsonb_typeof(stats #> '{http,rateLimitedResponses}') = 'number'

@@ -126,6 +126,14 @@ describe.skipIf(!hasTestDatabase)("status queries", () => {
     await insertRun({ job: "votes", status: "failed", startedAt: "2026-10-17T09:00:00Z", error: "votes went quiet" });
     // charts: a failure exactly at the window start is outside it, like for the run counts. Malformed HTTP stats count 0.
     await insertRun({ job: "charts", status: "failed", startedAt: windowStart, error: "at the window start" });
+    // Only a boolean counts: a string "true" is a malformed stat.
+    await insertRun({
+      job: "charts",
+      status: "degraded",
+      startedAt: "2026-10-20T12:00:00Z",
+      finishedAt: "2026-10-20T12:03:00Z",
+      stats: { rateLimited: "true" },
+    });
     await insertRun({
       job: "charts",
       status: "success",
@@ -215,7 +223,7 @@ describe.skipIf(!hasTestDatabase)("status queries", () => {
           finishedAt: new Date("2026-10-20T13:03:00Z"),
           stats: { rateLimited: false, http: { attempts: "80", rateLimitedResponses: null } },
         },
-        recent: { runs: 1, degraded: 0, failed: 0, rateLimitedRuns: 0, http: { rateLimitedResponses: 0, attempts: 0 } },
+        recent: { runs: 2, degraded: 1, failed: 0, rateLimitedRuns: 0, http: { rateLimitedResponses: 0, attempts: 0 } },
         lastError: null,
       },
       {
