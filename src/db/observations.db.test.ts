@@ -77,14 +77,15 @@ describe.skipIf(!hasTestDatabase)("observation writers", () => {
       { universeId: 1, observedAt: slot, ccu: 150, visits: 11, favorites: 2 },
       { universeId: 1, observedAt: slot, ccu: 999, visits: 99, favorites: 9 },
     ]);
-    const rows = await database.db.select().from(gameObservations);
+    const rows = await database.db.select().from(gameObservations).where(eq(gameObservations.universeId, 1));
     expect(rows).toHaveLength(1);
     expect(rows[0].ccu).toBe(150);
   });
 
   it("keeps existing rows in keep mode", async () => {
-    await writeGameObservations(database.db, [{ universeId: 1, observedAt: slot, ccu: 1, visits: 1, favorites: 1, source: "legacy" }], "keep");
-    const [row] = await database.db.select().from(gameObservations);
+    await writeGameObservations(database.db, [{ universeId: 2, observedAt: slot, ccu: 150, visits: 11, favorites: 2 }]);
+    await writeGameObservations(database.db, [{ universeId: 2, observedAt: slot, ccu: 1, visits: 1, favorites: 1, source: "legacy" }], "keep");
+    const [row] = await database.db.select().from(gameObservations).where(eq(gameObservations.universeId, 2));
     expect(row.ccu).toBe(150);
     expect(row.source).toBe("poll");
   });
@@ -95,9 +96,9 @@ describe.skipIf(!hasTestDatabase)("observation writers", () => {
       await writeVoteObservations(database.db, [{ universeId: 1, observedAt: slot, upVotes: 90, downVotes: 10 }]);
       await writeChartPlacements(database.db, [{ sortId: "top-trending", universeId: 1, observedAt: slot, rank: 3, playerCount: 150, isSponsored: false }]);
     }
-    expect(await database.db.select().from(censusObservations)).toHaveLength(1);
-    expect(await database.db.select().from(voteObservations)).toHaveLength(1);
-    expect(await database.db.select().from(chartPlacements)).toHaveLength(1);
+    expect(await database.db.select().from(censusObservations).where(eq(censusObservations.placeId, 10))).toHaveLength(1);
+    expect(await database.db.select().from(voteObservations).where(eq(voteObservations.universeId, 1))).toHaveLength(1);
+    expect(await database.db.select().from(chartPlacements).where(eq(chartPlacements.universeId, 1))).toHaveLength(1);
   });
 
   it("replaces every value of a row in replace mode and none in keep mode", async () => {
