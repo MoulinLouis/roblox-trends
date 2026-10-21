@@ -1,6 +1,8 @@
+import { DrizzleQueryError } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import type { CensusCoverage, JobSummary } from "@/db/status";
 import type { JobName } from "@/lib/jobs/types";
+import { errorMessage } from "@/lib/logger";
 import { formatStatusReport } from "./status-report";
 
 const now = new Date("2026-10-20T14:12:00Z");
@@ -24,6 +26,10 @@ function completed(job: JobName, stats: Record<string, unknown>): JobSummary {
     lastCompleted: { status: "success", finishedAt: new Date("2026-10-20T14:10:40Z"), stats },
     recent: { ...noRuns, runs: 1 },
   });
+}
+
+function failed(job: JobName, message: string): JobSummary {
+  return summary(job, { lastError: { startedAt: new Date("2026-10-20T14:05:00Z"), message } });
 }
 
 function reportLines(jobs: JobSummary[], coverageOverride: CensusCoverage = coverage): string[] {
@@ -99,11 +105,22 @@ describe("formatStatusReport", () => {
     expect(lines).toContain("rateLimited=false http.rateLimitedResponses=- skipped=0 shedBelowCcu=-");
   });
 
-  it("keeps the last error on one line and truncates it", () => {
-    const message = `fetch failed:\n\tconnect ECONNREFUSED ${"x".repeat(300)}`;
-    const lines = reportLines([summary("thumbnails", { lastError: { startedAt: new Date("2026-10-20T14:00:00Z"), message } })]);
-    const preview = `fetch failed: connect ECONNREFUSED ${"x".repeat(300)}`.slice(0, 120);
-    expect(lines).toContain(`error 12m ago: ${preview}…`);
+  it("keeps a short error whole on one line", () => {
+    expect(reportLines([failed("thumbnails", "fetch failed:\n\tconnect ECONNREFUSED 127.0.0.1:443")])).toContain(
+      "error 7m ago: fetch failed: connect ECONNREFUSED 127.0.0.1:443",
+    );
+  });
+
+  it("keeps the head and the root cause of a long failed query", () => {
+    const query =
+      `insert into "games" ("universe_id", "root_place_id", "name") values ` +
+      `${Array.from({ length: 50 }, (_, index) => `($${index * 3 + 1}, $${index * 3 + 2}, $${index * 3 + 3})`).join(", ")} ` +
+      `on conflict ("universe_id") do update set "name" = excluded.name`;
+    const params = Array.from({ length: 150 }, (_, index) => index);
+    const message = errorMessage(new DrizzleQueryError(query, params, new Error("canceling statement due to lock timeout")));
+    expect(reportLines([failed("poll", message)])).toContain(
+      'error 7m ago: Failed query: insert into "games" ("univ … "universe_id")…(535 more characters): canceling statement due to lock timeout',
+    );
   });
 
   it("shows ages in hours past two hours and never in the future", () => {

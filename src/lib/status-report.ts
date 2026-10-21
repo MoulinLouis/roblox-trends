@@ -17,7 +17,10 @@ const WATCHED_STATS: Partial<Record<JobName, readonly string[]>> = {
   poll: ["rateLimited", "http.rateLimitedResponses", "skipped", "shedBelowCcu"],
 };
 
+// One line per error: the head says what failed, the tail holds the root cause (errorMessage appends causes last).
 const maximumErrorLength = 120;
+const errorHeadLength = 40;
+const errorSeparator = " … ";
 const columnGap = "  ";
 const counts = new Intl.NumberFormat("en-US");
 
@@ -43,7 +46,7 @@ export function formatStatusReport({ now, windowHours, jobs, coverage, totals }:
       table.push(indent + watched.map((path) => `${path}=${formatStat(statAt(stats, path))}`).join(" "));
     }
     if (job.lastError) {
-      table.push(`${indent}error ${elapsed(now, job.lastError.startedAt)} ago: ${errorPreview(job.lastError.message)}`);
+      table.push(`${indent}error ${elapsed(now, job.lastError.startedAt)} ago: ${preview(job.lastError.message)}`);
     }
   });
   return [
@@ -98,10 +101,12 @@ function formatStat(value: unknown): string {
   return typeof value === "object" ? JSON.stringify(value) : String(value);
 }
 
-// Job errors can span lines (a cause chain, a validation report); the view keeps one line per error.
-function errorPreview(message: string): string {
+// Messages can span lines (a cause chain, a failed query and its parameters); the view keeps one line per message.
+function preview(message: string): string {
   const line = message.replace(/\s+/g, " ").trim();
-  return line.length <= maximumErrorLength ? line : `${line.slice(0, maximumErrorLength)}…`;
+  if (line.length <= maximumErrorLength) return line;
+  const tailLength = maximumErrorLength - errorHeadLength - errorSeparator.length;
+  return `${line.slice(0, errorHeadLength).trimEnd()}${errorSeparator}${line.slice(-tailLength).trimStart()}`;
 }
 
 // A clock skew between the job host and this one must not print a negative age.
