@@ -99,7 +99,7 @@ export const JOB_CONFIG = {
     seedCount: 10,
     recommendationsPerSeed: 20,
     termTitleCount: 50,
-    // A term must be shared by this many titles; with fewer titles available, one title is enough.
+    // A term must be shared by this many titles; with fewer titles available, by every one of them.
     minimumTermTitles: 3,
     searchTermCount: 4,
     minimumDiscoveryCcu: 50,
