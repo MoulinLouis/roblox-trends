@@ -64,4 +64,15 @@ describe.skipIf(!hasTestDatabase)("production roles", () => {
       analysis.db.execute(sql`insert into job_runs (id, job, slot, status, started_at) values (gen_random_uuid(), 'poll', now(), 'running', now())`),
     ).rejects.toMatchObject({ cause: { message: expect.stringMatching(/read-only transaction/) } });
   });
+
+  it("bounds the number and the duration of analysis sessions", async () => {
+    const limit = await owner.db.execute<{ connections: number }>(
+      sql`select rolconnlimit as connections from pg_roles where rolname = 'radar_analysis'`,
+    );
+    expect(limit.rows).toEqual([{ connections: 5 }]);
+    const timeouts = await analysis.db.execute<{ statement: string; idle: string }>(
+      sql`select current_setting('statement_timeout') as statement, current_setting('idle_in_transaction_session_timeout') as idle`,
+    );
+    expect(timeouts.rows).toEqual([{ statement: "5min", idle: "10min" }]);
+  });
 });

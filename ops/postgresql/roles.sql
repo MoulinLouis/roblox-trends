@@ -16,3 +16,4 @@ GRANT pg_monitor TO radar;
 ALTER ROLE radar_analysis SET default_transaction_read_only = on;
 ALTER ROLE radar_analysis SET statement_timeout = '5min';
 ALTER ROLE radar_analysis SET idle_in_transaction_session_timeout = '10min';
+ALTER ROLE radar_analysis CONNECTION LIMIT 5;
