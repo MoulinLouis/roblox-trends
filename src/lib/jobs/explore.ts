@@ -32,7 +32,7 @@ const SEARCH_STOP_WORDS = new Set([
 ]);
 
 // The words that rising games share are the vocabulary of what is trending now. A word counts once per title and
-// must be shared by `minimumTitles` titles; when fewer titles are available, one is enough.
+// must be shared by `minimumTitles` titles, or by every title when fewer are available.
 export function selectSearchTerms(titles: string[], count: number, minimumTitles: number): string[] {
   const words = new Map<string, { titles: number; forms: Map<string, number> }>();
   for (const title of titles) {
@@ -43,7 +43,7 @@ export function selectSearchTerms(titles: string[], count: number, minimumTitles
       words.set(word, entry);
     }
   }
-  const minimumOccurrences = titles.length >= minimumTitles ? minimumTitles : 1;
+  const minimumOccurrences = Math.min(minimumTitles, titles.length);
   return [...words.entries()]
     .filter(([, entry]) => entry.titles >= minimumOccurrences)
     .sort(([leftWord, left], [rightWord, right]) => right.titles - left.titles || compareText(leftWord, rightWord))

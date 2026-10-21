@@ -138,17 +138,18 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
         if (seed === "1") throw new HttpError(503, "Service Unavailable", "https://games.roblox.com/v1/games/recommendations/game/1");
         return [listed(8, 600)];
       },
-      searchGames: async (term) => (term === "egg" ? [listed(9, 800)] : [tiny]),
+      searchGames: async () => [listed(9, 800)],
     });
     expect(await executeJob(job, database.db, now)).toBe("success");
     expect(await discoveries()).toEqual([
       [8, "recommendation", "4"],
       [9, "search", "egg"],
     ]);
+    // Both titles share "egg"; "steal" is in one of the two.
     expect((await lastRun()).stats).toMatchObject({
-      terms: ["egg", "steal"],
+      terms: ["egg"],
       recommendation: { requests: 2, failures: 1, emptyResponses: 0 },
-      search: { requests: 2, failures: 0, emptyResponses: 0 },
+      search: { requests: 1, failures: 0, emptyResponses: 0 },
     });
   });
 
@@ -176,13 +177,10 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
     await risingGame(4, "Egg Obby", 3_000);
     const job = exploreJob({ getRecommendations: async () => [], searchGames: async () => [listed(9, 800)] });
     expect(await executeJob(job, database.db, now)).toBe("degraded");
-    expect(await discoveries()).toEqual([
-      [9, "search", "egg"],
-      [9, "search", "steal"],
-    ]);
+    expect(await discoveries()).toEqual([[9, "search", "egg"]]);
     expect((await lastRun()).stats).toMatchObject({
       recommendation: { requests: 2, failures: 0, emptyResponses: 2 },
-      search: { requests: 2, failures: 0, emptyResponses: 0 },
+      search: { requests: 1, failures: 0, emptyResponses: 0 },
     });
   });
 

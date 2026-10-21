@@ -13,8 +13,9 @@ describe("selectSearchTerms", () => {
     expect(selectSearchTerms(["Steal An Egg", "Break and Steal an Egg", "[🎃] +1 Stone Skipping", "Egg Obby"], 5, 3)).toEqual(["egg"]);
   });
 
-  it("accepts a word of one title when fewer titles than the minimum are available", () => {
-    expect(selectSearchTerms(["Steal An Egg", "Egg Farm"], 5, 3)).toEqual(["egg", "farm", "steal"]);
+  it("lowers the minimum to the number of titles available", () => {
+    expect(selectSearchTerms(["Steal An Egg", "Egg Farm", "Egg Farm Life"], 5, 3)).toEqual(["egg"]);
+    expect(selectSearchTerms(["Steal An Egg", "Egg Farm"], 5, 3)).toEqual(["egg"]);
     expect(selectSearchTerms(["[UPDATE] Grow a Garden"], 5, 3)).toEqual(["garden", "grow"]);
   });
 
