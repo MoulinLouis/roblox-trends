@@ -45,8 +45,9 @@ export interface DataTotals {
 }
 
 // Every job appears in pipeline order, also one that never ran. Each lookup walks the (job, started_at) index of one
-// job, newest first: the latest run is one entry; the window counts and the last error stay within the window (plus
-// the latest run); the last completed run walks back past the failed and running runs in a row before it.
+// job, newest first: the latest run is one entry; the window counts and the last error are range scans that stop at
+// the window start (or at the latest run, when it is older); the last completed run walks back past the failed and
+// running runs in a row before it.
 export async function jobSummaries(db: Database, now: Date, windowHours: number): Promise<JobSummary[]> {
   const start = windowStart(now, windowHours);
   const result = await db.execute<{
@@ -102,7 +103,11 @@ export async function jobSummaries(db: Database, now: Date, windowHours: number)
     ) recent
     left join lateral (
       select error, started_at from job_runs
-      where job = j.job and error is not null and (started_at > ${start} or started_at = latest.started_at)
+      -- The OR states the rule; the redundant lower bound gives the index scan a range, so a job without a recent
+      -- error does not walk its whole history.
+      where job = j.job and error is not null
+        and started_at >= least(latest.started_at, ${start})
+        and (started_at > ${start} or started_at = latest.started_at)
       order by started_at desc limit 1
     ) failure on true
     order by j.position
