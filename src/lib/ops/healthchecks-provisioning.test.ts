@@ -13,7 +13,7 @@ describe("desiredChecks", () => {
   });
 
   it("uses each job's interval as the period and its timeout plus the margin as the heartbeat grace", () => {
-    expect(checks.find((check) => check.slug === "radar-poll")).toMatchObject({ timeout: 300, grace: 270 + 300 });
+    expect(checks.find((check) => check.slug === "radar-poll")).toMatchObject({ timeout: 600, grace: 540 + 300 });
     expect(checks.find((check) => check.slug === "radar-census-quality")).toMatchObject({ timeout: 600, grace: 3_600 });
     for (const name of JOB_NAMES) {
       const heartbeat = checks.find((check) => check.slug === `radar-${name}`);
@@ -53,7 +53,7 @@ async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
 }
 
 describe("upsertCheck", () => {
-  const check = { slug: "radar-poll", name: "poll job", tags: "radar job", desc: "", timeout: 300, grace: 570 };
+  const check = { slug: "radar-poll", name: "poll job", tags: "radar job", desc: "", timeout: 600, grace: 840 };
 
   it("upserts by slug, attaches every channel and authenticates with the API key header", async () => {
     const fetchImpl = vi.fn(async () => new Response("{}", { status: 201 }));

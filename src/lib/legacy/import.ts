@@ -161,13 +161,13 @@ export async function assertLegacySource(target: Database, source: Pool): Promis
   }
 }
 
-// The import is meant to run before the timers are enabled: once poll stores its 5-minute readings, a v1 hourly
-// reading is added next to them in every hour where poll has no reading at exactly hh:00.
+// The import is meant to run before the timers are enabled: once poll stores its readings, a v1 hourly reading is
+// added next to them in every hour where poll has no reading at exactly hh:00.
 async function warnIfAlreadyPolled(target: Database): Promise<void> {
   const result = await target.execute<{ polled: boolean }>(sql`select exists (select 1 from job_runs where job = 'poll') as polled`);
   if (result.rows[0]?.polled) {
     logger.warn("v2 has already polled games: run the legacy import before enabling the timers", {
-      effect: "v1 hourly readings join the 5-minute readings of hours where poll has no reading at hh:00",
+      effect: "v1 hourly readings join the poll readings of hours where poll has no reading at hh:00",
     });
   }
 }

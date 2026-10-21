@@ -1,8 +1,8 @@
 [Unit]
-Description=Radar poll every 5 minutes
+Description=Radar poll every 10 minutes
 
 [Timer]
-OnCalendar=*:0/5:20
+OnCalendar=*:0/10:20
 AccuracySec=1s
 Persistent=false
 Unit=radar-job@poll.service

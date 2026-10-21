@@ -33,15 +33,15 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
       await upsertGameDetails(database.db, [gameDetail(1, { playing: 500 }), gameDetail(2, { playing: 400 })], now);
     });
 
-    it("writes one observation per returned game in the five-minute slot", async () => {
+    it("writes one observation per returned game in the ten-minute slot", async () => {
       const job = createPollJob({
         roblox: { getGameDetails: async (ids) => ids.map((id) => gameDetail(Number(id), { playing: 700 })) },
       });
       expect(await executeJob(job, database.db, now)).toBe("success");
       const rows = await database.db.select().from(gameObservations);
       expect(rows.map((row) => [row.universeId, row.ccu, row.observedAt.toISOString()]).sort()).toEqual([
-        [1, 700, "2026-10-20T14:05:00.000Z"],
-        [2, 700, "2026-10-20T14:05:00.000Z"],
+        [1, 700, "2026-10-20T14:00:00.000Z"],
+        [2, 700, "2026-10-20T14:00:00.000Z"],
       ]);
     });
 

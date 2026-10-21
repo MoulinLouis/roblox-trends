@@ -75,10 +75,14 @@ export const JOB_CONFIG = {
     stalledResolutionFailures: 3,
   },
   poll: {
-    intervalMinutes: 5,
-    timeoutMs: 270_000,
-    // Leaves room before the timeout for a batch that started just before the deadline and is still in its retries.
-    deadlineMs: 180_000,
+    // Every 10 minutes, the design's fallback once the game details endpoint proved rate limited: at its 7 s spacing
+    // (EXTERNAL_REQUEST_CONFIG.minimumIntervalByEndpoint) the active set no longer fits a 5-minute slot.
+    intervalMinutes: 10,
+    timeoutMs: 9 * 60_000,
+    // 450 s at one request every 7 s is about 64 requests of 50 games, about 3,200 games; the lowest-priority games
+    // beyond that are shed. Leaves 90 s before the timeout for a batch that started just before the deadline and is
+    // still in its retries.
+    deadlineMs: 7.5 * 60_000,
     batchSize: 50,
     minimumReturnedShare: 0.95,
     maximumConsecutiveFailedBatches: 3,
@@ -167,7 +171,10 @@ export const ACTIVE_SET_CONFIG = {
 
 export const STATUS_CONFIG = {
   coverageMinimumCcu: 100,
-  trackedWithinMinutes: 15,
+  // Observations carry their slot, the run's start floored to 10 minutes, and a game late in the poll order is read
+  // up to the 7.5-minute deadline into the run: its next observation arrives up to about 17–18 minutes after the slot
+  // of its last one, so a shorter window would count it as untracked.
+  trackedWithinMinutes: 20,
   // The window of the run counts, the 429 figures, the last error, the census list lookup and the data totals.
   summaryWindowHours: 24,
 } as const;
