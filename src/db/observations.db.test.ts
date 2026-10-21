@@ -1,0 +1,191 @@
+import { and, between, eq, sql, type SQL } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/node-postgres";
+import type { PgTable } from "drizzle-orm/pg-core";
+import { Client } from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createDatabase, type Database } from "./client";
+import { writeCensusObservations, writeChartPlacements, writeGameObservations, writeVoteObservations } from "./observations";
+import { censusObservations, chartPlacements, gameObservations, voteObservations } from "./schema";
+import { createTestDatabase, hasTestDatabase, type TestDatabase } from "./test-database";
+
+describe.skipIf(!hasTestDatabase)("observation writers", () => {
+  let database: TestDatabase;
+  const slot = new Date("2026-10-20T14:05:00Z");
+  const nextSlot = new Date("2026-10-20T14:10:00Z");
+
+  beforeAll(async () => {
+    database = await createTestDatabase();
+  });
+
+  afterAll(async () => {
+    await database?.drop();
+  });
+
+  // The rows are given in primary-key order. Another connection locks the first one, then the writer receives the rows
+  // in reverse order. A writer that locks rows in key order waits on that first row before touching any other, so this
+  // returns 0; an unsorted or partially sorted writer has already locked some of the others.
+  async function rowsLockedBeforeTheFirst<Row>(
+    table: PgTable,
+    rows: Row[],
+    write: (db: Database, rows: Row[]) => Promise<number>,
+    matches: (row: Row) => SQL | undefined,
+  ): Promise<number> {
+    await write(database.db, rows);
+    const holder = new Client({ connectionString: database.url });
+    await holder.connect();
+    const writer = createDatabase(database.url, { maxConnections: 1, applicationName: "radar-test-writer" });
+    try {
+      await holder.query("begin");
+      await drizzle(holder).select({ found: sql`1` }).from(table).where(matches(rows[0])).for("update");
+      const pending = write(writer.db, [...rows].reverse());
+      // Awaited below; this only avoids an unhandled rejection when the wait fails first.
+      pending.catch(() => undefined);
+      await waitForLockWait("radar-test-writer");
+      let locked = 0;
+      for (const row of rows.slice(1)) {
+        const free = await database.db
+          .select({ found: sql`1` })
+          .from(table)
+          .where(matches(row))
+          .for("update", { skipLocked: true });
+        if (!free.length) locked += 1;
+      }
+      await holder.query("commit");
+      await pending;
+      return locked;
+    } finally {
+      await holder.end();
+      await writer.pool.end();
+    }
+  }
+
+  async function waitForLockWait(applicationName: string): Promise<void> {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const result = await database.db.execute<{ waiting: number }>(
+        sql`select count(*)::int as waiting from pg_stat_activity
+            where datname = current_database() and application_name = ${applicationName} and wait_event_type = 'Lock'`,
+      );
+      if (result.rows[0]?.waiting) return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`${applicationName} never waited on a row lock`);
+  }
+
+  it("replaces a game observation written twice in the same slot", async () => {
+    await writeGameObservations(database.db, [{ universeId: 1, observedAt: slot, ccu: 100, visits: 10, favorites: 1 }]);
+    await writeGameObservations(database.db, [
+      { universeId: 1, observedAt: slot, ccu: 150, visits: 11, favorites: 2 },
+      { universeId: 1, observedAt: slot, ccu: 999, visits: 99, favorites: 9 },
+    ]);
+    const rows = await database.db.select().from(gameObservations);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].ccu).toBe(150);
+  });
+
+  it("keeps existing rows in keep mode", async () => {
+    await writeGameObservations(database.db, [{ universeId: 1, observedAt: slot, ccu: 1, visits: 1, favorites: 1, source: "legacy" }], "keep");
+    const [row] = await database.db.select().from(gameObservations);
+    expect(row.ccu).toBe(150);
+    expect(row.source).toBe("poll");
+  });
+
+  it("writes census, vote and chart rows idempotently", async () => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await writeCensusObservations(database.db, [{ placeId: 10, observedAt: slot, ccu: 400 }]);
+      await writeVoteObservations(database.db, [{ universeId: 1, observedAt: slot, upVotes: 90, downVotes: 10 }]);
+      await writeChartPlacements(database.db, [{ sortId: "top-trending", universeId: 1, observedAt: slot, rank: 3, playerCount: 150, isSponsored: false }]);
+    }
+    expect(await database.db.select().from(censusObservations)).toHaveLength(1);
+    expect(await database.db.select().from(voteObservations)).toHaveLength(1);
+    expect(await database.db.select().from(chartPlacements)).toHaveLength(1);
+  });
+
+  it("replaces every value of a row in replace mode and none in keep mode", async () => {
+    await writeGameObservations(database.db, [{ universeId: 20, observedAt: slot, ccu: 5, visits: 50, favorites: 5, source: "legacy" }], "keep");
+    await writeGameObservations(database.db, [{ universeId: 20, observedAt: slot, ccu: 6, visits: 60, favorites: 6 }]);
+    await writeGameObservations(database.db, [{ universeId: 20, observedAt: slot, ccu: 7, visits: 70, favorites: 7, source: "legacy" }], "keep");
+    const [game] = await database.db.select().from(gameObservations).where(eq(gameObservations.universeId, 20));
+    expect(game).toMatchObject({ ccu: 6, visits: 60, favorites: 6, source: "poll" });
+
+    await writeCensusObservations(database.db, [{ placeId: 20, observedAt: slot, ccu: 400 }]);
+    await writeCensusObservations(database.db, [{ placeId: 20, observedAt: slot, ccu: 450 }]);
+    await writeCensusObservations(database.db, [{ placeId: 20, observedAt: slot, ccu: 1 }], "keep");
+    const [census] = await database.db.select().from(censusObservations).where(eq(censusObservations.placeId, 20));
+    expect(census.ccu).toBe(450);
+
+    await writeVoteObservations(database.db, [{ universeId: 20, observedAt: slot, upVotes: 90, downVotes: 10 }]);
+    await writeVoteObservations(database.db, [{ universeId: 20, observedAt: slot, upVotes: 95, downVotes: 12 }]);
+    await writeVoteObservations(database.db, [{ universeId: 20, observedAt: slot, upVotes: 1, downVotes: 1 }], "keep");
+    const [votes] = await database.db.select().from(voteObservations).where(eq(voteObservations.universeId, 20));
+    expect(votes).toMatchObject({ upVotes: 95, downVotes: 12 });
+
+    const placement = { sortId: "top-trending", universeId: 20, observedAt: slot };
+    await writeChartPlacements(database.db, [{ ...placement, rank: 3, playerCount: 150, isSponsored: false }]);
+    await writeChartPlacements(database.db, [{ ...placement, rank: 5, playerCount: 120, isSponsored: null }]);
+    await writeChartPlacements(database.db, [{ ...placement, rank: 1, playerCount: 1, isSponsored: true }], "keep");
+    const [chart] = await database.db.select().from(chartPlacements).where(eq(chartPlacements.universeId, 20));
+    expect(chart).toMatchObject({ rank: 5, playerCount: 120, isSponsored: null });
+  });
+
+  it("writes a batch that spans several chunks and keeps the first duplicate", async () => {
+    const rows = Array.from({ length: 2_500 }, (_, index) => ({ universeId: 10_000 + index, observedAt: slot, ccu: index, visits: 0, favorites: 0 }));
+    // The duplicate comes after the first 2,000 rows of the input; the first occurrence still wins.
+    expect(await writeGameObservations(database.db, [...rows, { ...rows[0], ccu: -1 }])).toBe(2_500);
+    const [stored] = await database.db
+      .select({ rows: sql<number>`count(*)::int` })
+      .from(gameObservations)
+      .where(between(gameObservations.universeId, 10_000, 12_499));
+    expect(stored.rows).toBe(2_500);
+    const [first] = await database.db.select().from(gameObservations).where(eq(gameObservations.universeId, 10_000));
+    expect(first.ccu).toBe(0);
+  });
+
+  it("locks game observations in key order", async () => {
+    const row = (universeId: number, observedAt: Date) => ({ universeId, observedAt, ccu: 1, visits: 1, favorites: 1 });
+    const locked = await rowsLockedBeforeTheFirst(
+      gameObservations,
+      [row(300, slot), row(300, nextSlot), row(301, slot)],
+      writeGameObservations,
+      (key) => and(eq(gameObservations.universeId, key.universeId), eq(gameObservations.observedAt, key.observedAt)),
+    );
+    expect(locked).toBe(0);
+  });
+
+  it("locks census observations in key order", async () => {
+    const row = (placeId: number, observedAt: Date) => ({ placeId, observedAt, ccu: 1 });
+    const locked = await rowsLockedBeforeTheFirst(
+      censusObservations,
+      [row(300, slot), row(300, nextSlot), row(301, slot)],
+      writeCensusObservations,
+      (key) => and(eq(censusObservations.placeId, key.placeId), eq(censusObservations.observedAt, key.observedAt)),
+    );
+    expect(locked).toBe(0);
+  });
+
+  it("locks vote observations in key order", async () => {
+    const row = (universeId: number, observedAt: Date) => ({ universeId, observedAt, upVotes: 1, downVotes: 1 });
+    const locked = await rowsLockedBeforeTheFirst(
+      voteObservations,
+      [row(300, slot), row(300, nextSlot), row(301, slot)],
+      writeVoteObservations,
+      (key) => and(eq(voteObservations.universeId, key.universeId), eq(voteObservations.observedAt, key.observedAt)),
+    );
+    expect(locked).toBe(0);
+  });
+
+  it("locks chart placements in key order", async () => {
+    const row = (sortId: string, universeId: number, observedAt: Date) => ({ sortId, universeId, observedAt, rank: 1, playerCount: 1, isSponsored: false });
+    const locked = await rowsLockedBeforeTheFirst(
+      chartPlacements,
+      [row("top-trending", 300, slot), row("top-trending", 300, nextSlot), row("top-trending", 301, slot), row("up-and-coming", 300, slot)],
+      writeChartPlacements,
+      (key) =>
+        and(
+          eq(chartPlacements.sortId, key.sortId),
+          eq(chartPlacements.universeId, key.universeId),
+          eq(chartPlacements.observedAt, key.observedAt),
+        ),
+    );
+    expect(locked).toBe(0);
+  });
+});
