@@ -61,9 +61,15 @@ describe("Roblox API response parsing", () => {
 
   it("maps a completed 16:9 game thumbnail to its image and media id", () => {
     const thumbnails = parseGameThumbnailsResponse({
-      data: [{ universeId: 101, error: null, thumbnails: [{ targetId: 9, state: "Completed", imageUrl: "https://tr.rbxcdn.com/a/768/432/Image/Png", version: "TN3" }] }],
+      data: [
+        { universeId: 101, error: null, thumbnails: [{ targetId: 9, state: "Completed", imageUrl: "https://tr.rbxcdn.com/a/768/432/Image/Png", version: "TN3" }] },
+        { universeId: 102, error: null, thumbnails: [{ state: "Completed", imageUrl: "https://tr.rbxcdn.com/b/768/432/Image/Png" }] },
+      ],
     });
-    expect([...thumbnails]).toEqual([["101", { imageUrl: "https://tr.rbxcdn.com/a/768/432/Image/Png", mediaId: 9 }]]);
+    expect([...thumbnails]).toEqual([
+      ["101", { imageUrl: "https://tr.rbxcdn.com/a/768/432/Image/Png", mediaId: 9 }],
+      ["102", { imageUrl: "https://tr.rbxcdn.com/b/768/432/Image/Png", mediaId: null }],
+    ]);
   });
 
   it("records games without custom thumbnails as null", () => {
@@ -76,9 +82,36 @@ describe("Roblox API response parsing", () => {
     expect([...thumbnails]).toEqual([["101", null], ["102", null]]);
   });
 
-  it("leaves blocked thumbnails unknown", () => {
+  it("records thumbnails blocked by moderation as null", () => {
     const thumbnails = parseGameThumbnailsResponse({
       data: [{ universeId: 101, error: null, thumbnails: [{ targetId: 0, state: "Blocked", imageUrl: "https://t2.rbxcdn.com/UnapprovedImage", version: "TN3" }] }],
+    });
+    expect([...thumbnails]).toEqual([["101", null]]);
+  });
+
+  it.each(["Pending", "InReview", "TemporarilyUnavailable"])("reports the %s state as pending", (state) => {
+    const thumbnails = parseGameThumbnailsResponse({
+      data: [{ universeId: 101, error: null, thumbnails: [{ targetId: 9, state, imageUrl: null }] }],
+    });
+    expect([...thumbnails]).toEqual([["101", "pending"]]);
+  });
+
+  it("reports pending when a blocked image sits next to one still processing", () => {
+    const thumbnails = parseGameThumbnailsResponse({
+      data: [{ universeId: 101, error: null, thumbnails: [
+        { targetId: 9, state: "Blocked", imageUrl: "https://t2.rbxcdn.com/UnapprovedImage" },
+        { targetId: 10, state: "Pending", imageUrl: null },
+      ] }],
+    });
+    expect([...thumbnails]).toEqual([["101", "pending"]]);
+  });
+
+  it("leaves thumbnails in an error or unknown state unknown", () => {
+    const thumbnails = parseGameThumbnailsResponse({
+      data: [
+        { universeId: 101, error: null, thumbnails: [{ targetId: 9, state: "Error", imageUrl: null }] },
+        { universeId: 102, error: null, thumbnails: [{ targetId: 10, state: "Archived", imageUrl: null }] },
+      ],
     });
     expect(thumbnails.size).toBe(0);
   });
@@ -100,14 +133,14 @@ describe("Roblox API response parsing", () => {
     expect([...thumbnails]).toEqual([["102", { imageUrl: "https://tr.rbxcdn.com/b/768/432/Image/Png", mediaId: 10 }]]);
   });
 
-  it("keeps the first completed thumbnail when earlier ones are not ready", () => {
+  it("keeps the first completed thumbnail when an earlier one is still in review", () => {
     const thumbnails = parseGameThumbnailsResponse({
       data: [{ universeId: 101, thumbnails: [
-        { targetId: 9, state: "Pending", imageUrl: null },
-        { state: "Completed", imageUrl: "https://tr.rbxcdn.com/c/768/432/Image/Png" },
+        { targetId: 9, state: "InReview", imageUrl: null },
+        { targetId: 11, state: "Completed", imageUrl: "https://tr.rbxcdn.com/c/768/432/Image/Png" },
       ] }],
     });
-    expect([...thumbnails]).toEqual([["101", { imageUrl: "https://tr.rbxcdn.com/c/768/432/Image/Png", mediaId: null }]]);
+    expect([...thumbnails]).toEqual([["101", { imageUrl: "https://tr.rbxcdn.com/c/768/432/Image/Png", mediaId: 11 }]]);
   });
 });
 

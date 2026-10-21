@@ -92,13 +92,13 @@ const thumbnailsResponseSchema = z.object({
 });
 // Items are validated one by one so that a single malformed universe cannot discard the whole batch.
 const gameThumbnailsResponseSchema = z.object({ data: z.array(z.unknown()) });
+const gameThumbnailSchema = z.object({ targetId: z.number().nullish(), state: z.string(), imageUrl: z.string().nullish() });
 const gameThumbnailItemSchema = z.object({
   universeId: z.number(),
   error: z.unknown().optional(),
-  thumbnails: z
-    .array(z.object({ targetId: z.number().nullish(), state: z.string(), imageUrl: z.string().nullish() }))
-    .nullish(),
+  thumbnails: z.array(gameThumbnailSchema).nullish(),
 });
+const pendingThumbnailStates = new Set(["Pending", "InReview", "TemporarilyUnavailable"]);
 
 export type RobloxChartGame = z.infer<typeof chartGameSchema>;
 export type RobloxSort = z.infer<typeof sortSchema>;
@@ -110,6 +110,10 @@ export interface GameThumbnail {
   // The thumbnail's targetId: the id of the game media asset shown.
   mediaId: number | null;
 }
+
+// "pending": Roblox is still processing or reviewing the image; retry later. It is an answer, not a failure.
+// null: no usable custom thumbnail (none uploaded, or blocked by moderation).
+export type GameThumbnailAnswer = GameThumbnail | null | "pending";
 
 export function parseSortsResponse(value: unknown): RobloxSort[] {
   return sortsResponseSchema.parse(value).sorts.filter((sort) => sort.contentType === "Games" || sort.games.length > 0);
@@ -155,23 +159,42 @@ export function parseSearchResponse(value: unknown): RobloxChartGame[] {
     }));
 }
 
-// A null entry means Roblox reports no custom thumbnail. A universe without an entry is unknown: its item was
-// malformed or carried an error, or no thumbnail is ready yet (pending, blocked, in review).
-export function parseGameThumbnailsResponse(value: unknown): Map<string, GameThumbnail | null> {
-  const thumbnails = new Map<string, GameThumbnail | null>();
+// A universe without an entry is unknown: its item was malformed or carried an error, or its thumbnails are in a
+// state that is neither usable, pending nor blocked (for example Error).
+export function parseGameThumbnailsResponse(value: unknown): Map<string, GameThumbnailAnswer> {
+  const answers = new Map<string, GameThumbnailAnswer>();
   for (const raw of gameThumbnailsResponseSchema.parse(value).data) {
     const item = gameThumbnailItemSchema.safeParse(raw);
     if (!item.success || item.data.error != null) continue;
-    const universeId = String(item.data.universeId);
-    const candidates = item.data.thumbnails ?? [];
-    if (candidates.length === 0) {
-      thumbnails.set(universeId, null);
-      continue;
-    }
-    const completed = candidates.find((thumbnail) => thumbnail.state === "Completed" && thumbnail.imageUrl);
-    if (completed?.imageUrl) thumbnails.set(universeId, { imageUrl: completed.imageUrl, mediaId: completed.targetId ?? null });
+    const answer = gameThumbnailAnswer(item.data.thumbnails ?? []);
+    if (answer !== undefined) answers.set(String(item.data.universeId), answer);
   }
-  return thumbnails;
+  return answers;
+}
+
+function gameThumbnailAnswer(thumbnails: z.infer<typeof gameThumbnailSchema>[]): GameThumbnailAnswer | undefined {
+  if (thumbnails.length === 0) return null;
+  const completed = thumbnails.find((thumbnail) => thumbnail.state === "Completed" && thumbnail.imageUrl);
+  if (completed?.imageUrl) return { imageUrl: completed.imageUrl, mediaId: completed.targetId ?? null };
+  if (thumbnails.some((thumbnail) => pendingThumbnailStates.has(thumbnail.state))) return "pending";
+  if (thumbnails.every((thumbnail) => thumbnail.state === "Blocked")) return null;
+  return undefined;
+}
+
+// Thumbnails are best-effort: a failed batch leaves its universes unknown instead of discarding the other batches.
+// Returns undefined when the request failed after its retries.
+async function fetchThumbnailBatch(url: URL, universeIds: string[], kind: "icon" | "game thumbnail"): Promise<unknown> {
+  try {
+    return await fetchJson(url.toString(), { cacheTtlMs: 60 * 60 * 1000 });
+  } catch (error) {
+    logger.warn("Thumbnail batch failed; its universes stay unknown", {
+      kind,
+      universes: universeIds.length,
+      firstUniverseId: universeIds[0],
+      error: errorMessage(error),
+    });
+    return undefined;
+  }
 }
 
 export interface RobloxApi {
@@ -182,7 +205,7 @@ export interface RobloxApi {
   searchGames(query: string): Promise<RobloxChartGame[]>;
   resolveUniverseId(placeId: string): Promise<string>;
   getThumbnails(universeIds: string[]): Promise<Map<string, string>>;
-  getGameThumbnails(universeIds: string[]): Promise<Map<string, GameThumbnail | null>>;
+  getGameThumbnails(universeIds: string[]): Promise<Map<string, GameThumbnailAnswer>>;
 }
 
 export class RobloxClient implements RobloxApi {
@@ -265,37 +288,31 @@ export class RobloxClient implements RobloxApi {
       url.searchParams.set("size", "150x150");
       url.searchParams.set("format", "Webp");
       url.searchParams.set("isCircular", "false");
-      const parsed = thumbnailsResponseSchema.parse(await fetchJson(url.toString(), { cacheTtlMs: 60 * 60 * 1000 }));
+      const response = await fetchThumbnailBatch(url, chunk, "icon");
+      if (response === undefined) continue;
+      const parsed = thumbnailsResponseSchema.parse(response);
       for (const item of parsed.data) if (item.imageUrl) thumbnails.set(String(item.targetId), item.imageUrl);
     }
     return thumbnails;
   }
 
   // Without defaults, games that have no media of their own return no thumbnail instead of a shared generic image.
-  async getGameThumbnails(universeIds: string[]): Promise<Map<string, GameThumbnail | null>> {
-    const thumbnails = new Map<string, GameThumbnail | null>();
+  // Three per universe, so an approved image is used while the first one is still in review.
+  async getGameThumbnails(universeIds: string[]): Promise<Map<string, GameThumbnailAnswer>> {
+    const answers = new Map<string, GameThumbnailAnswer>();
     for (let index = 0; index < universeIds.length; index += 50) {
       const chunk = universeIds.slice(index, index + 50);
       const url = new URL("https://thumbnails.roblox.com/v1/games/multiget/thumbnails");
       url.searchParams.set("universeIds", chunk.join(","));
-      url.searchParams.set("countPerUniverse", "1");
+      url.searchParams.set("countPerUniverse", "3");
       url.searchParams.set("defaults", "false");
       url.searchParams.set("size", "768x432");
       url.searchParams.set("format", "Png");
       url.searchParams.set("isCircular", "false");
-      let response: unknown;
-      try {
-        response = await fetchJson(url.toString(), { cacheTtlMs: 60 * 60 * 1000 });
-      } catch (error) {
-        logger.warn("Game thumbnail batch failed; its universes stay unknown", {
-          universes: chunk.length,
-          firstUniverseId: chunk[0],
-          error: errorMessage(error),
-        });
-        continue;
-      }
-      for (const [universeId, thumbnail] of parseGameThumbnailsResponse(response)) thumbnails.set(universeId, thumbnail);
+      const response = await fetchThumbnailBatch(url, chunk, "game thumbnail");
+      if (response === undefined) continue;
+      for (const [universeId, answer] of parseGameThumbnailsResponse(response)) answers.set(universeId, answer);
     }
-    return thumbnails;
+    return answers;
   }
 }

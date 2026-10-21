@@ -24,7 +24,33 @@ describe("RobloxClient.getGameThumbnails", () => {
     expect([...thumbnails]).toEqual([["51", { imageUrl: "https://tr.rbxcdn.com/d/768/432/Image/Png", mediaId: 7 }]]);
     expect(urls.map((url) => url.searchParams.get("universeIds")?.split(",").length)).toEqual([50, 1]);
     expect(urls[0].searchParams.get("defaults")).toBe("false");
+    expect(urls[0].searchParams.get("countPerUniverse")).toBe("3");
     expect(urls[0].searchParams.get("size")).toBe("768x432");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("400 Bad Request"));
+  });
+});
+
+describe("RobloxClient.getThumbnails", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    clearResponseCache();
+  });
+
+  it("keeps the other icon batches when one fails", async () => {
+    const urls: URL[] = [];
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      urls.push(new URL(String(input)));
+      if (urls.length === 1) return new Response("Bad Request", { status: 400, statusText: "Bad Request" });
+      return Response.json({ data: [{ targetId: 51, state: "Completed", imageUrl: "https://tr.rbxcdn.com/e/150/150/Image/Webp" }] });
+    }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const universeIds = Array.from({ length: 51 }, (_, index) => String(index + 1));
+
+    const icons = await new RobloxClient().getThumbnails(universeIds);
+
+    expect([...icons]).toEqual([["51", "https://tr.rbxcdn.com/e/150/150/Image/Webp"]]);
+    expect(urls.map((url) => url.searchParams.get("universeIds")?.split(",").length)).toEqual([50, 1]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("400 Bad Request"));
   });
 });
