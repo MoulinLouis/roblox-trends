@@ -1,6 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { JOB_CONFIG } from "@/lib/config";
 import { clearResponseCache } from "./http";
-import { RobloxClient } from "./roblox";
+import { RobloxClient, ROBLOX_MAXIMUM_IDS_PER_REQUEST } from "./roblox";
+
+describe("collector batch sizes", () => {
+  // A larger batch would be split into several requests: a failed later request would then lose the answers of the
+  // earlier ones for poll and votes, and thumbnails would no longer count an unanswered request as a failed batch.
+  it.each([
+    ["poll", JOB_CONFIG.poll.batchSize],
+    ["votes", JOB_CONFIG.votes.batchSize],
+    ["thumbnails", JOB_CONFIG.thumbnails.batchSize],
+  ])("fit one Roblox request for %s", (_, batchSize) => {
+    expect(batchSize).toBeLessThanOrEqual(ROBLOX_MAXIMUM_IDS_PER_REQUEST);
+  });
+});
 
 describe("RobloxClient.getGameThumbnails", () => {
   afterEach(() => {

@@ -73,6 +73,11 @@ const gameThumbnailItemSchema = z.object({
 });
 const pendingThumbnailStates = new Set(["Pending", "InReview", "TemporarilyUnavailable"]);
 
+// Universe ids per request to the Games, votes, thumbnail and icon endpoints. A longer list is split into several
+// requests; for game details and votes, a failure of a later one discards the answers of the earlier ones, so the
+// collector batches fit in one request.
+export const ROBLOX_MAXIMUM_IDS_PER_REQUEST = 50;
+
 export type RobloxChartGame = z.infer<typeof chartGameSchema>;
 
 export interface RobloxSortGame extends RobloxChartGame {
@@ -282,8 +287,8 @@ export class RobloxClient implements RobloxApi {
 
   async getGameDetails(universeIds: string[]): Promise<RobloxGameDetail[]> {
     const results: RobloxGameDetail[] = [];
-    for (let index = 0; index < universeIds.length; index += 50) {
-      const chunk = universeIds.slice(index, index + 50);
+    for (let index = 0; index < universeIds.length; index += ROBLOX_MAXIMUM_IDS_PER_REQUEST) {
+      const chunk = universeIds.slice(index, index + ROBLOX_MAXIMUM_IDS_PER_REQUEST);
       const url = new URL("https://games.roblox.com/v1/games");
       url.searchParams.set("universeIds", chunk.join(","));
       results.push(...parseGameDetailsResponse(await fetchJson(url.toString(), { cacheTtlMs: 2 * 60 * 1000 })));
@@ -293,8 +298,8 @@ export class RobloxClient implements RobloxApi {
 
   async getGameVotes(universeIds: string[]): Promise<RobloxGameVote[]> {
     const results: RobloxGameVote[] = [];
-    for (let index = 0; index < universeIds.length; index += 50) {
-      const chunk = universeIds.slice(index, index + 50);
+    for (let index = 0; index < universeIds.length; index += ROBLOX_MAXIMUM_IDS_PER_REQUEST) {
+      const chunk = universeIds.slice(index, index + ROBLOX_MAXIMUM_IDS_PER_REQUEST);
       const url = new URL("https://games.roblox.com/v1/games/votes");
       url.searchParams.set("universeIds", chunk.join(","));
       results.push(...parseGameVotesResponse(await fetchJson(url.toString(), { cacheTtlMs: 2 * 60 * 1000 })));
@@ -327,8 +332,8 @@ export class RobloxClient implements RobloxApi {
 
   async getThumbnails(universeIds: string[]): Promise<Map<string, string>> {
     const thumbnails = new Map<string, string>();
-    for (let index = 0; index < universeIds.length; index += 50) {
-      const chunk = universeIds.slice(index, index + 50);
+    for (let index = 0; index < universeIds.length; index += ROBLOX_MAXIMUM_IDS_PER_REQUEST) {
+      const chunk = universeIds.slice(index, index + ROBLOX_MAXIMUM_IDS_PER_REQUEST);
       const url = new URL("https://thumbnails.roblox.com/v1/games/icons");
       url.searchParams.set("universeIds", chunk.join(","));
       url.searchParams.set("returnPolicy", "PlaceHolder");
@@ -345,8 +350,8 @@ export class RobloxClient implements RobloxApi {
   // Three per universe, so an approved image is used while the first one is still in review.
   async getGameThumbnails(universeIds: string[]): Promise<Map<string, GameThumbnailAnswer>> {
     const answers = new Map<string, GameThumbnailAnswer>();
-    for (let index = 0; index < universeIds.length; index += 50) {
-      const chunk = universeIds.slice(index, index + 50);
+    for (let index = 0; index < universeIds.length; index += ROBLOX_MAXIMUM_IDS_PER_REQUEST) {
+      const chunk = universeIds.slice(index, index + ROBLOX_MAXIMUM_IDS_PER_REQUEST);
       const url = new URL("https://thumbnails.roblox.com/v1/games/multiget/thumbnails");
       url.searchParams.set("universeIds", chunk.join(","));
       url.searchParams.set("countPerUniverse", "3");
