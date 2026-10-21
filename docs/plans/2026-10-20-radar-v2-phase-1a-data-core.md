@@ -3856,6 +3856,9 @@ export async function importLegacyHistory(target: Database, source: Pool, option
   stats.discoveries = await importDiscoveries(target, source, imported);
 
   const retentionStart = await rawRetentionStart(target, options.now ?? new Date());
+  // During the parallel run both v1 and v2 collect charts hourly; a chart slot is a ranking, so v1 placements are
+  // imported only for slots before v2's first charts run, never mixed into a slot v2 collected.
+  const chartCutoff = await firstCollectedChartSlot(target);
   const range = await source.query<{ first: Date | null; last: Date | null }>(
     "select min(bucket_at) as first, max(bucket_at) as last from snapshots where bucket_at >= $1",
     [options.since ?? new Date(0)],
@@ -3874,13 +3877,22 @@ export async function importLegacyHistory(target: Database, source: Pool, option
         stats.observations += await importObservations(target, source, { from, to: window.to });
       }
       stats.votes += await importVotes(target, source, window);
-      stats.placements += await importPlacements(target, source, window);
+      stats.placements += await importPlacements(target, source, window, chartCutoff);
       logger.info("Legacy window imported", { from: window.from.toISOString() });
     }
     if (last >= retentionStart) await refreshAggregates(target, first > retentionStart ? first : retentionStart, last);
   }
   await backfillLastCcu(target);
   return stats;
+}
+
+async function firstCollectedChartSlot(target: Database): Promise<Date | null> {
+  const result = await target.execute<{ slot: string | null }>(
+    // Any run, failed ones included: charts store each sort as soon as it is read, so a failed run can hold placements.
+    sql`select min(slot) as slot from job_runs where job = 'charts'`,
+  );
+  const slot = result.rows[0]?.slot;
+  return slot ? new Date(slot) : null;
 }
 
 // Raw rows older than the retention window are dropped by TimescaleDB. Importing them again would let a
@@ -4047,11 +4059,13 @@ async function importVotes(target: Database, source: Pool, window: TimeWindow): 
   );
 }
 
-async function importPlacements(target: Database, source: Pool, window: TimeWindow): Promise<number> {
+async function importPlacements(target: Database, source: Pool, window: TimeWindow, cutoff: Date | null): Promise<number> {
+  const to = cutoff && cutoff < window.to ? cutoff : window.to;
+  if (to <= window.from) return 0;
   const result = await source.query<{ chart: string; universe_id: string; bucket_at: Date; rank: number; ccu: number; is_sponsored: boolean | null }>(
     `select chart, universe_id, bucket_at, min(rank) as rank, max(ccu) as ccu, bool_or(is_sponsored) as is_sponsored
      from snapshots where source = 'roblox-charts' and rank is not null and bucket_at >= $1 and bucket_at < $2 group by 1, 2, 3`,
-    [window.from, window.to],
+    [window.from, to],
   );
   const rows = result.rows.flatMap((row) => {
     const sortId = sortIdFromLegacyChartLabel(row.chart);
@@ -4106,7 +4120,7 @@ async function backfillLastCcu(target: Database): Promise<void> {
 import { eq, sql } from "drizzle-orm";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { chartPlacements, discoverySources, gameObservations, games, gameVersions, voteObservations } from "@/db/schema";
+import { chartPlacements, discoverySources, gameObservations, games, gameVersions, jobRuns, voteObservations } from "@/db/schema";
 import { writeGameObservations } from "@/db/observations";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/test-database";
 import { importLegacyHistory } from "./import";
@@ -4188,6 +4202,25 @@ describe.skipIf(!hasTestDatabase)("importLegacyHistory", () => {
     await importLegacyHistory(target.db, legacyPool, { now: FIXTURE_NOW });
     expect(await target.db.select().from(gameObservations)).toHaveLength(1);
     expect(await target.db.select().from(games)).toHaveLength(1);
+  });
+
+  it("imports no v1 chart placement into a slot v2 already collected", async () => {
+    const collected = await createTestDatabase();
+    try {
+      await collected.db.insert(jobRuns).values({
+        id: "00000000-0000-4000-8000-000000000001",
+        job: "charts",
+        slot: new Date("2026-09-29T20:00:00Z"),
+        status: "success",
+        startedAt: new Date("2026-09-29T20:02:00Z"),
+        stats: {},
+      });
+      const stats = await importLegacyHistory(collected.db, legacyPool, { now: FIXTURE_NOW });
+      expect(stats.placements).toBe(0);
+      expect(stats.observations).toBe(1);
+    } finally {
+      await collected.drop();
+    }
   });
 
   it("never overwrites data collected by v2", async () => {
@@ -4528,6 +4561,7 @@ Expected: CI green with every database suite executed.
 - After Task 3 review: raw retention is 365 days; aggregates keep min/avg/max CCU and visits as a maximum; `game_hourly` and `census_hourly` compress after 30 days; `chart_placements` is segmented by game. Test databases are created from `template0` (so `CREATE EXTENSION` runs as in production) and pause TimescaleDB jobs after migrating. The pool logs idle-client errors, times out connections after 10 s and sets `application_name`. Jobs and `collect` refuse to run against a database holding v1 tables. The legacy import never re-imports raw rows older than the retention window. `@next/env` is a direct dependency, pinned to the installed `next` version.
 - After Task 4 review: `executeJob` pings start before touching the database and abandons stale `running` rows; `scripts/job.ts` sends a fail ping when a job cannot even start, refuses to run without `HEALTHCHECKS_PING_BASE` when `RADAR_REQUIRE_HEALTHCHECKS=1`, sets `statement_timeout`/`lock_timeout`, and bounds the final pool close. A fully successful run also pings `radar-<job>-quality`, so sustained degradation alerts through that check's period. `latestCompletedRun` was removed; the census baseline is the newest run of the last 6 hours whose `stats.listQuality` is `success` (`latestRunWithStat`), whatever the run status. `errorMessage` includes the `cause` chain.
 - After Task 6 review: `upsertGameDetails` sorts by id, ignores stale writes (`excluded.last_observed_at >= games.last_observed_at`), keeps `first_observed_at` as the minimum, reuses stored name/description when the fingerprint is unchanged, and fills null place mappings with a targeted UPDATE; `savePlaceResolution` never erases a known mapping; `recordDiscoveries` sorts and merges duplicate windows; `games` uses fillfactor 80 for HOT updates; PostgreSQL 18 is checked before migrating and before every job. The Task 6 code blocks above predate these changes; the committed code is authoritative.
+- After Task 11: charts store each sort as soon as it is read and replace its slot atomically; an empty sort counts as failed. The legacy import stops v1 chart placements at the first v2 charts slot (`job_runs`), so a slot never mixes two rankings. Chart, search and recommendation items are validated one by one; chart ranks keep their original positions (gaps for skipped items), a game listed both sponsored and organic keeps its organic rank, a sort above `maximumMalformedShare` malformed entries counts as failed, a terminal 429 stops the charts run, and replacements of the same slot are serialized with an advisory lock. Rank-based analysis in phase 3 should still filter `is_sponsored is not true`.
 - After Task 7 review: writers return rows actually written (`rowCount`), sort by full key, and are tested against compressed chunks; charts replace a sort's whole slot atomically on retry (`replaceChartSlot`); the legacy import must keep per-statement commits (TimescaleDB limits tuples decompressed per transaction) and is tested to never overwrite v2 data.
 - After Task 6 re-review: no writer may set `games.last_observed_at` later than real time (the stale-write guard compares against it); the legacy import reads v1 games in universe-id order. Migrations 0000 and 0001 were edited in place only because no persistent v2 database existed yet; from now on, schema changes go into new migrations.
 - After Task 9 review: poll and votes gate quality on `returned / requested >= minimumReturnedShare` (no shedding allowance); `runBatchesWithDeadline` stops on a terminal 429 (`stopOn`) or after `maximumConsecutiveFailedBatches` failed batches in a row; poll's deadline is 180 s; observations are written per batch; the active set ignores `last_ccu` older than 24 h, uses `bucket >= time_bucket(1 hour, now - 24h)`, and keeps young games for 7 days after their last non-zero CCU (`games.last_active_at`, migration 0002); an empty active set degrades poll; poll stats carry HTTP metrics and `shedBelowCcu`. Task 10 (votes) must use the same stop rules (`stopOn` 429, consecutive failures) as committed in `batching.ts`. `runBatchesWithDeadline` takes an options object and `evaluateCollectionQuality` takes `{ requested, returned, minimumReturnedShare }`; the Task 9 code blocks above predate this, the committed code is authoritative. The legacy import also backfills `last_active_at`. On a fresh database, poll reports degraded until census has promoted games.
