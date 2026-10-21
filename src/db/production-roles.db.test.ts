@@ -37,9 +37,14 @@ describe.skipIf(!hasTestDatabase)("production roles", () => {
   });
 
   afterAll(async () => {
-    await owner?.pool.end();
-    await analysis?.pool.end();
-    await runAdminQuery(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+    try {
+      await owner?.pool.end();
+      await analysis?.pool.end();
+      await runAdminQuery(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+    } finally {
+      // The roles outlive the test database: a local run must not leave known passwords on the developer's cluster.
+      await runAdminQuery("ALTER ROLE radar PASSWORD NULL; ALTER ROLE radar_analysis PASSWORD NULL");
+    }
   });
 
   it("migrates as the non-superuser owner", async () => {
