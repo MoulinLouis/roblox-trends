@@ -106,16 +106,25 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
       }
 
       const universes = await unpromotedUniverses(db, eligibleIds);
-      const promotion = await promoteUniverses(
-        db,
-        dependencies.roblox,
-        universes.map((universeId) => ({ universeId, source: "rolimons" as const, detail: "" })),
-        now,
-      );
+      let promoted = 0;
+      let promotionError: string | undefined;
+      try {
+        const promotion = await promoteUniverses(
+          db,
+          dependencies.roblox,
+          universes.map((universeId) => ({ universeId, source: "rolimons" as const, detail: "" })),
+          now,
+        );
+        promoted = promotion.promoted;
+      } catch (error) {
+        // The list and the resolutions are already stored, and the next run requests these universes again.
+        promotionError = errorMessage(error);
+        logger.error("Promotion failed; retrying next run", { universes: universes.length, error: promotionError });
+      }
       // No attempted place got an answer: the resolution API is failing, which a successful status would hide.
       const resolutionStalled = resolutionFailures > 0 && resolved + unresolvable === 0;
       return {
-        status: listQuality === "degraded" || resolutionStalled ? "degraded" : "success",
+        status: listQuality === "degraded" || resolutionStalled || promotionError !== undefined ? "degraded" : "success",
         stats: {
           listed: listed.length,
           rejected,
@@ -126,7 +135,9 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
           unresolvable,
           resolutionFailures,
           deferred,
-          promoted: promotion.promoted,
+          promotionRequested: universes.length,
+          promoted,
+          ...(promotionError === undefined ? {} : { promotionError }),
         },
       };
     },

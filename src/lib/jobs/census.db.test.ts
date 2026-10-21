@@ -104,6 +104,7 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
       unresolvable: 2,
       resolutionFailures: 0,
       deferred: 0,
+      promotionRequested: 1,
       promoted: 1,
     });
   });
@@ -186,5 +187,27 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
     expect(await executeJob(job, database.db, now)).toBe("success");
     expect(requested).toEqual(["1", "2"]);
     expect(await lastRunStats()).toMatchObject({ resolved: 1, resolutionFailures: 1, deferred: 1 });
+  });
+
+  it("keeps the census and reports the error when promotion fails", async () => {
+    const job = censusJob([place(1, 500), ...filler()], {
+      roblox: {
+        ...roblox,
+        getGameDetails: async () => {
+          throw new HttpError(503, "Service Unavailable", "https://games.roblox.com/v1/games");
+        },
+      },
+    });
+
+    expect(await executeJob(job, database.db, now)).toBe("degraded");
+    expect(await database.db.select().from(censusObservations)).toHaveLength(config.minimumListed + 1);
+    expect((await placeRow(1)).universeId).toBe(1_001);
+    expect(await database.db.select().from(games)).toEqual([]);
+    expect(await lastRunStats()).toMatchObject({
+      listQuality: "success",
+      promotionRequested: 1,
+      promoted: 0,
+      promotionError: expect.stringContaining("503"),
+    });
   });
 });
