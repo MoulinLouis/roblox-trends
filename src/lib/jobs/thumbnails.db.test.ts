@@ -14,6 +14,7 @@ type Roblox = ThumbnailsDependencies["roblox"];
 const { batchSize, deadlineMs, maximumConsecutiveFailedBatches } = JOB_CONFIG.thumbnails;
 
 const iconsFor: Roblox["getThumbnails"] = async (ids) => new Map(ids.map((id) => [id, `https://tr.rbxcdn.com/icon-${id}`]));
+const noIcons: Roblox["getThumbnails"] = async () => new Map();
 
 function image(name: string, mediaId: number): GameThumbnail {
   return { imageUrl: `https://tr.rbxcdn.com/${name}/Image`, mediaId };
@@ -23,8 +24,8 @@ function answersFrom(thumbnails: Record<string, GameThumbnailAnswer>, ids: strin
   return new Map(ids.filter((id) => id in thumbnails).map((id) => [id, thumbnails[id]]));
 }
 
-function job(thumbnails: Record<string, GameThumbnailAnswer>) {
-  return createThumbnailsJob({ roblox: { getGameThumbnails: async (ids) => answersFrom(thumbnails, ids), getThumbnails: iconsFor } });
+function job(thumbnails: Record<string, GameThumbnailAnswer>, getThumbnails = iconsFor) {
+  return createThumbnailsJob({ roblox: { getGameThumbnails: async (ids) => answersFrom(thumbnails, ids), getThumbnails } });
 }
 
 describe.skipIf(!hasTestDatabase)("thumbnails job", () => {
@@ -102,12 +103,13 @@ describe.skipIf(!hasTestDatabase)("thumbnails job", () => {
     expect(await thumbnailVersions(1)).toHaveLength(2);
   });
 
-  it("keeps the previous thumbnail on an empty answer and keeps a pending game due", async () => {
-    const status = await polledRun("2026-10-23T18:00:00Z", job({ "1": null, "2": "pending", "3": null, "4": "pending" }));
+  it("keeps the previous thumbnail and icon on empty answers and keeps a pending game due", async () => {
+    const status = await polledRun("2026-10-23T18:00:00Z", job({ "1": null, "2": "pending", "3": null, "4": "pending" }, noIcons));
     expect(status).toBe("success");
     expect(await game(1)).toMatchObject({
       thumbnailUrl: "https://tr.rbxcdn.com/c/Image",
       thumbnailKey: "media:202",
+      iconUrl: "https://tr.rbxcdn.com/icon-1",
       thumbnailsCheckedAt: new Date("2026-10-23T18:00:00Z"),
     });
     expect(await thumbnailVersions(1)).toHaveLength(2);

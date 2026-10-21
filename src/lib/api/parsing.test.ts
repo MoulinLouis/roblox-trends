@@ -251,6 +251,18 @@ describe("Roblox API response parsing", () => {
     expect([...thumbnails]).toEqual([["101", { imageUrl: "https://tr.rbxcdn.com/c/768/432/Image/Png", mediaId: 11 }]]);
   });
 
+  it("keeps completed icons only: the placeholder policy fills other states with a generic image", () => {
+    const icons = parseGameIconsResponse({
+      data: [
+        { targetId: 101, state: "Completed", imageUrl: "https://tr.rbxcdn.com/a/150/150/Image/Webp", version: "TN3" },
+        { targetId: 102, state: "Pending", imageUrl: "https://t1.rbxcdn.com/PlaceholderImage" },
+        { targetId: 103, state: "Blocked", imageUrl: "https://t2.rbxcdn.com/UnapprovedImage" },
+        { targetId: 104, state: "Completed", imageUrl: null },
+      ],
+    });
+    expect([...icons]).toEqual([["101", "https://tr.rbxcdn.com/a/150/150/Image/Webp"]]);
+  });
+
   it("skips a malformed icon item without dropping the others", () => {
     const icons = parseGameIconsResponse({
       data: [

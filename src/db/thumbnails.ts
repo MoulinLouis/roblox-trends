@@ -8,7 +8,7 @@ export interface ThumbnailResult {
   universeId: number;
   // undefined: Roblox gave no answer for this game.
   answer: GameThumbnailAnswer | undefined;
-  // undefined: no icon was returned; the stored icon is kept.
+  // undefined: no completed icon was returned; the stored icon is kept.
   iconUrl: string | undefined;
 }
 

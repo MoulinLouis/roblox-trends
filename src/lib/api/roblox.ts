@@ -200,11 +200,12 @@ export function parseGameThumbnailsResponse(value: unknown): Map<string, GameThu
   return answers;
 }
 
+// Only a completed icon is the game's own: the placeholder return policy fills the other states with a generic image.
 export function parseGameIconsResponse(value: unknown): Map<string, string> {
   const icons = new Map<string, string>();
   for (const raw of thumbnailEnvelopeSchema.parse(value).data) {
     const item = gameIconSchema.safeParse(raw);
-    if (item.success && item.data.imageUrl) icons.set(String(item.data.targetId), item.data.imageUrl);
+    if (item.success && item.data.state === "Completed" && item.data.imageUrl) icons.set(String(item.data.targetId), item.data.imageUrl);
   }
   return icons;
 }
