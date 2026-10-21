@@ -17,14 +17,17 @@ export interface CensusDependencies {
 }
 
 export function evaluateCensusQuality(
-  listed: number,
+  list: { listed: number; rejected: number },
   previousListed: number | null,
-  limits: { maximumChange: number; minimumListed: number },
+  limits: { maximumListSizeChange: number; minimumListed: number; maximumRejectedShare: number },
 ): "success" | "degraded" {
+  const { listed, rejected } = list;
   // A list this short is truncated, with or without a baseline to compare it with.
   if (listed === 0 || listed < limits.minimumListed) return "degraded";
+  // Many malformed entries mean the format changed, even when the accepted ones still look plausible.
+  if (rejected / (listed + rejected) > limits.maximumRejectedShare) return "degraded";
   if (!previousListed) return "success";
-  return Math.abs(listed - previousListed) / previousListed > limits.maximumChange ? "degraded" : "success";
+  return Math.abs(listed - previousListed) / previousListed > limits.maximumListSizeChange ? "degraded" : "success";
 }
 
 export function selectPlacesToResolve(games: RolimonsGame[], skip: Set<number>, minimumCcu: number): RolimonsGame[] {
@@ -69,10 +72,7 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
       const baselineSince = new Date(Date.now() - config.baselineMaxAgeHours * 60 * 60 * 1000);
       const previous = await latestRunWithStat(db, "census", baselineSince, "listQuality", "success");
       const previousListed = typeof previous?.stats.listed === "number" ? previous.stats.listed : null;
-      const listQuality = evaluateCensusQuality(listed.length, previousListed, {
-        maximumChange: config.maximumListSizeChange,
-        minimumListed: config.minimumListed,
-      });
+      const listQuality = evaluateCensusQuality({ listed: listed.length, rejected }, previousListed, config);
 
       const eligibleIds = listed.filter((game) => game.ccu >= config.promotionMinimumCcu).map((game) => Number(game.placeId));
       const skip = await placesToSkip(db, eligibleIds, now, config.resolutionRetryDays);

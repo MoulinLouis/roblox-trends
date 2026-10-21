@@ -7,36 +7,49 @@ function listed(placeId: string, ccu: number): RolimonsGame {
 }
 
 describe("evaluateCensusQuality", () => {
-  const limits = { maximumChange: 0.3, minimumListed: 1_000 };
+  const limits = { maximumListSizeChange: 0.3, minimumListed: 1_000, maximumRejectedShare: 0.05 };
+
+  function list(listed: number, rejected = 0) {
+    return { listed, rejected };
+  }
 
   it("accepts the first run", () => {
-    expect(evaluateCensusQuality(7_800, null, limits)).toBe("success");
+    expect(evaluateCensusQuality(list(7_800), null, limits)).toBe("success");
   });
 
   it("accepts normal variation", () => {
-    expect(evaluateCensusQuality(7_000, 7_800, limits)).toBe("success");
+    expect(evaluateCensusQuality(list(7_000), 7_800, limits)).toBe("success");
   });
 
   it("accepts a change of exactly the maximum", () => {
-    expect(evaluateCensusQuality(7_000, 10_000, limits)).toBe("success");
-    expect(evaluateCensusQuality(13_000, 10_000, limits)).toBe("success");
+    expect(evaluateCensusQuality(list(7_000), 10_000, limits)).toBe("success");
+    expect(evaluateCensusQuality(list(13_000), 10_000, limits)).toBe("success");
   });
 
   it("flags a sudden drop", () => {
-    expect(evaluateCensusQuality(4_000, 7_800, limits)).toBe("degraded");
+    expect(evaluateCensusQuality(list(4_000), 7_800, limits)).toBe("degraded");
   });
 
   it("flags a sudden growth", () => {
-    expect(evaluateCensusQuality(11_000, 8_000, limits)).toBe("degraded");
+    expect(evaluateCensusQuality(list(11_000), 8_000, limits)).toBe("degraded");
   });
 
   it("flags an empty list", () => {
-    expect(evaluateCensusQuality(0, null, limits)).toBe("degraded");
+    expect(evaluateCensusQuality(list(0), null, limits)).toBe("degraded");
   });
 
   it("flags a list below the minimum even without a baseline", () => {
-    expect(evaluateCensusQuality(999, null, limits)).toBe("degraded");
-    expect(evaluateCensusQuality(999, 1_000, limits)).toBe("degraded");
+    expect(evaluateCensusQuality(list(999), null, limits)).toBe("degraded");
+    expect(evaluateCensusQuality(list(999), 1_000, limits)).toBe("degraded");
+  });
+
+  it("accepts rejected entries up to the maximum share", () => {
+    expect(evaluateCensusQuality(list(9_500, 500), null, limits)).toBe("success");
+  });
+
+  it("flags a list with a larger share of rejected entries, even when its size is stable", () => {
+    expect(evaluateCensusQuality(list(9_000, 1_000), null, limits)).toBe("degraded");
+    expect(evaluateCensusQuality(list(9_000, 1_000), 9_000, limits)).toBe("degraded");
   });
 });
 

@@ -55,6 +55,8 @@ export const JOB_CONFIG = {
     maximumListSizeChange: 0.3,
     // A shorter list is truncated even without a baseline; Rolimon's lists about 7,800 places.
     minimumListed: 1_000,
+    // A larger share of malformed entries means Rolimon's changed its format.
+    maximumRejectedShare: 0.05,
     baselineMaxAgeHours: 6,
     // Fewer failures with nothing resolved are one bad place, not an outage of the resolution API.
     stalledResolutionFailures: 3,
