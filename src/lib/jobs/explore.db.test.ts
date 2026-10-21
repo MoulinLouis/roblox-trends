@@ -199,30 +199,32 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
     expect((await lastRun()).stats).toMatchObject({ recommendation: { requests: 2, failures: 1, emptyResponses: 1 } });
   });
 
-  it("stops recommendations after a rate limit that outlasted the retries and skips promotion", async () => {
+  it("stops recommendations after a rate limit that outlasted the retries and records only known games", async () => {
     await risingGame(1, "Steal An Egg", 5_000);
     await risingGame(4, "Egg Obby", 4_000);
     await risingGame(5, "Egg Farm", 3_000);
     const getRecommendations = vi.fn<Roblox["getRecommendations"]>(async () => {
       throw new HttpError(429, "Too Many Requests", "https://games.roblox.com/v1/games/recommendations/game/1");
     });
-    const searchGames = vi.fn<Roblox["searchGames"]>(async () => [listed(9, 800)]);
+    const searchGames = vi.fn<Roblox["searchGames"]>(async () => [listed(4, 4_000), listed(9, 800)]);
     const details = vi.fn(getGameDetails);
     const job = exploreJob({ getRecommendations, searchGames, getGameDetails: details });
     expect(await executeJob(job, database.db, now)).toBe("degraded");
     expect(getRecommendations.mock.calls).toEqual([["1", 20]]);
-    // Search is a separate endpoint, so it still runs; the Games API shares the rate-limited host, so it is not called.
+    // Search is a separate endpoint, so it still runs. The Games API shares the rate-limited host, so it is not called:
+    // the search still records game 4, already tracked, and game 9 waits for a later run.
     expect(searchGames.mock.calls).toEqual([["egg"]]);
     expect(details).not.toHaveBeenCalled();
-    expect(await discoveries()).toEqual([]);
+    expect(await discoveries()).toEqual([[4, "search", "egg"]]);
     expect((await lastRun()).stats).toMatchObject({
       seeds: 3,
       terms: ["egg"],
       recommendation: { requests: 1, failures: 1, skippedRequests: 2, rateLimited: true },
       search: { requests: 1, failures: 0, rateLimited: false },
       rateLimited: true,
-      promotionRequested: 1,
+      promotionRequested: 2,
       promoted: 0,
+      discoveries: 1,
       promotionSkipped: "rateLimited",
     });
   });
@@ -260,6 +262,7 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
     expect((await lastRun()).stats).toMatchObject({
       promotionRequested: 2,
       promoted: 0,
+      discoveries: 1,
       promotionError: new PromotionApiError(unavailable).message,
     });
   });

@@ -164,23 +164,24 @@ export function createExploreJob(dependencies: ExploreDependencies): JobDefiniti
       const search = await exploreEndpoint("search", terms, config.minimumDiscoveryCcu, (term) => dependencies.roblox.searchGames(term));
       const candidates = [...recommendation.candidates, ...search.candidates];
       const rateLimited = recommendation.rateLimited || search.rateLimited;
+      // The Games API shares the recommendations host: after a rate limit there, only known games are recorded, and
+      // the next run finds the unknown ones again.
+      const promotionSkipped = recommendation.rateLimited ? ("rateLimited" as const) : undefined;
+      if (promotionSkipped) logger.warn("Exploration promotion skipped: the Games API host is rate limited", { candidates: candidates.length });
       let promoted = 0;
       let discoveries = 0;
       let promotionError: string | undefined;
-      let promotionSkipped: "rateLimited" | undefined;
-      if (recommendation.rateLimited) {
-        // The Games API shares the recommendations host, which is still rate limited; the next run finds these again.
-        promotionSkipped = "rateLimited";
-        logger.warn("Exploration promotion skipped: the Games API host is rate limited", { candidates: candidates.length });
-      } else {
-        try {
-          ({ promoted, discoveries } = await promoteUniverses(db, dependencies.roblox, candidates, now, { recordKnown: true }));
-        } catch (error) {
-          // Only a Games API failure is tolerated; a database error fails the run. The message already includes the cause.
-          if (!(error instanceof PromotionApiError)) throw error;
-          promotionError = error.message;
-          logger.error("Exploration promotion failed; retrying next run", { error: promotionError });
-        }
+      try {
+        ({ promoted, discoveries } = await promoteUniverses(db, dependencies.roblox, candidates, now, {
+          recordKnown: true,
+          skipApi: promotionSkipped !== undefined,
+        }));
+      } catch (error) {
+        // Only a Games API failure is tolerated; a database error fails the run. The message already includes the cause.
+        if (!(error instanceof PromotionApiError)) throw error;
+        promotionError = error.message;
+        discoveries = error.recordedDiscoveries;
+        logger.error("Exploration promotion failed; retrying next run", { error: promotionError });
       }
       const degraded =
         endpointFailed(recommendation) || endpointFailed(search) || rateLimited || promotionError !== undefined || promotionSkipped !== undefined;
