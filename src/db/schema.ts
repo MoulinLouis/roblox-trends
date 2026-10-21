@@ -163,6 +163,10 @@ export const gameDailyLegacy = pgTable(
     ccuPeak: integer("ccu_peak").notNull(),
     visits: id64("visits").notNull(),
     favorites: id64("favorites").notNull(),
+    // Kept from v1 as is: null where v1 had no reading.
+    upVotes: integer("up_votes"),
+    downVotes: integer("down_votes"),
+    bestRank: integer("best_rank"),
   },
   (table) => [primaryKey({ columns: [table.universeId, table.day] })],
 );
