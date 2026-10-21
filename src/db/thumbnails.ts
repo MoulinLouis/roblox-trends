@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, lte, or, sql } from "drizzle-orm";
 import type { GameThumbnail, GameThumbnailAnswer } from "@/lib/api/roblox";
 import { urlFingerprint } from "@/lib/fingerprint";
 import type { Database } from "./client";
@@ -46,15 +46,19 @@ export async function selectGamesNeedingThumbnails(
 // - null (no usable custom thumbnail): the game is marked checked and its previous thumbnail is kept on purpose, so a
 //   transient empty answer neither erases history nor records a fake change;
 // - a thumbnail: stored, with a version when its key differs from the stored one.
-// The stored key is read under the row lock (PostgreSQL 18 RETURNING old.*), not when the games were selected, so two
-// overlapping runs record a change once.
+// The stored key is read under the row lock (PostgreSQL 18 RETURNING old.*), not when the games were selected, and a
+// run older than the check that last wrote a game leaves it alone, so overlapping runs neither record a change twice
+// nor bring back an image that a newer run already replaced.
 export async function saveThumbnails(db: Database, results: ThumbnailResult[], checkedAt: Date): Promise<{ changed: number }> {
   // Universe-id order, like upsertGameDetails, so concurrent writers to games never deadlock.
   const ordered = [...results].sort((left, right) => left.universeId - right.universeId);
   return db.transaction(async (transaction) => {
     const versions: (typeof gameVersions.$inferInsert)[] = [];
     for (const { universeId, answer, iconUrl } of ordered) {
-      const target = eq(games.universeId, universeId);
+      const target = and(
+        eq(games.universeId, universeId),
+        or(isNull(games.thumbnailsCheckedAt), lte(games.thumbnailsCheckedAt, checkedAt)),
+      );
       const iconUpdate = iconUrl ? { iconUrl } : {};
       if (answer === undefined || answer === "pending" || answer === "error") {
         if (iconUrl) await transaction.update(games).set(iconUpdate).where(target);

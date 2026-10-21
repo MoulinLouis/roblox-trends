@@ -125,25 +125,45 @@ describe.skipIf(!hasTestDatabase)("thumbnails job", () => {
     expect(run.error).toContain("answered for none of 4 games");
   });
 
-  it("records an image change once when two runs overlap", async () => {
+  it("records a change once when a newer run saves after an older one", async () => {
     const answers = { "1": image("d", 303) };
-    // The outer run selects its games, then the inner run saves the same change before the outer run saves it.
-    const outer = createThumbnailsJob({
+    // The newer run selects its games, then the older one saves the same change before the newer one saves it.
+    const newer = createThumbnailsJob({
       roblox: {
         getGameThumbnails: async (ids) => {
-          await executeJob(job(answers), database.db, new Date("2026-10-25T20:01:00Z"));
+          await executeJob(job(answers), database.db, new Date("2026-10-25T20:00:00Z"));
           return answersFrom(answers, ids);
         },
         getThumbnails: iconsFor,
       },
     });
-    await polledRun("2026-10-25T20:00:00Z", outer);
-    expect((await game(1)).thumbnailKey).toBe("media:303");
+    await polledRun("2026-10-25T20:01:00Z", newer);
+    expect(await game(1)).toMatchObject({ thumbnailKey: "media:303", thumbnailsCheckedAt: new Date("2026-10-25T20:01:00Z") });
     expect(await thumbnailVersions(1)).toMatchObject([
       { rawFingerprint: "media:101" },
       { rawFingerprint: "media:202" },
-      { rawFingerprint: "media:303", observedAt: new Date("2026-10-25T20:01:00Z") },
+      { rawFingerprint: "media:303", observedAt: new Date("2026-10-25T20:00:00Z") },
     ]);
+  });
+
+  it("does not let an older run overwrite a newer one", async () => {
+    // The older run saw the image from before the change; the newer run, which saves first, saw the new one.
+    const older = createThumbnailsJob({
+      roblox: {
+        getGameThumbnails: async (ids) => {
+          await executeJob(job({ "1": image("e", 404) }), database.db, new Date("2026-10-26T21:01:00Z"));
+          return answersFrom({ "1": image("d", 303) }, ids);
+        },
+        getThumbnails: iconsFor,
+      },
+    });
+    await polledRun("2026-10-26T21:00:00Z", older);
+    expect(await game(1)).toMatchObject({
+      thumbnailUrl: "https://tr.rbxcdn.com/e/Image",
+      thumbnailKey: "media:404",
+      thumbnailsCheckedAt: new Date("2026-10-26T21:01:00Z"),
+    });
+    expect((await thumbnailVersions(1)).map((version) => version.rawFingerprint)).toEqual(["media:101", "media:202", "media:303", "media:404"]);
   });
 });
 
