@@ -144,6 +144,7 @@ describe("unit references", () => {
       }
     } else {
       expect(path).toMatch(/^ops\/bin\/[\w-]+\.sh$/);
+      expect(existsSync(new URL(path, repository)), path).toBe(true);
     }
   });
 });

@@ -39,6 +39,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: shellcheck --severity=warning ops/bin/*.sh
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test
