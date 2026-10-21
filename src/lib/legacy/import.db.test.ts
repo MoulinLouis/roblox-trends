@@ -37,19 +37,20 @@ const LEGACY_SCHEMA = `
 
 // One game with two hourly buckets on two UTC days (players and a chart placement, then an empty reading), plus:
 // - a game whose creator id is not a number, with rows in every table, none of which may be imported;
-// - three history rows, of which the second only marks a publish (v1's fingerprint included the update time);
+// - four history rows: A, A again (only a publish: v1's fingerprint included the update time), B, then A back;
 // - a placement on a chart label v2 does not know;
 // - a reading whose visits v2 cannot store.
 const LEGACY_ROWS = `
   insert into games values
-    ('10765298801', '115530770000806', '+1 Stone Skipping', 'Skip stones faster', '1', 'Meow Labs', 'Group',
+    ('10765298801', '115530770000806', '+1 Stone Skipping', 'Skip stones', '1', 'Meow Labs', 'Group',
       '2026-09-04T22:00:00Z', '2026-10-01T00:00:00Z', '2026-09-28T22:00:00Z', '2026-10-01T10:00:00Z', 'https://tr.rbxcdn.com/icon', 'Simulation'),
     ('20000000002', '20000000003', 'Broken', '', 'n/a', 'Nobody', 'User',
       '2026-09-04T22:00:00Z', '2026-10-01T00:00:00Z', '2026-09-28T22:00:00Z', '2026-10-01T10:00:00Z', null, null);
   insert into game_metadata_history (universe_id, fingerprint, name, normalized_title, description, game_updated_at, observed_at) values
     ('10765298801', 'v1', '+1 Stone Skipping', '+1 Stone Skipping', 'Skip stones', '2026-09-29T12:00:00Z', '2026-09-29T15:09:16Z'),
     ('10765298801', 'v2', '+1 Stone Skipping', '+1 Stone Skipping', 'Skip stones', '2026-09-30T09:00:00Z', '2026-09-30T10:00:00Z'),
-    ('10765298801', 'v3', '+1 Stone Skipping', '+1 Stone Skipping', 'Skip stones faster', '2026-10-01T00:00:00Z', '2026-10-01T09:00:00Z'),
+    ('10765298801', 'v3', '+1 Stone Skipping', '+1 Stone Skipping', 'Skip stones faster', '2026-09-30T19:00:00Z', '2026-09-30T20:00:00Z'),
+    ('10765298801', 'v4', '+1 Stone Skipping', '+1 Stone Skipping', 'Skip stones', '2026-10-01T00:00:00Z', '2026-10-01T09:00:00Z'),
     ('20000000002', 'b1', 'Broken', 'Broken', '', '2026-09-29T12:00:00Z', '2026-09-29T15:00:00Z');
   insert into snapshots (universe_id, collected_at, bucket_at, ccu, visits, favorites, up_votes, down_votes, is_sponsored, chart, rank, source) values
     ('10765298801', '2026-09-29T20:02:00Z', '2026-09-29T20:00:00Z', 13000, 5000000, 9000, 900, 100, false, 'Top Trending', 4, 'roblox-charts'),
@@ -132,7 +133,7 @@ describe.skipIf(!hasTestDatabase)("importLegacyHistory", () => {
     const stats = await importLegacyHistory(target.db, legacyPool, { now: FIXTURE_NOW });
     expect(stats).toEqual({
       games: 1,
-      versions: 2,
+      versions: 3,
       observations: 2,
       votes: 2,
       placements: 1,
@@ -183,9 +184,11 @@ describe.skipIf(!hasTestDatabase)("importLegacyHistory", () => {
       .from(gameVersions)
       .where(eq(gameVersions.universeId, UNIVERSE_ID))
       .orderBy(asc(gameVersions.observedAt));
+    // The publish is dropped; the revert to A is a version of its own.
     expect(versions.map((version) => [version.description, version.observedAt.toISOString()])).toEqual([
       ["Skip stones", "2026-09-29T15:09:16.000Z"],
-      ["Skip stones faster", "2026-10-01T09:00:00.000Z"],
+      ["Skip stones faster", "2026-09-30T20:00:00.000Z"],
+      ["Skip stones", "2026-10-01T09:00:00.000Z"],
     ]);
 
     expect(await target.db.select().from(gameDailyLegacy)).toEqual([
@@ -210,7 +213,7 @@ describe.skipIf(!hasTestDatabase)("importLegacyHistory", () => {
     expect(await target.db.select().from(voteObservations)).toHaveLength(2);
     expect(await target.db.select().from(chartPlacements)).toHaveLength(1);
     expect(await target.db.select().from(discoverySources)).toHaveLength(2);
-    expect(await target.db.select().from(gameVersions)).toHaveLength(2);
+    expect(await target.db.select().from(gameVersions)).toHaveLength(3);
     expect(await target.db.select().from(gameDailyLegacy)).toHaveLength(1);
     expect(await target.db.select().from(games)).toHaveLength(1);
   });
