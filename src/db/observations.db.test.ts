@@ -148,6 +148,46 @@ describe.skipIf(!hasTestDatabase)("observation writers", () => {
     expect(first.ccu).toBe(0);
   });
 
+  it("writes into a compressed chunk", async () => {
+    const old = new Date("2026-09-01T00:00:00Z");
+    const oldNextSlot = new Date("2026-09-01T00:05:00Z");
+    await writeGameObservations(database.db, [{ universeId: 40, observedAt: old, ccu: 100, visits: 10, favorites: 1 }]);
+    // Only the 2026-09-01 chunk: the 2026-10-20 chunk of the other tests stays uncompressed.
+    const compressed = await database.db.execute(
+      sql`select compress_chunk(c) from show_chunks('game_observations', older_than => '2026-09-02'::timestamptz) c`,
+    );
+    expect(compressed.rows).toHaveLength(1);
+    const chunks = await database.db.execute<{ compressed: boolean }>(
+      sql`select is_compressed as compressed from timescaledb_information.chunks
+          where hypertable_name = 'game_observations' and range_start = '2026-09-01'::timestamptz`,
+    );
+    expect(chunks.rows).toEqual([{ compressed: true }]);
+    const stored = () =>
+      database.db
+        .select()
+        .from(gameObservations)
+        .where(between(gameObservations.universeId, 40, 41))
+        .orderBy(gameObservations.universeId);
+
+    const legacy = { ccu: 1, visits: 1, favorites: 1, source: "legacy" as const };
+    const kept = await writeGameObservations(
+      database.db,
+      [
+        { universeId: 40, observedAt: old, ...legacy },
+        { universeId: 41, observedAt: oldNextSlot, ...legacy },
+      ],
+      "keep",
+    );
+    expect(kept).toBe(1);
+    expect(await stored()).toEqual([
+      { universeId: 40, observedAt: old, ccu: 100, visits: 10, favorites: 1, source: "poll" },
+      { universeId: 41, observedAt: oldNextSlot, ccu: 1, visits: 1, favorites: 1, source: "legacy" },
+    ]);
+
+    expect(await writeGameObservations(database.db, [{ universeId: 40, observedAt: old, ccu: 200, visits: 20, favorites: 2 }])).toBe(1);
+    expect((await stored())[0]).toEqual({ universeId: 40, observedAt: old, ccu: 200, visits: 20, favorites: 2, source: "poll" });
+  });
+
   it("locks game observations in key order", async () => {
     const row = (universeId: number, observedAt: Date) => ({ universeId, observedAt, ccu: 1, visits: 1, favorites: 1 });
     const locked = await rowsLockedBeforeTheFirst(
