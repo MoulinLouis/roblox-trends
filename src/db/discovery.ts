@@ -13,7 +13,8 @@ export interface DiscoveryRecord {
 }
 
 export async function recordDiscoveries(db: Database, records: DiscoveryRecord[]): Promise<number> {
-  const unique = uniqueBy(records, (record) => `${record.universeId}:${record.source}:${record.detail}`);
+  // Rows are locked in key order, so concurrent jobs recording the same discoveries cannot deadlock.
+  const unique = uniqueBy(records, (record) => `${record.universeId}:${record.source}:${record.detail}`).sort(compareKeys);
   for (const part of chunk(unique, 1_000)) {
     await db
       .insert(discoverySources)
@@ -27,4 +28,14 @@ export async function recordDiscoveries(db: Database, records: DiscoveryRecord[]
       });
   }
   return unique.length;
+}
+
+function compareKeys(left: DiscoveryRecord, right: DiscoveryRecord): number {
+  return left.universeId - right.universeId || compareText(left.source, right.source) || compareText(left.detail, right.detail);
+}
+
+// Code-unit order: any fixed order prevents deadlocks, and it does not depend on the runtime locale.
+function compareText(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
 }

@@ -15,7 +15,9 @@ export interface GameUpsertResult {
 export async function upsertGameDetails(db: Database, details: RobloxGameDetail[], observedAt: Date): Promise<GameUpsertResult> {
   const inserted: number[] = [];
   const metadataChanged: number[] = [];
-  for (const part of chunk(uniqueBy(details, (detail) => detail.id), CHUNK_SIZE)) {
+  // Rows are locked in universe-id order, so concurrent upserts of overlapping games cannot deadlock.
+  const ordered = uniqueBy(details, (detail) => detail.id).sort((left, right) => left.id - right.id);
+  for (const part of chunk(ordered, CHUNK_SIZE)) {
     // One transaction per chunk: if the version insert fails after games stored the new fingerprint,
     // a retry would see no change and the version would be lost.
     await db.transaction(async (transaction) => {

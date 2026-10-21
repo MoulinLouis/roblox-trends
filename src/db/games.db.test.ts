@@ -2,6 +2,7 @@ import { between, eq, inArray, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { rawFingerprint } from "@/lib/fingerprint";
 import { gameDetail } from "@/test/fixtures";
+import { createDatabase } from "./client";
 import { recordDiscoveries } from "./discovery";
 import { knownUniverseIds, upsertGameDetails } from "./games";
 import { assertSupportedPostgres } from "./legacy-guard";
@@ -150,6 +151,36 @@ describe.skipIf(!hasTestDatabase)("game repositories", () => {
     const retry = await upsertGameDetails(database.db, [renamed], second);
     expect(retry.metadataChanged).toEqual([20]);
     expect(await versionCount([20])).toBe(2);
+  });
+
+  it("upserts the same new games from two connections in different orders without deadlocking", async () => {
+    const details = Array.from({ length: 1_000 }, (_, index) => gameDetail(200_000 + index));
+    // The second connection receives a scrambled order. Fully reversed, the first 500-row chunks would not
+    // overlap; scrambled, both transactions would wait on each other unless rows are locked in one order.
+    const scrambled = details.map((_, index) => details[(index * 7_919 + 500) % details.length]);
+    const left = createDatabase(database.url, { maxConnections: 1, applicationName: "radar-test-left" });
+    const right = createDatabase(database.url, { maxConnections: 1, applicationName: "radar-test-right" });
+    // Each row waits 1 ms, so the two inserts overlap on the server instead of running back to back.
+    await database.db.execute(
+      sql`create function slow_game_insert() returns trigger language plpgsql as $$ begin perform pg_sleep(0.001); return new; end $$`,
+    );
+    await database.db.execute(
+      sql`create trigger slow_game_insert before insert on games for each row execute function slow_game_insert()`,
+    );
+    try {
+      await Promise.all([left.db.execute(sql`select 1`), right.db.execute(sql`select 1`)]);
+      const results = await Promise.all([
+        upsertGameDetails(left.db, details, first),
+        upsertGameDetails(right.db, scrambled, first),
+      ]);
+      expect(results[0].inserted.length + results[1].inserted.length).toBe(1_000);
+      expect(results.flatMap((result) => result.metadataChanged)).toEqual([]);
+      expect(await versionCount(details.map((detail) => detail.id))).toBe(1_000);
+    } finally {
+      await Promise.all([left.pool.end(), right.pool.end()]);
+      await database.db.execute(sql`drop trigger slow_game_insert on games`);
+      await database.db.execute(sql`drop function slow_game_insert()`);
+    }
   });
 
   it("skips resolved places and recent failures, and finds unpromoted universes", async () => {
