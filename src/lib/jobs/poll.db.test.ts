@@ -6,6 +6,7 @@ import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/tes
 import { HttpError } from "@/lib/api/http";
 import { RobloxClient } from "@/lib/api/roblox";
 import { JOB_CONFIG } from "@/lib/config";
+import { hasStat, WATCHED_STATS } from "@/lib/status-report";
 import { gameDetail } from "@/test/fixtures";
 import { createPollJob } from "./poll";
 import { executeJob } from "./runner";
@@ -70,6 +71,8 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
         http: { attempts: 1, retries: 0, rateLimitedResponses: 0 },
         shedBelowCcu: null,
       });
+      // `npm run status` prints these paths: a renamed stat must fail here rather than print a dash.
+      expect(WATCHED_STATS.poll?.values.filter((path) => !hasStat(run.stats, path))).toEqual([]);
     });
   });
 

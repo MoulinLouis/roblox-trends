@@ -10,11 +10,17 @@ export interface StatusSnapshot {
   totals: DataTotals;
 }
 
-// The measurements the design asks to watch in the first week, read from each job's latest completed run. Paths
-// follow job_runs.stats, so a line can be checked against the table directly.
-const WATCHED_STATS: Partial<Record<JobName, readonly string[]>> = {
-  census: ["listQuality", "listed", "rejected", "resolved", "deferred"],
-  poll: ["rateLimited", "http.rateLimitedResponses", "skipped", "shedBelowCcu"],
+// The stats the design asks to watch in the first week, read from each job's latest completed run. Paths follow
+// job_runs.stats; the job tests check that every `values` path exists, so a renamed stat fails a test instead of
+// printing a dash. `messages` are recorded only on a failure and get a line of their own when present.
+export const WATCHED_STATS: Partial<Record<JobName, { values: readonly string[]; messages?: readonly string[] }>> = {
+  census: {
+    // A run can be degraded while its list passed: a stalled resolution or a failed promotion explains it.
+    values: ["listQuality", "listed", "rejected", "resolved", "resolutionFailures", "deferred", "rateLimited"],
+    messages: ["promotionError"],
+  },
+  // stoppedBy tells games shed at the deadline from games skipped after a rate limit or repeated failed batches.
+  poll: { values: ["rateLimited", "stoppedBy", "http.rateLimitedResponses", "skipped", "shedBelowCcu"] },
 };
 
 // One line per error: the head says what failed, the tail holds the root cause (errorMessage appends causes last).
@@ -24,9 +30,10 @@ const errorSeparator = " … ";
 const columnGap = "  ";
 const counts = new Intl.NumberFormat("en-US");
 
-// A compact terminal view: one row per job, its watched stats and last error under it, then coverage and totals.
+// A compact terminal view: one row per job, its watched stats and last error under it, then rate limits, coverage and
+// totals.
 export function formatStatusReport({ now, windowHours, jobs, coverage, totals }: StatusSnapshot): string {
-  const header = ["job", "latest run", "last completed", "runs", "degraded", "failed"];
+  const header = ["job", "latest run", "last completed", "runs", "degraded", "failed", "rate-limited", "429s/requests"];
   const rows = jobs.map((job) => [
     job.job,
     job.latest ? `${job.latest.status} ${elapsed(now, job.latest.startedAt)} ago` : "never",
@@ -34,8 +41,10 @@ export function formatStatusReport({ now, windowHours, jobs, coverage, totals }:
     counts.format(job.recent.runs),
     counts.format(job.recent.degraded),
     counts.format(job.recent.failed),
+    job.recent.rateLimitedRuns === null ? "" : counts.format(job.recent.rateLimitedRuns),
+    job.recent.http ? `${counts.format(job.recent.http.rateLimitedResponses)}/${counts.format(job.recent.http.attempts)}` : "",
   ]);
-  const { lines, widths } = alignColumns([header, ...rows], ["left", "left", "left", "right", "right", "right"]);
+  const { lines, widths } = alignColumns([header, ...rows], ["left", "left", "left", "right", "right", "right", "right", "right"]);
   const indent = " ".repeat(widths[0] + columnGap.length);
   const table = [`Jobs (counts over the last ${windowHours} h)`, lines[0]];
   jobs.forEach((job, index) => {
@@ -43,7 +52,10 @@ export function formatStatusReport({ now, windowHours, jobs, coverage, totals }:
     const watched = WATCHED_STATS[job.job];
     if (watched && job.lastCompleted) {
       const stats = job.lastCompleted.stats;
-      table.push(indent + watched.map((path) => `${path}=${formatStat(statAt(stats, path))}`).join(" "));
+      table.push(indent + watched.values.map((path) => `${path}=${formatStat(statAt(stats, path))}`).join(" "));
+      for (const path of watched.messages ?? []) {
+        if (hasStat(stats, path)) table.push(`${indent}${path}: ${preview(formatStat(statAt(stats, path)))}`);
+      }
     }
     if (job.lastError) {
       table.push(`${indent}error ${elapsed(now, job.lastError.startedAt)} ago: ${preview(job.lastError.message)}`);
@@ -54,9 +66,31 @@ export function formatStatusReport({ now, windowHours, jobs, coverage, totals }:
     "",
     ...table,
     "",
+    rateLimitLine(jobs, windowHours),
     coverageLine(now, coverage, windowHours),
     totalsLine(totals, windowHours),
   ].join("\n");
+}
+
+// True when every key of the path exists, even when the value is null (shedBelowCcu is null when nothing was shed).
+export function hasStat(stats: Record<string, unknown>, path: string): boolean {
+  let value: unknown = stats;
+  for (const key of path.split(".")) {
+    if (typeof value !== "object" || value === null || !Object.hasOwn(value, key)) return false;
+    value = (value as Record<string, unknown>)[key];
+  }
+  return true;
+}
+
+// Census records no HTTP stats, and failed runs keep none: the total is a lower bound of the requests on the IP.
+function rateLimitLine(jobs: readonly JobSummary[], windowHours: number): string {
+  const http = jobs.flatMap((job) => (job.recent.http ? [job.recent.http] : []));
+  const responses = http.reduce((total, metrics) => total + metrics.rateLimitedResponses, 0);
+  const attempts = http.reduce((total, metrics) => total + metrics.attempts, 0);
+  const runs = jobs.reduce((total, job) => total + (job.recent.rateLimitedRuns ?? 0), 0);
+  const share = attempts ? `${Math.round((responses / attempts) * 10_000) / 100}%` : "n/a";
+  const requests = http.length ? `${counts.format(responses)}/${counts.format(attempts)} requests (${share})` : "no requests recorded";
+  return `429s over the last ${windowHours} h: ${requests}; ${counts.format(runs)} rate-limited run${runs === 1 ? "" : "s"}`;
 }
 
 function coverageLine(now: Date, coverage: CensusCoverage, windowHours: number): string {

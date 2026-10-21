@@ -5,7 +5,8 @@ import { STATUS_CONFIG } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
 import { formatStatusReport } from "@/lib/status-report";
 
-// The owner's health view until the dashboard's Health page: job freshness, the stats to watch, coverage and totals.
+// The owner's health view until the dashboard's Health page: job freshness, the stats to watch, 429s, coverage and
+// totals.
 let exitCode = 1;
 try {
   // Read-only and interactive: it gives up quickly rather than waiting behind a migration or a lock.

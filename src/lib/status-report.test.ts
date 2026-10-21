@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { CensusCoverage, JobSummary } from "@/db/status";
 import type { JobName } from "@/lib/jobs/types";
 import { errorMessage } from "@/lib/logger";
-import { formatStatusReport } from "./status-report";
+import { formatStatusReport, hasStat } from "./status-report";
 
 const now = new Date("2026-10-20T14:12:00Z");
 const coverage: CensusCoverage = {
@@ -14,7 +14,7 @@ const coverage: CensusCoverage = {
   withinMinutes: 15,
 };
 const totals = { games: 41_233, pollObservations: 1_012_345, censusRows: 1_123_456 };
-const noRuns = { runs: 0, degraded: 0, failed: 0 };
+const noRuns = { runs: 0, degraded: 0, failed: 0, rateLimitedRuns: null, http: null };
 
 function summary(job: JobName, overrides: Partial<JobSummary> = {}): JobSummary {
   return { job, latest: null, lastCompleted: null, recent: noRuns, lastError: null, ...overrides };
@@ -39,16 +39,26 @@ function reportLines(jobs: JobSummary[], coverageOverride: CensusCoverage = cove
 }
 
 describe("formatStatusReport", () => {
-  it("renders each job with its freshness, its watched stats and its last error, then coverage and totals", () => {
+  it("renders each job with its freshness, its watched stats and its last error, then rate limits, coverage and totals", () => {
     const jobs = [
       summary("census", {
         latest: { status: "running", startedAt: new Date("2026-10-20T14:10:00Z") },
         lastCompleted: {
           status: "degraded",
           finishedAt: new Date("2026-10-20T14:01:30Z"),
-          stats: { listed: 4_000, rejected: 12, listQuality: "success", eligible: 2_900, resolved: 0, deferred: 40 },
+          stats: {
+            listed: 4_000,
+            rejected: 12,
+            listQuality: "success",
+            eligible: 2_900,
+            resolved: 0,
+            resolutionFailures: 3,
+            deferred: 40,
+            rateLimited: false,
+            promotionError: "Game details request failed: 503 Service Unavailable",
+          },
         },
-        recent: { runs: 3, degraded: 1, failed: 0 },
+        recent: { runs: 3, degraded: 1, failed: 0, rateLimitedRuns: 0, http: null },
       }),
       summary("poll", {
         latest: { status: "failed", startedAt: new Date("2026-10-20T14:05:00Z") },
@@ -58,12 +68,13 @@ describe("formatStatusReport", () => {
           stats: {
             active: 3_600,
             rateLimited: true,
+            stoppedBy: "error",
             http: { attempts: 80, retries: 4, rateLimitedResponses: 4 },
             skipped: 600,
             shedBelowCcu: 63,
           },
         },
-        recent: { runs: 288, degraded: 3, failed: 2 },
+        recent: { runs: 288, degraded: 3, failed: 2, rateLimitedRuns: 1, http: { rateLimitedResponses: 12, attempts: 20_160 } },
         lastError: { startedAt: new Date("2026-10-20T14:05:00Z"), message: "poll exceeded 270000 ms" },
       }),
       summary("votes", {
@@ -73,7 +84,7 @@ describe("formatStatusReport", () => {
       summary("charts", {
         latest: { status: "success", startedAt: new Date("2026-10-20T13:00:00Z") },
         lastCompleted: { status: "success", finishedAt: new Date("2026-10-20T13:03:00Z"), stats: { sorts: 22 } },
-        recent: { runs: 24, degraded: 0, failed: 0 },
+        recent: { runs: 24, degraded: 0, failed: 0, rateLimitedRuns: 0, http: { rateLimitedResponses: 0, attempts: 528 } },
       }),
       summary("explore"),
     ];
@@ -83,26 +94,33 @@ describe("formatStatusReport", () => {
         "Radar status at 2026-10-20 14:12 UTC",
         "",
         "Jobs (counts over the last 24 h)",
-        "job      latest run       last completed    runs  degraded  failed",
-        "census   running 2m ago   degraded 10m ago     3         1       0",
-        "         listQuality=success listed=4000 rejected=12 resolved=0 deferred=40",
-        "poll     failed 7m ago    success 11m ago    288         3       2",
-        "         rateLimited=true http.rateLimitedResponses=4 skipped=600 shedBelowCcu=63",
+        "job      latest run       last completed    runs  degraded  failed  rate-limited  429s/requests",
+        "census   running 2m ago   degraded 10m ago     3         1       0             0",
+        "         listQuality=success listed=4000 rejected=12 resolved=0 resolutionFailures=3 deferred=40 rateLimited=false",
+        "         promotionError: Game details request failed: 503 Service Unavailable",
+        "poll     failed 7m ago    success 11m ago    288         3       2             1      12/20,160",
+        "         rateLimited=true stoppedBy=error http.rateLimitedResponses=4 skipped=600 shedBelowCcu=63",
         "         error 7m ago: poll exceeded 270000 ms",
         "votes    failed 3d ago    never                0         0       0",
         "         error 3d ago: votes went quiet",
-        "charts   success 72m ago  success 69m ago     24         0       0",
+        "charts   success 72m ago  success 69m ago     24         0       0             0          0/528",
         "explore  never            never                0         0       0",
         "",
+        "429s over the last 24 h: 12/20,688 requests (0.06%); 1 rate-limited run",
         "Coverage: 2,712/2,903 Rolimon's places at or above 100 CCU polled in the last 15 min (93.4%); complete census list 12m old",
         "Data: 41,233 games; last 24 h: 1,012,345 poll observations, 1,123,456 census rows",
       ].join("\n"),
     );
   });
 
-  it("renders null and missing watched stats as a dash", () => {
-    const lines = reportLines([completed("poll", { rateLimited: false, http: {}, skipped: 0, shedBelowCcu: null })]);
-    expect(lines).toContain("rateLimited=false http.rateLimitedResponses=- skipped=0 shedBelowCcu=-");
+  it("renders null and missing watched stats as a dash and leaves out absent messages", () => {
+    const lines = reportLines([
+      completed("poll", { rateLimited: false, stoppedBy: null, http: {}, skipped: 0, shedBelowCcu: null }),
+      completed("census", { listQuality: "success", listed: 7_800 }),
+    ]);
+    expect(lines).toContain("rateLimited=false stoppedBy=- http.rateLimitedResponses=- skipped=0 shedBelowCcu=-");
+    expect(lines).toContain("listQuality=success listed=7800 rejected=- resolved=- resolutionFailures=- deferred=- rateLimited=-");
+    expect(lines.some((line) => line.startsWith("promotionError"))).toBe(false);
   });
 
   it("keeps a short error whole on one line", () => {
@@ -133,15 +151,25 @@ describe("formatStatusReport", () => {
     expect(lines.find((line) => line.startsWith("votes"))?.split(/\s{2,}/)).toEqual(["votes", "success 0m ago", "success 23h ago", "0", "0", "0"]);
   });
 
-  it("reports the absence of a complete census list", () => {
-    expect(reportLines([], { ...coverage, slot: null, listed: 0, tracked: 0 })).toContain(
-      "Coverage: no complete census list in the last 24 h",
-    );
+  it("reports the absence of a complete census list and of recorded requests", () => {
+    const lines = reportLines([], { ...coverage, slot: null, listed: 0, tracked: 0 });
+    expect(lines).toContain("Coverage: no complete census list in the last 24 h");
+    expect(lines).toContain("429s over the last 24 h: no requests recorded; 0 rate-limited runs");
   });
 
   it("labels coverage with the criteria it was counted with", () => {
     expect(reportLines([], { ...coverage, listed: 0, tracked: 0, minimumCcu: 50, withinMinutes: 10 })).toContain(
       "Coverage: 0/0 Rolimon's places at or above 50 CCU polled in the last 10 min (n/a); complete census list 12m old",
     );
+  });
+});
+
+describe("hasStat", () => {
+  it("finds a nested key even when its value is null", () => {
+    expect(hasStat({ http: { rateLimitedResponses: 0 }, shedBelowCcu: null }, "http.rateLimitedResponses")).toBe(true);
+    expect(hasStat({ shedBelowCcu: null }, "shedBelowCcu")).toBe(true);
+    expect(hasStat({ http: {} }, "http.rateLimitedResponses")).toBe(false);
+    expect(hasStat({ http: null }, "http.rateLimitedResponses")).toBe(false);
+    expect(hasStat({}, "stoppedBy")).toBe(false);
   });
 });

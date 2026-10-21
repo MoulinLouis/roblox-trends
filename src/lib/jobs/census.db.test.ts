@@ -8,6 +8,7 @@ import { HttpError } from "@/lib/api/http";
 import type { RolimonsGame } from "@/lib/api/rolimons";
 import { JOB_CONFIG } from "@/lib/config";
 import type { JobStatus } from "@/lib/jobs/types";
+import { hasStat, WATCHED_STATS } from "@/lib/status-report";
 import { gameDetail } from "@/test/fixtures";
 import { createCensusJob, type CensusDependencies } from "./census";
 import { executeJob } from "./runner";
@@ -111,7 +112,8 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
     expect(await database.db.select().from(discoverySources)).toEqual([
       expect.objectContaining({ universeId: 1_001, source: "rolimons", detail: "" }),
     ]);
-    expect(await lastRunStats()).toEqual({
+    const stats = await lastRunStats();
+    expect(stats).toEqual({
       listed: listed.length,
       rejected: 2,
       listQuality: "success",
@@ -124,6 +126,8 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
       promotionRequested: 1,
       promoted: 1,
     });
+    // `npm run status` prints these paths: a renamed stat must fail here rather than print a dash.
+    expect(WATCHED_STATS.census?.values.filter((path) => !hasStat(stats, path))).toEqual([]);
   });
 
   it("degrades a list that shrinks sharply against a recent good list", async () => {
@@ -286,12 +290,14 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
     expect(await database.db.select().from(censusObservations)).toHaveLength(config.minimumListed + 1);
     expect((await placeRow(1)).universeId).toBe(1_001);
     expect(await database.db.select().from(games)).toEqual([]);
-    expect(await lastRunStats()).toMatchObject({
+    const stats = await lastRunStats();
+    expect(stats).toMatchObject({
       listQuality: "success",
       promotionRequested: 1,
       promoted: 0,
       promotionError: expect.stringMatching(/^Game details request failed: 503/),
     });
+    expect(WATCHED_STATS.census?.messages?.filter((path) => !hasStat(stats, path))).toEqual([]);
   });
 
   it("fails the run when the database fails during promotion", async () => {

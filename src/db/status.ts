@@ -21,6 +21,9 @@ export interface JobSummary {
     runs: number;
     degraded: number;
     failed: number;
+    // Null when no run of the window reports `rateLimited` or `http`: the job does not record it.
+    rateLimitedRuns: number | null;
+    http: { rateLimitedResponses: number; attempts: number } | null;
   };
   // The most recent error of the window, or of the latest run when the job stopped running before the window.
   lastError: { startedAt: Date; message: string } | null;
@@ -56,6 +59,11 @@ export async function jobSummaries(db: Database, now: Date, windowHours: number)
     runs: number;
     degraded: number;
     failed: number;
+    rate_limit_reports: number;
+    rate_limited_runs: number;
+    http_reports: number;
+    rate_limited_responses: number;
+    attempts: number;
     error: string | null;
     error_started_at: Date | null;
   }>(sql`
@@ -73,10 +81,22 @@ export async function jobSummaries(db: Database, now: Date, windowHours: number)
       where job = j.job and status in ('success', 'degraded')
       order by started_at desc limit 1
     ) completed on true
+    -- Failed runs store no stats, so the requests and 429s of a run that failed (for example one that timed out
+    -- during a backoff) are missing: the HTTP figures are a lower bound. A stat of the wrong type counts 0.
     cross join lateral (
       select count(*)::int as runs,
         (count(*) filter (where status = 'degraded'))::int as degraded,
-        (count(*) filter (where status = 'failed'))::int as failed
+        (count(*) filter (where status = 'failed'))::int as failed,
+        (count(*) filter (where jsonb_typeof(stats #> '{rateLimited}') = 'boolean'))::int as rate_limit_reports,
+        (count(*) filter (where stats #>> '{rateLimited}' = 'true'))::int as rate_limited_runs,
+        (count(*) filter (where jsonb_typeof(stats #> '{http}') = 'object'))::int as http_reports,
+        coalesce(sum(
+          case when jsonb_typeof(stats #> '{http,rateLimitedResponses}') = 'number'
+            then (stats #>> '{http,rateLimitedResponses}')::numeric end
+        ), 0)::int as rate_limited_responses,
+        coalesce(sum(
+          case when jsonb_typeof(stats #> '{http,attempts}') = 'number' then (stats #>> '{http,attempts}')::numeric end
+        ), 0)::int as attempts
       from job_runs
       where job = j.job and started_at > ${start}
     ) recent
@@ -97,7 +117,13 @@ export async function jobSummaries(db: Database, now: Date, windowHours: number)
       row.completed_status && row.completed_finished_at
         ? { status: row.completed_status, finishedAt: new Date(row.completed_finished_at), stats: row.completed_stats ?? {} }
         : null,
-    recent: { runs: row.runs, degraded: row.degraded, failed: row.failed },
+    recent: {
+      runs: row.runs,
+      degraded: row.degraded,
+      failed: row.failed,
+      rateLimitedRuns: row.rate_limit_reports > 0 ? row.rate_limited_runs : null,
+      http: row.http_reports > 0 ? { rateLimitedResponses: row.rate_limited_responses, attempts: row.attempts } : null,
+    },
     lastError:
       row.error !== null && row.error_started_at
         ? { startedAt: new Date(row.error_started_at), message: row.error }

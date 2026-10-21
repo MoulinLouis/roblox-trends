@@ -124,7 +124,7 @@ describe.skipIf(!hasTestDatabase)("status queries", () => {
     await insertRun({ job: "poll", status: "failed", startedAt: "2026-10-20T14:05:00Z", error: "poll exceeded 270000 ms" });
     // votes: one failed run, days ago. Its error stays visible because it is the latest run.
     await insertRun({ job: "votes", status: "failed", startedAt: "2026-10-17T09:00:00Z", error: "votes went quiet" });
-    // charts: a failure exactly at the window start is outside it, like for the run counts.
+    // charts: a failure exactly at the window start is outside it, like for the run counts. Malformed HTTP stats count 0.
     await insertRun({ job: "charts", status: "failed", startedAt: windowStart, error: "at the window start" });
     await insertRun({
       job: "charts",
@@ -133,7 +133,7 @@ describe.skipIf(!hasTestDatabase)("status queries", () => {
       finishedAt: "2026-10-20T13:03:00Z",
       stats: { rateLimited: false, http: { attempts: "80", rateLimitedResponses: null } },
     });
-    // thumbnails: recovered since its failure, which stays visible within the window.
+    // thumbnails: recovered since its failure, which stays visible within the window. It reports no `rateLimited`.
     await insertRun({ job: "thumbnails", status: "failed", startedAt: "2026-10-20T12:00:00Z", error: "thumbnails failed" });
     await insertRun({
       job: "thumbnails",
@@ -186,7 +186,7 @@ describe.skipIf(!hasTestDatabase)("status queries", () => {
           finishedAt: new Date("2026-10-20T14:01:30Z"),
           stats: { listQuality: "degraded", listed: 2, rateLimited: false },
         },
-        recent: { runs: 4, degraded: 2, failed: 0 },
+        recent: { runs: 4, degraded: 2, failed: 0, rateLimitedRuns: 1, http: null },
         lastError: null,
       },
       {
@@ -197,14 +197,14 @@ describe.skipIf(!hasTestDatabase)("status queries", () => {
           finishedAt: new Date("2026-10-20T14:00:40Z"),
           stats: { rateLimited: false, stoppedBy: null, http: { attempts: 80, retries: 1, rateLimitedResponses: 1 } },
         },
-        recent: { runs: 4, degraded: 1, failed: 2 },
+        recent: { runs: 4, degraded: 1, failed: 2, rateLimitedRuns: 1, http: { rateLimitedResponses: 6, attempts: 140 } },
         lastError: { startedAt: new Date("2026-10-20T14:05:00Z"), message: "poll exceeded 270000 ms" },
       },
       {
         job: "votes",
         latest: { status: "failed", startedAt: new Date("2026-10-17T09:00:00Z") },
         lastCompleted: null,
-        recent: { runs: 0, degraded: 0, failed: 0 },
+        recent: { runs: 0, degraded: 0, failed: 0, rateLimitedRuns: null, http: null },
         lastError: { startedAt: new Date("2026-10-17T09:00:00Z"), message: "votes went quiet" },
       },
       {
@@ -215,14 +215,14 @@ describe.skipIf(!hasTestDatabase)("status queries", () => {
           finishedAt: new Date("2026-10-20T13:03:00Z"),
           stats: { rateLimited: false, http: { attempts: "80", rateLimitedResponses: null } },
         },
-        recent: { runs: 1, degraded: 0, failed: 0 },
+        recent: { runs: 1, degraded: 0, failed: 0, rateLimitedRuns: 0, http: { rateLimitedResponses: 0, attempts: 0 } },
         lastError: null,
       },
       {
         job: "explore",
         latest: null,
         lastCompleted: null,
-        recent: { runs: 0, degraded: 0, failed: 0 },
+        recent: { runs: 0, degraded: 0, failed: 0, rateLimitedRuns: null, http: null },
         lastError: null,
       },
       {
@@ -233,7 +233,7 @@ describe.skipIf(!hasTestDatabase)("status queries", () => {
           finishedAt: new Date("2026-10-20T13:35:00Z"),
           stats: { stoppedBy: null, http: { attempts: 10, retries: 0, rateLimitedResponses: 0 } },
         },
-        recent: { runs: 2, degraded: 0, failed: 1 },
+        recent: { runs: 2, degraded: 0, failed: 1, rateLimitedRuns: null, http: { rateLimitedResponses: 0, attempts: 10 } },
         lastError: { startedAt: new Date("2026-10-20T12:00:00Z"), message: "thumbnails failed" },
       },
     ]);
