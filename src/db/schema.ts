@@ -41,6 +41,8 @@ export const games = pgTable(
     contentFingerprint: text("content_fingerprint").notNull(),
     thumbnailUrl: text("thumbnail_url"),
     iconUrl: text("icon_url"),
+    // Identity of the current thumbnail: "media:<asset id>", or "url:<sha1>" when Roblox gives no asset id.
+    thumbnailKey: text("thumbnail_key"),
     thumbnailsCheckedAt: timestamptz("thumbnails_checked_at"),
   },
   (table) => [

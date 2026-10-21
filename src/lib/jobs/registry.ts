@@ -6,6 +6,7 @@ import { createChartsJob } from "./charts";
 import { createExploreJob } from "./explore";
 import { createPollJob } from "./poll";
 import type { JobDefinition } from "./runner";
+import { createThumbnailsJob } from "./thumbnails";
 import { createVotesJob } from "./votes";
 
 export function createJobs(): JobDefinition[] {
@@ -16,5 +17,6 @@ export function createJobs(): JobDefinition[] {
     createVotesJob({ roblox }),
     createChartsJob({ roblox }),
     createExploreJob({ roblox }),
+    createThumbnailsJob({ roblox }),
   ];
 }
