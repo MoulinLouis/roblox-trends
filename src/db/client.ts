@@ -65,3 +65,26 @@ export async function closeDatabase(): Promise<void> {
   if (shared) await shared.pool.end();
   shared = null;
 }
+
+// For scripts that exit right after: a query left running by a timed-out job keeps its client checked out, and
+// closing the pool waits for it. The timer stays referenced while closing is pending: if closing never settles and
+// nothing else keeps the event loop alive, Node would otherwise exit with code 13 (unsettled top-level await) before
+// the script reaches process.exit. Resolves to false when the pool was still closing after timeoutMs.
+export async function closeDatabaseWithin(timeoutMs: number, details: Record<string, unknown> = {}): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  const closed = await Promise.race([
+    closeDatabase().then(
+      () => true,
+      (error: unknown) => {
+        logger.warn("Could not close the database", { ...details, error: errorMessage(error) });
+        return true;
+      },
+    ),
+    new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    }),
+  ]);
+  clearTimeout(timer);
+  if (!closed) logger.warn(`Database connections did not close within ${timeoutMs / 1_000} s`, details);
+  return closed;
+}

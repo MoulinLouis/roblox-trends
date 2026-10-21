@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { closeDatabase, getDatabase } from "@/db/client";
+import { closeDatabaseWithin, getDatabase } from "@/db/client";
 import { assertNotLegacyDatabase, assertSupportedPostgres } from "@/db/legacy-guard";
 import { healthchecksPingBase, jobSlug, sendPing } from "@/lib/jobs/healthchecks";
 import { createJobs } from "@/lib/jobs/registry";
@@ -39,18 +39,5 @@ try {
   await sendPing(slug, "fail", randomUUID(), message);
 }
 
-// A query left running by a timed-out job keeps its client checked out, and closing the pool waits for it.
-// The timer stays referenced: if closing never settles and nothing else keeps the event loop alive, Node
-// would otherwise exit with code 13 (unsettled top-level await) before reaching process.exit below.
-const closed = await Promise.race([
-  closeDatabase().then(
-    () => true,
-    (error: unknown) => {
-      logger.warn("Could not close the database", { job: definition.name, error: errorMessage(error) });
-      return true;
-    },
-  ),
-  new Promise<false>((resolve) => setTimeout(() => resolve(false), 5_000)),
-]);
-if (!closed) logger.warn("Database connections did not close within 5 s", { job: definition.name });
+await closeDatabaseWithin(5_000, { job: definition.name });
 process.exit(exitCode);
