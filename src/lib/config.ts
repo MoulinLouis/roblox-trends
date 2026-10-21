@@ -133,4 +133,6 @@ export const ACTIVE_SET_CONFIG = {
 export const STATUS_CONFIG = {
   coverageMinimumCcu: 100,
   trackedWithinMinutes: 15,
+  // The window of the run counts, the 429 figures, the last error, the census list lookup and the data totals.
+  summaryWindowHours: 24,
 } as const;

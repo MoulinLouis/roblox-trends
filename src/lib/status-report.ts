@@ -1,9 +1,10 @@
 import type { CensusCoverage, DataTotals, JobSummary } from "@/db/status";
-import { STATUS_CONFIG } from "@/lib/config";
 import type { JobName } from "@/lib/jobs/types";
 
 export interface StatusSnapshot {
   now: Date;
+  // The window the job counts and data totals were computed over.
+  windowHours: number;
   jobs: readonly JobSummary[];
   coverage: CensusCoverage;
   totals: DataTotals;
@@ -21,19 +22,19 @@ const columnGap = "  ";
 const counts = new Intl.NumberFormat("en-US");
 
 // A compact terminal view: one row per job, its watched stats and last error under it, then coverage and totals.
-export function formatStatusReport({ now, jobs, coverage, totals }: StatusSnapshot): string {
-  const header = ["job", "latest run", "last completed", "runs 24h", "degraded 24h", "failed 24h"];
+export function formatStatusReport({ now, windowHours, jobs, coverage, totals }: StatusSnapshot): string {
+  const header = ["job", "latest run", "last completed", "runs", "degraded", "failed"];
   const rows = jobs.map((job) => [
     job.job,
     job.latest ? `${job.latest.status} ${elapsed(now, job.latest.startedAt)} ago` : "never",
     job.lastCompleted ? `${job.lastCompleted.status} ${elapsed(now, job.lastCompleted.finishedAt)} ago` : "never",
-    counts.format(job.runs24h),
-    counts.format(job.degraded24h),
-    counts.format(job.failed24h),
+    counts.format(job.recent.runs),
+    counts.format(job.recent.degraded),
+    counts.format(job.recent.failed),
   ]);
   const { lines, widths } = alignColumns([header, ...rows], ["left", "left", "left", "right", "right", "right"]);
   const indent = " ".repeat(widths[0] + columnGap.length);
-  const table = [lines[0]];
+  const table = [`Jobs (counts over the last ${windowHours} h)`, lines[0]];
   jobs.forEach((job, index) => {
     table.push(lines[index + 1]);
     const watched = WATCHED_STATS[job.job];
@@ -45,24 +46,30 @@ export function formatStatusReport({ now, jobs, coverage, totals }: StatusSnapsh
       table.push(`${indent}error ${elapsed(now, job.lastError.startedAt)} ago: ${errorPreview(job.lastError.message)}`);
     }
   });
-  return [`Radar status at ${formatTime(now)}`, "", ...table, "", coverageLine(now, coverage), totalsLine(totals)].join("\n");
+  return [
+    `Radar status at ${formatTime(now)}`,
+    "",
+    ...table,
+    "",
+    coverageLine(now, coverage, windowHours),
+    totalsLine(totals, windowHours),
+  ].join("\n");
 }
 
-function coverageLine(now: Date, coverage: CensusCoverage): string {
-  if (!coverage.slot) return "Coverage: no census list yet";
-  const { coverageMinimumCcu, trackedWithinMinutes } = STATUS_CONFIG;
+function coverageLine(now: Date, coverage: CensusCoverage, windowHours: number): string {
+  if (!coverage.slot) return `Coverage: no complete census list in the last ${windowHours} h`;
   const share = coverage.listed ? `${Math.round((coverage.tracked / coverage.listed) * 1_000) / 10}%` : "n/a";
   return (
     `Coverage: ${counts.format(coverage.tracked)}/${counts.format(coverage.listed)} Rolimon's places at or above ` +
-    `${coverageMinimumCcu} CCU polled in the last ${trackedWithinMinutes} min (${share}); ` +
-    `census list ${elapsed(now, coverage.slot)} old`
+    `${coverage.minimumCcu} CCU polled in the last ${coverage.withinMinutes} min (${share}); ` +
+    `complete census list ${elapsed(now, coverage.slot)} old`
   );
 }
 
-function totalsLine(totals: DataTotals): string {
+function totalsLine(totals: DataTotals, windowHours: number): string {
   return (
-    `Data: ${counts.format(totals.games)} games; last 24 h: ${counts.format(totals.observations24h)} game observations, ` +
-    `${counts.format(totals.censusRows24h)} census rows`
+    `Data: ${counts.format(totals.games)} games; last ${windowHours} h: ${counts.format(totals.pollObservations)} poll ` +
+    `observations, ${counts.format(totals.censusRows)} census rows`
   );
 }
 

@@ -13,12 +13,17 @@ try {
   await assertNotLegacyDatabase(database);
   await assertSupportedPostgres(database);
   const now = new Date();
+  const windowHours = STATUS_CONFIG.summaryWindowHours;
   const [jobs, coverage, totals] = await Promise.all([
-    jobSummaries(database, now),
-    censusCoverage(database, now, STATUS_CONFIG.coverageMinimumCcu, STATUS_CONFIG.trackedWithinMinutes),
-    dataTotals(database, now),
+    jobSummaries(database, now, windowHours),
+    censusCoverage(database, now, {
+      minimumCcu: STATUS_CONFIG.coverageMinimumCcu,
+      withinMinutes: STATUS_CONFIG.trackedWithinMinutes,
+      listWithinHours: windowHours,
+    }),
+    dataTotals(database, now, windowHours),
   ]);
-  console.log(formatStatusReport({ now, jobs, coverage, totals }));
+  console.log(formatStatusReport({ now, windowHours, jobs, coverage, totals }));
   exitCode = 0;
 } catch (error) {
   logger.error("Status could not be read", { error: errorMessage(error) });
