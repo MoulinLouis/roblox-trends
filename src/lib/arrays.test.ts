@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chunk, uniqueBy } from "./arrays";
+import { chunk, compareText, uniqueBy } from "./arrays";
 
 describe("chunk", () => {
   it("splits items into fixed-size groups", () => {
@@ -35,5 +35,12 @@ describe("uniqueBy", () => {
       { chart: "top", game: 2, rank: 4 },
       { chart: "new", game: 1, rank: 1 },
     ]);
+  });
+});
+
+describe("compareText", () => {
+  it("orders strings by code unit, independently of the locale", () => {
+    expect(["b", "a", "B", "é", "e"].sort(compareText)).toEqual(["B", "a", "b", "e", "é"]);
+    expect(compareText("top-trending", "top-trending")).toBe(0);
   });
 });

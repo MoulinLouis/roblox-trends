@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { chunk } from "@/lib/arrays";
+import { chunk, compareText } from "@/lib/arrays";
 import type { DiscoverySource } from "@/lib/jobs/types";
 import type { Database } from "./client";
 import { discoverySources } from "./schema";
@@ -52,10 +52,4 @@ function mergeByKey(records: DiscoveryRecord[]): DiscoveryRecord[] {
 
 function compareKeys(left: DiscoveryRecord, right: DiscoveryRecord): number {
   return left.universeId - right.universeId || compareText(left.source, right.source) || compareText(left.detail, right.detail);
-}
-
-// Code-unit order: any fixed order prevents deadlocks, and it does not depend on the runtime locale.
-function compareText(left: string, right: string): number {
-  if (left === right) return 0;
-  return left < right ? -1 : 1;
 }

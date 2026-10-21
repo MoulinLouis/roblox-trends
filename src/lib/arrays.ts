@@ -17,3 +17,10 @@ export function uniqueBy<T>(items: readonly T[], key: (item: T) => string | numb
   }
   return unique;
 }
+
+// Code-unit order: any fixed order of keys prevents deadlocks between writers, and it does not depend on the
+// runtime locale, unlike localeCompare.
+export function compareText(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
