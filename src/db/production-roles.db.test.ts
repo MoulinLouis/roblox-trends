@@ -70,6 +70,25 @@ describe.skipIf(!hasTestDatabase)("production roles", () => {
     ).rejects.toMatchObject({ cause: { message: expect.stringMatching(/read-only transaction/) } });
   });
 
+  // default_transaction_read_only is only a session default that SET TRANSACTION READ WRITE lifts: privileges are what
+  // keeps the analysis role from writing.
+  it("grants the analysis role SELECT and no write privilege on every public table and view", async () => {
+    const result = await owner.db.execute<{ relation: string; privileges: string[] }>(sql`
+      select relation.relname as relation,
+        array(
+          select privilege from unnest(array['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE']) as privilege
+          where has_table_privilege('radar_analysis', relation.oid, privilege)
+        ) as privileges
+      from pg_class relation join pg_namespace namespace on namespace.oid = relation.relnamespace
+      where namespace.nspname = 'public' and relation.relkind in ('r', 'p', 'v', 'm', 'f')
+      order by relation.relname
+    `);
+    expect(result.rows.map((row) => row.relation)).toEqual(
+      expect.arrayContaining(["games", "game_observations", "game_hourly", "game_daily_all"]),
+    );
+    expect(result.rows.filter((row) => row.privileges.join() !== "SELECT")).toEqual([]);
+  });
+
   it("bounds the number and the duration of analysis sessions", async () => {
     const limit = await owner.db.execute<{ connections: number }>(
       sql`select rolconnlimit as connections from pg_roles where rolname = 'radar_analysis'`,
