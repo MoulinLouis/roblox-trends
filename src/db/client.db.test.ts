@@ -35,12 +35,14 @@ describe.skipIf(!hasTestDatabase)("createDatabase", () => {
   });
 
   it("sends session settings when the connection opens", async () => {
-    const { db, pool } = createDatabase(database.url, { settings: { work_mem: "8MB", search_path: "pg_catalog, public" } });
+    // A custom (dotted) setting keeps its value verbatim, so the server must have parsed every escaped character.
+    const probe = "a b\tc\nd\\e";
+    const { db, pool } = createDatabase(database.url, { settings: { work_mem: "8MB", "radar.probe": probe } });
     try {
-      const result = await db.execute<{ workMem: string; searchPath: string }>(
-        sql`select current_setting('work_mem') as "workMem", current_setting('search_path') as "searchPath"`,
+      const result = await db.execute<{ workMem: string; probe: string }>(
+        sql`select current_setting('work_mem') as "workMem", current_setting('radar.probe') as probe`,
       );
-      expect(result.rows[0]).toEqual({ workMem: "8MB", searchPath: "pg_catalog, public" });
+      expect(result.rows[0]).toEqual({ workMem: "8MB", probe });
     } finally {
       await pool.end();
     }

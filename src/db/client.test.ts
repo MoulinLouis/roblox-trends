@@ -35,6 +35,17 @@ describe("getDatabase", () => {
 });
 
 describe("createDatabase", () => {
+  it("escapes every whitespace character and backslash in setting values", async () => {
+    const { pool } = createDatabase("postgresql://radar@127.0.0.1:1/radar", {
+      settings: { search_path: "a b\tc\nd\\e", work_mem: "8MB" },
+    });
+    try {
+      expect(pool.options.options).toBe("-c search_path=a\\ b\\\tc\\\nd\\\\e -c work_mem=8MB");
+    } finally {
+      await pool.end();
+    }
+  });
+
   it("rejects a setting name that could smuggle in other options", () => {
     expect(() => createDatabase("postgresql://radar@127.0.0.1:1/radar", { settings: { "work_mem=1MB -c role": "x" } })).toThrow(
       /Invalid session setting name/,

@@ -39,12 +39,14 @@ export function createDatabase(connectionString: string, options: DatabaseOption
   return { db: drizzle(pool, { schema }), pool };
 }
 
-// Names are plain (possibly dotted) identifiers; spaces and backslashes in values are escaped as libpq expects.
+// The server parses this string itself (pg_split_opts): it splits it on any whitespace (isspace, so tabs and newlines
+// too) and a backslash makes the next character literal. Names are plain, possibly dotted, identifiers; every
+// whitespace character and backslash in a value is escaped.
 function startupOptions(settings: Readonly<Record<string, string>>): string {
   return Object.entries(settings)
     .map(([name, value]) => {
       if (!/^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?$/i.test(name)) throw new Error(`Invalid session setting name: ${name}`);
-      return `-c ${name}=${value.replace(/[\\ ]/g, "\\$&")}`;
+      return `-c ${name}=${value.replace(/[\\\s]/g, "\\$&")}`;
     })
     .join(" ");
 }
