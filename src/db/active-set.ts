@@ -5,9 +5,13 @@ import type { Database } from "./client";
 export interface ActiveUniverse {
   universeId: number;
   priority: number;
+  // When the game's details were last stored (games.last_ccu_at, set by poll and by every promotion); null when they
+  // never were. Poll rotates its tail on it.
+  lastDetailsAt: Date | null;
 }
 
-// Games worth polling, highest priority first so deadline shedding drops the quietest.
+// Games worth polling, highest priority first: poll's hot set is the head of this order, and votes' deadline shedding
+// drops the quietest.
 // A game's priority is its best CCU evidence from the lookback windows: its hourly peaks, its census count and the
 // CCU stored by its latest poll or promotion. The stored CCU counts only while it is recent: a game that Roblox stops
 // returning (deleted, or malformed in every response) would otherwise stay active forever and degrade every run.
@@ -15,7 +19,7 @@ export interface ActiveUniverse {
 export async function selectActiveUniverses(db: Database, now: Date): Promise<ActiveUniverse[]> {
   const config = ACTIVE_SET_CONFIG;
   const at = now.toISOString();
-  const result = await db.execute<{ universe_id: string; priority: number }>(sql`
+  const result = await db.execute<{ universe_id: string; priority: number; last_details_at: Date | string | null }>(sql`
     with recent as (
       select universe_id, max(ccu_max) as peak
       from game_hourly
@@ -36,6 +40,7 @@ export async function selectActiveUniverses(db: Database, now: Date): Promise<Ac
         g.universe_id,
         g.roblox_created_at,
         g.last_active_at,
+        g.last_ccu_at,
         greatest(
           coalesce(r.peak, 0),
           coalesce(c.ccu, 0),
@@ -48,7 +53,7 @@ export async function selectActiveUniverses(db: Database, now: Date): Promise<Ac
       left join recent r on r.universe_id = g.universe_id
       left join census_now c on c.universe_id = g.universe_id
     )
-    select universe_id, priority::int as priority
+    select universe_id, priority::int as priority, last_ccu_at as last_details_at
     from candidates
     where priority >= ${config.minimumCcu}
        or (
@@ -57,5 +62,9 @@ export async function selectActiveUniverses(db: Database, now: Date): Promise<Ac
        )
     order by priority desc, universe_id
   `);
-  return result.rows.map((row) => ({ universeId: Number(row.universe_id), priority: Number(row.priority) }));
+  return result.rows.map((row) => ({
+    universeId: Number(row.universe_id),
+    priority: Number(row.priority),
+    lastDetailsAt: row.last_details_at === null ? null : new Date(row.last_details_at),
+  }));
 }

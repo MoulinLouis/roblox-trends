@@ -1,10 +1,11 @@
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { gameDetail } from "@/test/fixtures";
 import { selectActiveUniverses } from "./active-set";
 import { upsertGameDetails } from "./games";
 import { writeCensusObservations, writeGameObservations } from "./observations";
 import { savePlaceResolution } from "./places";
+import { games } from "./schema";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "./test-database";
 
 describe.skipIf(!hasTestDatabase)("selectActiveUniverses", () => {
@@ -48,23 +49,28 @@ describe.skipIf(!hasTestDatabase)("selectActiveUniverses", () => {
       { placeId: 1212, observedAt: new Date("2026-10-20T13:50:00Z"), ccu: 49 },
       { placeId: 555, observedAt: new Date("2026-10-20T13:00:00Z"), ccu: 500 },
     ]);
+    // Details ages for the poll rotation, without changing priorities: game 2's priority comes from its hourly peak
+    // and game 3's from the census, so neither depends on its stored CCU.
+    await database.db.update(games).set({ lastCcuAt: new Date("2026-10-20T09:00:00Z") }).where(eq(games.universeId, 2));
+    await database.db.update(games).set({ lastCcuAt: null }).where(eq(games.universeId, 3));
   });
 
   afterAll(async () => {
     await database?.drop();
   });
 
+  // lastDetailsAt is when the game's details were last stored (games.last_ccu_at); null when they never were.
   const expected = [
-    { universeId: 1, priority: 5_000 },
-    { universeId: 2, priority: 800 },
-    { universeId: 10, priority: 300 },
-    { universeId: 3, priority: 120 },
-    { universeId: 11, priority: 50 },
-    { universeId: 4, priority: 10 },
-    { universeId: 9, priority: 0 },
+    { universeId: 1, priority: 5_000, lastDetailsAt: now },
+    { universeId: 2, priority: 800, lastDetailsAt: new Date("2026-10-20T09:00:00Z") },
+    { universeId: 10, priority: 300, lastDetailsAt: now },
+    { universeId: 3, priority: 120, lastDetailsAt: null },
+    { universeId: 11, priority: 50, lastDetailsAt: now },
+    { universeId: 4, priority: 10, lastDetailsAt: now },
+    { universeId: 9, priority: 0, lastDetailsAt: now },
   ];
 
-  it("selects busy, recently busy, census-visible and young active games by priority", async () => {
+  it("selects busy, recently busy, census-visible and young active games by priority, with their details age", async () => {
     expect(await selectActiveUniverses(database.db, now)).toEqual(expected);
   });
 

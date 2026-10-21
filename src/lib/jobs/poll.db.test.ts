@@ -1,4 +1,4 @@
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertGameDetails } from "@/db/games";
 import { gameObservations, games, jobRuns } from "@/db/schema";
@@ -67,10 +67,34 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
       }
       const [run] = await database.db.select().from(jobRuns).orderBy(desc(jobRuns.startedAt)).limit(1);
       expect(run.stats).toMatchObject({
+        active: 2,
+        hot: 2,
+        tail: 0,
+        tailRequested: 0,
+        requested: 2,
         returned: 2,
         http: { attempts: 1, retries: 0, rateLimitedResponses: 0, endpointIntervalMs: { "games.roblox.com/v1/games": 7_000 } },
         shedBelowCcu: null,
+        oldestTailDetailsMinutes: null,
       });
+      expect(Object.keys(run.stats).sort()).toEqual([
+        "active",
+        "attempted",
+        "failedBatches",
+        "hot",
+        "http",
+        "metadataChanges",
+        "newGames",
+        "oldestTailDetailsMinutes",
+        "rateLimited",
+        "requested",
+        "returned",
+        "shedBelowCcu",
+        "skipped",
+        "stoppedBy",
+        "tail",
+        "tailRequested",
+      ]);
       // `npm run status` prints these paths: a renamed stat must fail here rather than print a dash.
       expect(WATCHED_STATS.poll?.values.filter((path) => !hasStat(run.stats, path))).toEqual([]);
     });
@@ -104,6 +128,42 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
       const [run] = await database.db.select().from(jobRuns);
       // Universe 151, the busiest game left out, has 2,000 - 151 players.
       expect(run.stats).toMatchObject({ active: 60, attempted: 50, returned: 50, failedBatches: 0, skipped: 10, shedBelowCcu: 1_849 });
+    });
+
+    it("sheds the tail behind the hot set and reports the first game left out in the request order", async () => {
+      // Universe 160, the quietest, has the oldest details, so it heads the tail.
+      await database.db
+        .update(games)
+        .set({ lastCcuAt: new Date(now.getTime() - 30 * 60_000) })
+        .where(eq(games.universeId, 160));
+      let clockMs = 0;
+      const job = createPollJob({
+        roblox: {
+          getGameDetails: async (ids) => {
+            clockMs += JOB_CONFIG.poll.deadlineMs + 1;
+            return ids.map((id) => gameDetail(Number(id), { playing: 2_000 - Number(id) }));
+          },
+        },
+        clock: () => clockMs,
+        hotUniverses: JOB_CONFIG.poll.batchSize,
+        tailUniversesPerRun: 10,
+      });
+      expect(await executeJob(job, database.db, now)).toBe("degraded");
+      expect(await observedUniverses()).toEqual(firstBatch);
+      const [run] = await database.db.select().from(jobRuns);
+      expect(run.stats).toMatchObject({
+        active: 60,
+        hot: 50,
+        tail: 10,
+        tailRequested: 10,
+        requested: 60,
+        attempted: 50,
+        returned: 50,
+        skipped: 10,
+        stoppedBy: "deadline",
+        shedBelowCcu: 1_840,
+        oldestTailDetailsMinutes: 30,
+      });
     });
 
     it("keeps going after a failed batch and stores the others", async () => {
@@ -190,6 +250,107 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
       expect(await executeJob({ ...job, timeoutMs: 1_000 }, database.db, now)).toBe("failed");
       expect(calls).toBe(2);
       expect(await observedUniverses()).toEqual(firstBatch);
+    });
+  });
+
+  describe("with more active games than one run requests", () => {
+    // Two hot games and four tail games, two of which are requested per run. Priorities fall with the universe id.
+    const playing = new Map([
+      [201, 900],
+      [202, 800],
+      [203, 700],
+      [204, 600],
+      [205, 500],
+      [206, 400],
+    ]);
+    const minutesBefore = (minutes: number) => new Date(now.getTime() - minutes * 60_000);
+    let requests: number[][];
+
+    function rotatingJob() {
+      return createPollJob({
+        roblox: {
+          getGameDetails: async (ids) => {
+            requests.push(ids.map(Number));
+            return ids.map((id) => gameDetail(Number(id), { playing: playing.get(Number(id)) }));
+          },
+        },
+        hotUniverses: 2,
+        tailUniversesPerRun: 2,
+      });
+    }
+
+    async function setDetailsAt(universeId: number, at: Date | null): Promise<void> {
+      await database.db.update(games).set({ lastCcuAt: at }).where(eq(games.universeId, universeId));
+    }
+
+    beforeEach(async () => {
+      requests = [];
+      await database.db.delete(gameObservations);
+      await database.db.delete(jobRuns);
+      await database.db.delete(games);
+      await upsertGameDetails(
+        database.db,
+        [...playing].map(([id, ccu]) => gameDetail(id, { playing: ccu })),
+        now,
+      );
+      // The hot games hold the freshest details. Game 205 has none yet: it stays active as a young game with players.
+      await setDetailsAt(201, minutesBefore(1));
+      await setDetailsAt(202, minutesBefore(1));
+      await setDetailsAt(203, minutesBefore(30));
+      await setDetailsAt(204, minutesBefore(50));
+      await setDetailsAt(205, null);
+      await setDetailsAt(206, minutesBefore(10));
+    });
+
+    it("requests the hot set, then the tail games with the oldest details, never-detailed games first", async () => {
+      expect(await executeJob(rotatingJob(), database.db, now)).toBe("success");
+      expect(requests).toEqual([[201, 202, 205, 204]]);
+      expect(await observedUniverses()).toEqual([201, 202, 204, 205]);
+    });
+
+    it("counts only the requested games in the quality gate and reports the plan", async () => {
+      // Four of six active games returned is below the 95% share, but every requested game came back.
+      expect(await executeJob(rotatingJob(), database.db, now)).toBe("success");
+      const [run] = await database.db.select().from(jobRuns);
+      expect(run.stats).toMatchObject({
+        active: 6,
+        hot: 2,
+        tail: 4,
+        tailRequested: 2,
+        requested: 4,
+        attempted: 4,
+        returned: 4,
+        skipped: 0,
+        stoppedBy: null,
+        shedBelowCcu: null,
+        // Game 205 has no details to date; game 204's are 50 minutes old.
+        oldestTailDetailsMinutes: 50,
+      });
+    });
+
+    it("degrades a run when a requested game is missing", async () => {
+      const job = createPollJob({
+        roblox: { getGameDetails: async (ids) => ids.slice(1).map((id) => gameDetail(Number(id), { playing: playing.get(Number(id)) })) },
+        hotUniverses: 2,
+        tailUniversesPerRun: 2,
+      });
+      expect(await executeJob(job, database.db, now)).toBe("degraded");
+    });
+
+    it("moves the tail games it polled behind the others in the next runs", async () => {
+      const later = (minutes: number) => new Date(now.getTime() + minutes * 60_000);
+      expect(await executeJob(rotatingJob(), database.db, now)).toBe("success");
+      // 204 and 205 now hold this run's details: 203 (30 minutes before the first run) and 206 (10) come first.
+      expect(await executeJob(rotatingJob(), database.db, later(10))).toBe("success");
+      // 204 and 205 now hold the oldest details again, from the first run; the lower universe id breaks the tie.
+      expect(await executeJob(rotatingJob(), database.db, later(20))).toBe("success");
+      expect(requests).toEqual([
+        [201, 202, 205, 204],
+        [201, 202, 203, 206],
+        [201, 202, 204, 205],
+      ]);
+      const runs = await database.db.select().from(jobRuns).orderBy(jobRuns.startedAt);
+      expect(runs.map((run) => run.stats.oldestTailDetailsMinutes)).toEqual([50, 40, 20]);
     });
   });
 

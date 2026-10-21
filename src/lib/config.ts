@@ -79,11 +79,21 @@ export const JOB_CONFIG = {
     // (EXTERNAL_REQUEST_CONFIG.minimumIntervalByEndpoint) the active set no longer fits a 5-minute slot.
     intervalMinutes: 10,
     timeoutMs: 9 * 60_000,
-    // 450 s at one request every 7 s is about 64 requests of 50 games, about 3,200 games; the lowest-priority games
-    // beyond that are shed. Leaves 90 s before the timeout for a batch that started just before the deadline and is
-    // still in its retries.
+    // 450 s at one request every 7 s is about 64 requests of 50 games, about 3,200 games; the games planned beyond
+    // that are shed, last in the request order first. Leaves 90 s before the timeout for a batch that started just
+    // before the deadline and is still in its retries.
     deadlineMs: 7.5 * 60_000,
     batchSize: 50,
+    // The active set (about 4,300 games on 2026-10-21, growing toward 5,000 as census promotes every place at or above
+    // 100 CCU) no longer fits one run. Each run requests the hot set, the first hotUniverses of the active set in
+    // priority order, then at most tailUniversesPerRun of the other games, the tail, whose details are the oldest
+    // (never stored first). The hot set goes first, so the deadline sheds tail games before any hot game.
+    // Hot 2,000 = 40 requests, plus tail 1,150 = 23 requests, gives 63 requests × 7 s ≈ 441 s, within the 450 s
+    // deadline. With about 2,300–3,000 tail games, each is refreshed every 20–30 minutes; census still counts their CCU
+    // every 10 minutes.
+    hotUniverses: 2_000,
+    tailUniversesPerRun: 1_150,
+    // Of the games requested (the hot set and the tail slice), not of the whole active set.
     minimumReturnedShare: 0.95,
     maximumConsecutiveFailedBatches: 3,
   },
@@ -171,10 +181,12 @@ export const ACTIVE_SET_CONFIG = {
 
 export const STATUS_CONFIG = {
   coverageMinimumCcu: 100,
-  // Observations carry their slot, the run's start floored to 10 minutes, and a game late in the poll order is read
-  // up to the 7.5-minute deadline into the run: its next observation arrives up to about 17–18 minutes after the slot
-  // of its last one, so a shorter window would count it as untracked.
-  trackedWithinMinutes: 20,
+  // Observations carry their slot, the run's start floored to 10 minutes, and a game is read up to the 7.5-minute
+  // deadline into its run. Poll reads a tail game every 2–3 runs (JOB_CONFIG.poll.tailUniversesPerRun), so its next
+  // observation arrives up to about 38 minutes after the slot of its last one, and a 20-minute window would count a
+  // healthy rotation as untracked. 60 minutes also covers a tail of up to about 5,700 games (5 runs) or a run that
+  // shed its tail.
+  trackedWithinMinutes: 60,
   // The window of the run counts, the 429 figures, the last error, the census list lookup and the data totals.
   summaryWindowHours: 24,
 } as const;

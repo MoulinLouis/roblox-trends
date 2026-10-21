@@ -21,8 +21,21 @@ export const WATCHED_STATS: Partial<Record<JobName, { values: readonly string[];
     messages: ["listError", "promotionError"],
   },
   // stoppedBy tells games shed at the deadline from games skipped after a rate limit or repeated failed batches;
-  // http.endpointIntervalMs shows the game details spacing the run ended with, above its configured value after a 429.
-  poll: { values: ["rateLimited", "stoppedBy", "http.rateLimitedResponses", "skipped", "shedBelowCcu", "http.endpointIntervalMs"] },
+  // requested is the hot set plus the tail slice the run planned, and skipped the part of it left out;
+  // oldestTailDetailsMinutes shows how far behind the tail rotation runs; http.endpointIntervalMs shows the game
+  // details spacing the run ended with, above its configured value after a 429.
+  poll: {
+    values: [
+      "rateLimited",
+      "stoppedBy",
+      "http.rateLimitedResponses",
+      "requested",
+      "skipped",
+      "shedBelowCcu",
+      "oldestTailDetailsMinutes",
+      "http.endpointIntervalMs",
+    ],
+  },
 };
 
 // Every line fits a 120-column terminal: watched stats wrap, and a message preview takes the room its line leaves.
