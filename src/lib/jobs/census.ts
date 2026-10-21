@@ -101,6 +101,12 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
             break;
           }
           logger.warn("Place resolution failed; retrying next run", { placeId, error });
+          // Repeated failures without a single answer point to an outage: the remaining places wait for the next run.
+          if (resolved + unresolvable === 0 && resolutionFailures >= config.stalledResolutionFailures) {
+            deferred = candidates.length - index - 1;
+            logger.warn("Place resolution keeps failing; deferring the remaining places", { deferred });
+            break;
+          }
           continue;
         }
         await savePlaceResolution(db, { placeId, ...resolution, resolvedAt: now });

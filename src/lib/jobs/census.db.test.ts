@@ -190,16 +190,43 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
     expect(await lastRunStats()).toMatchObject({ resolved: 0, resolutionFailures: 1 });
   });
 
-  it("degrades the run when several attempted resolutions fail and none succeeds", async () => {
-    const failing = Array.from({ length: config.stalledResolutionFailures }, (_, index) => place(index + 1, 500));
-    const job = censusJob([...failing, ...filler()], { roblox: failingRoblox });
+  it("stops resolving and degrades the run after repeated failures with no answer", async () => {
+    const requested: string[] = [];
+    const failing = Array.from({ length: config.stalledResolutionFailures + 2 }, (_, index) => place(index + 1, 500 - index));
+    const job = censusJob([...failing, ...filler()], {
+      roblox: {
+        ...roblox,
+        resolveUniverseId: async (placeId) => {
+          requested.push(placeId);
+          throw new Error("socket hang up");
+        },
+      },
+    });
 
     expect(await executeJob(job, database.db, now)).toBe("degraded");
+    expect(requested).toHaveLength(config.stalledResolutionFailures);
     expect(await lastRunStats()).toMatchObject({
       listQuality: "success",
       resolved: 0,
       resolutionFailures: config.stalledResolutionFailures,
+      deferred: 2,
     });
+  });
+
+  it("keeps resolving after an answer even when the next places fail", async () => {
+    const candidates = Array.from({ length: config.stalledResolutionFailures + 2 }, (_, index) => place(index + 1, 500 - index));
+    const job = censusJob([...candidates, ...filler()], {
+      roblox: {
+        ...roblox,
+        resolveUniverseId: async (placeId) => {
+          if (placeId !== "1") throw new Error("socket hang up");
+          return "1001";
+        },
+      },
+    });
+
+    expect(await executeJob(job, database.db, now)).toBe("success");
+    expect(await lastRunStats()).toMatchObject({ resolved: 1, resolutionFailures: candidates.length - 1, deferred: 0 });
   });
 
   it("stops resolving for the run on a terminal rate limit", async () => {
