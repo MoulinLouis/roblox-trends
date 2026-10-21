@@ -127,7 +127,7 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
       rateLimited: false,
       promotionRequested: 1,
       promoted: 1,
-      http: { attempts: 0, retries: 0, rateLimitedResponses: 0 },
+      http: { attempts: 0, retries: 0, rateLimitedResponses: 0, endpointIntervalMs: {} },
     });
     // `npm run status` prints these paths: a renamed stat must fail here rather than print a dash.
     expect(WATCHED_STATS.census?.values.filter((path) => !hasStat(stats, path))).toEqual([]);
@@ -327,7 +327,7 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
       rateLimited: false,
       promotionRequested: 0,
       promoted: 0,
-      http: { attempts: 0, retries: 0, rateLimitedResponses: 0 },
+      http: { attempts: 0, retries: 0, rateLimitedResponses: 0, endpointIntervalMs: {} },
       listError: "503 Service Unavailable for api.rolimons.com",
     });
     expect(WATCHED_STATS.census?.values.filter((path) => !hasStat(stats, path))).toEqual([]);

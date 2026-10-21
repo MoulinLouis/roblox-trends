@@ -4,6 +4,10 @@ import { errorMessage, logger } from "@/lib/logger";
 const responseCache = new Map<string, { expiresAt: number; value: unknown }>();
 const nextRequestAtByHost = new Map<string, number>();
 const blockedUntilByHost = new Map<string, number>();
+// Paced endpoints (EXTERNAL_REQUEST_CONFIG.minimumIntervalByEndpoint): when the last request started, and the spacing
+// of those a 429 slowed down. The next request waits for the current spacing, so a slowdown applies from the next one.
+const lastRequestAtByEndpoint = new Map<string, number>();
+const slowedIntervalByEndpoint = new Map<string, number>();
 const requestMetrics = {
   attempts: 0,
   retries: 0,
@@ -14,6 +18,8 @@ export interface HttpRequestMetrics {
   attempts: number;
   retries: number;
   rateLimitedResponses: number;
+  // The current spacing of each paced endpoint this process requested, by endpoint key.
+  endpointIntervalMs: Record<string, number>;
 }
 
 interface FetchJsonOptions {
@@ -41,12 +47,13 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
   const retries = options.retries ?? EXTERNAL_REQUEST_CONFIG.defaultRetries;
   const cacheTtlMs = options.cacheTtlMs ?? 5 * 60 * 1000;
   const minimumIntervalMs = options.minimumIntervalMs ?? minimumIntervalForHost(host);
+  const endpoint = pacedEndpoint(parsedUrl);
   const cached = responseCache.get(url);
   if (cached && cached.expiresAt > Date.now()) return cached.value as T;
 
   let lastError: unknown;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
-    await waitForRequestWindow(host, minimumIntervalMs);
+    await waitForRequestWindow(host, minimumIntervalMs, endpoint);
     requestMetrics.attempts += 1;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -58,7 +65,10 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
       applyRateLimitHeaders(host, response.headers);
       if (!response.ok) {
         const error = new HttpError(response.status, response.statusText, url);
-        if (response.status === 429) requestMetrics.rateLimitedResponses += 1;
+        if (response.status === 429) {
+          requestMetrics.rateLimitedResponses += 1;
+          if (endpoint) slowDownEndpoint(endpoint);
+        }
         if (response.status !== 429 && response.status < 500) throw error;
         lastError = error;
         if (attempt < retries) {
@@ -117,15 +127,49 @@ function minimumIntervalForHost(host: string): number {
   return intervals[host] ?? 0;
 }
 
-async function waitForRequestWindow(host: string, minimumIntervalMs: number): Promise<void> {
+const configuredEndpointIntervals: Record<string, number> = EXTERNAL_REQUEST_CONFIG.minimumIntervalByEndpoint;
+
+// The key of the paced endpoint a URL belongs to: its host and exact path, the query string aside. A longer path is
+// another endpoint: games.roblox.com/v1/games paces /v1/games?universeIds=… but not /v1/games/votes.
+export function pacedEndpoint(url: URL): string | undefined {
+  const key = `${url.hostname}${url.pathname}`;
+  return Object.hasOwn(configuredEndpointIntervals, key) ? key : undefined;
+}
+
+function endpointInterval(endpoint: string): number {
+  return slowedIntervalByEndpoint.get(endpoint) ?? configuredEndpointIntervals[endpoint];
+}
+
+// A 429 means the endpoint's spacing is too short for the limit behind it: it grows for the rest of the process, up
+// to the maximum, so the remaining requests stay below the limit instead of each waiting out a reset.
+function slowDownEndpoint(endpoint: string): void {
+  const previousIntervalMs = endpointInterval(endpoint);
+  const intervalMs = Math.max(
+    previousIntervalMs,
+    Math.min(
+      Math.round(previousIntervalMs * EXTERNAL_REQUEST_CONFIG.rateLimitSlowdownFactor),
+      EXTERNAL_REQUEST_CONFIG.maximumEndpointIntervalMs,
+    ),
+  );
+  if (intervalMs === previousIntervalMs) return;
+  slowedIntervalByEndpoint.set(endpoint, intervalMs);
+  logger.warn("Slowed down a rate-limited endpoint for the rest of the process", { endpoint, previousIntervalMs, intervalMs });
+}
+
+async function waitForRequestWindow(host: string, minimumIntervalMs: number, endpoint: string | undefined): Promise<void> {
   while (true) {
     const now = Date.now();
-    const nextRequestAt = Math.max(nextRequestAtByHost.get(host) ?? 0, blockedUntilByHost.get(host) ?? 0);
+    const nextRequestAt = Math.max(
+      nextRequestAtByHost.get(host) ?? 0,
+      blockedUntilByHost.get(host) ?? 0,
+      endpoint ? (lastRequestAtByEndpoint.get(endpoint) ?? Number.NEGATIVE_INFINITY) + endpointInterval(endpoint) : 0,
+    );
     if (nextRequestAt > now) {
       await delay(nextRequestAt - now);
       continue;
     }
     nextRequestAtByHost.set(host, now + minimumIntervalMs);
+    if (endpoint) lastRequestAtByEndpoint.set(endpoint, now);
     return;
   }
 }
@@ -167,11 +211,16 @@ export function clearResponseCache(): void {
   responseCache.clear();
   nextRequestAtByHost.clear();
   blockedUntilByHost.clear();
+  lastRequestAtByEndpoint.clear();
+  slowedIntervalByEndpoint.clear();
   requestMetrics.attempts = 0;
   requestMetrics.retries = 0;
   requestMetrics.rateLimitedResponses = 0;
 }
 
 export function getHttpRequestMetrics(): HttpRequestMetrics {
-  return { ...requestMetrics };
+  return {
+    ...requestMetrics,
+    endpointIntervalMs: Object.fromEntries([...lastRequestAtByEndpoint.keys()].map((endpoint) => [endpoint, endpointInterval(endpoint)])),
+  };
 }

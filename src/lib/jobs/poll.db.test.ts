@@ -68,7 +68,7 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
       const [run] = await database.db.select().from(jobRuns).orderBy(desc(jobRuns.startedAt)).limit(1);
       expect(run.stats).toMatchObject({
         returned: 2,
-        http: { attempts: 1, retries: 0, rateLimitedResponses: 0 },
+        http: { attempts: 1, retries: 0, rateLimitedResponses: 0, endpointIntervalMs: { "games.roblox.com/v1/games": 7_000 } },
         shedBelowCcu: null,
       });
       // `npm run status` prints these paths: a renamed stat must fail here rather than print a dash.

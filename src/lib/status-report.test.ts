@@ -69,7 +69,7 @@ describe("formatStatusReport", () => {
             active: 3_600,
             rateLimited: true,
             stoppedBy: "error",
-            http: { attempts: 80, retries: 4, rateLimitedResponses: 4 },
+            http: { attempts: 80, retries: 4, rateLimitedResponses: 4, endpointIntervalMs: { "games.roblox.com/v1/games": 10_500 } },
             skipped: 600,
             shedBelowCcu: 63,
           },
@@ -100,6 +100,7 @@ describe("formatStatusReport", () => {
         "         promotionError: Game details request failed: 503 Service Unavailable",
         "poll     failed 7m ago    success 11m ago    288         3       2             1      12/20,160",
         "         rateLimited=true stoppedBy=error http.rateLimitedResponses=4 skipped=600 shedBelowCcu=63",
+        '         http.endpointIntervalMs={"games.roblox.com/v1/games":10500}',
         "         error 7m ago: poll exceeded 270000 ms",
         "votes    failed 3d ago    never                0         0       0",
         "         error 3d ago: votes went quiet",
@@ -118,7 +119,7 @@ describe("formatStatusReport", () => {
       completed("poll", { rateLimited: false, stoppedBy: null, http: {}, skipped: 0, shedBelowCcu: null }),
       completed("census", { listQuality: "success", listed: 7_800 }),
     ]);
-    expect(lines).toContain("rateLimited=false stoppedBy=- http.rateLimitedResponses=- skipped=0 shedBelowCcu=-");
+    expect(lines).toContain("rateLimited=false stoppedBy=- http.rateLimitedResponses=- skipped=0 shedBelowCcu=- http.endpointIntervalMs=-");
     expect(lines).toContain("listQuality=success listed=7800 rejected=- resolved=- resolutionFailures=- deferred=- rateLimited=-");
     expect(lines.some((line) => line.startsWith("promotionError") || line.startsWith("listError"))).toBe(false);
   });
@@ -184,7 +185,13 @@ describe("formatStatusReport", () => {
     );
     const poll = busy(
       "poll",
-      { rateLimited: true, stoppedBy: "repeatedFailures", http: { rateLimitedResponses: 12_345 }, skipped: 12_345, shedBelowCcu: 12_345 },
+      {
+        rateLimited: true,
+        stoppedBy: "repeatedFailures",
+        http: { rateLimitedResponses: 12_345, endpointIntervalMs: { "games.roblox.com/v1/games": 30_000 } },
+        skipped: 12_345,
+        shedBelowCcu: 12_345,
+      },
       { rateLimitedResponses: 123_456, attempts: 1_234_567 },
     );
     const others = (["votes", "charts", "explore", "thumbnails"] as const).map((job) =>

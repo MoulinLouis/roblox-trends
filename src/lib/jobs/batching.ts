@@ -83,12 +83,14 @@ export function isRateLimited(error: unknown): boolean {
   return error instanceof HttpError && error.status === 429;
 }
 
-// The client's counters are process-wide; the difference isolates this run.
+// The client's counters are process-wide; the difference isolates this run. Endpoint spacing is a state, so the run
+// reports the spacing it ended with.
 export function httpMetricsSince(before: HttpRequestMetrics): HttpRequestMetrics {
   const after = getHttpRequestMetrics();
   return {
     attempts: after.attempts - before.attempts,
     retries: after.retries - before.retries,
     rateLimitedResponses: after.rateLimitedResponses - before.rateLimitedResponses,
+    endpointIntervalMs: after.endpointIntervalMs,
   };
 }

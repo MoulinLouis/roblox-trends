@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { evaluateCollectionQuality, runBatchesWithDeadline, type BatchOptions } from "./batching";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearResponseCache, fetchJson, getHttpRequestMetrics } from "@/lib/api/http";
+import { evaluateCollectionQuality, httpMetricsSince, runBatchesWithDeadline, type BatchOptions } from "./batching";
 
 // One-item batches, a clock that never moves, and work that echoes the batch.
 function options(overrides: Partial<BatchOptions<number, number>> = {}): BatchOptions<number, number> {
@@ -166,5 +167,33 @@ describe("evaluateCollectionQuality", () => {
 
   it("accepts an empty run", () => {
     expect(evaluateCollectionQuality({ requested: 0, returned: 0, minimumReturnedShare })).toBe("success");
+  });
+});
+
+describe("httpMetricsSince", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    clearResponseCache();
+  });
+
+  it("counts the requests of the run and reports the spacing it ended with", async () => {
+    // The second request waits for the endpoint's spacing on the fake clock.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => new Response("", { status: 429, statusText: "Too Many Requests" })));
+    await fetchJson("https://games.roblox.com/v1/games?universeIds=1", { retries: 0 }).catch(() => undefined);
+    const before = getHttpRequestMetrics();
+    const run = fetchJson("https://games.roblox.com/v1/games?universeIds=2", { retries: 0 }).catch(() => undefined);
+    await vi.runAllTimersAsync();
+    await run;
+    // The spacing is a state, not a count: 7 s raised twice by 1.5, not the 5.25 s added during the run.
+    expect(httpMetricsSince(before)).toEqual({
+      attempts: 1,
+      retries: 0,
+      rateLimitedResponses: 1,
+      endpointIntervalMs: { "games.roblox.com/v1/games": 15_750 },
+    });
   });
 });

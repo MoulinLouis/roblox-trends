@@ -37,6 +37,19 @@ export const EXTERNAL_REQUEST_CONFIG = {
     "games.roblox.com": 500,
     "thumbnails.roblox.com": 500,
   } satisfies Record<string, number>,
+  // Keyed by host and exact path, without the query string (pacedEndpoint in src/lib/api/http.ts). A request waits for
+  // both its host's spacing and its endpoint's.
+  minimumIntervalByEndpoint: {
+    // Game details. Production measured a hidden per-IP limit on 2026-10-21 that counts ids, not requests: 50 ids every
+    // 2 s got a 429 on the 6th request (300 ids in about 10 s); at 0.5 s every poll run got about four 429s, each
+    // followed by a 33–55 s reset, about 500 ids per minute; 1 id every 2 s ran 40 requests without one. The
+    // x-ratelimit-* headers kept reporting "300;w=60" with 287–290 remaining, so they do not describe this limit, and
+    // /v1/games/votes on the same host is not affected. 50 ids every 7 s is about 430 ids per minute.
+    "games.roblox.com/v1/games": 7_000,
+  } satisfies Record<string, number>,
+  // A 429 from an endpoint above multiplies its spacing by this for the rest of the process, up to the maximum.
+  rateLimitSlowdownFactor: 1.5,
+  maximumEndpointIntervalMs: 30_000,
 } as const;
 
 export const ROBLOX_REGION = {
