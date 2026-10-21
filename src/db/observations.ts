@@ -14,6 +14,7 @@ export type ChartPlacementRow = typeof chartPlacements.$inferInsert;
 
 // The widest row binds 6 parameters, and CHUNK_SIZE × 6 must stay under PostgreSQL's limit of 65,535 per statement.
 const CHUNK_SIZE = 2_000;
+const hourMs = 60 * 60 * 1000;
 
 // Every writer deduplicates first (PostgreSQL rejects an upsert that affects one row twice; the first occurrence
 // wins), then sorts by primary key: concurrent writers to one hypertable lock rows in the same order and cannot
@@ -94,14 +95,17 @@ export async function writeChartPlacements(db: Database, rows: ChartPlacementRow
 
 // Replaces every placement of one sort in one slot, atomically: a chart is a ranking, so a retry within the hour must
 // not leave a game that dropped out next to the game that took its rank. Rows are sorted by key, like the other writers.
-// Two replacements of the same slot at once are not serialized: the later one fails on the primary key or leaves rows
-// of the earlier one. systemd never overlaps a job with itself.
 export async function replaceChartSlot(db: Database, sortId: string, observedAt: Date, rows: ChartPlacementRow[]): Promise<number> {
   if (rows.some((row) => row.sortId !== sortId || row.observedAt.getTime() !== observedAt.getTime())) {
     throw new Error(`Every placement must belong to the replaced slot (${sortId} at ${observedAt.toISOString()})`);
   }
   const unique = uniqueBy(rows, (row) => row.universeId).sort((left, right) => left.universeId - right.universeId);
+  const hourIndex = Math.floor(observedAt.getTime() / hourMs);
   return db.transaction(async (transaction) => {
+    // Serializes replacements of one sort in one hour (a manual run next to the timer's): the later one waits, then
+    // its delete sees and removes the earlier ranking. Unserialized, it could only fail on the primary key or leave
+    // rows of the earlier ranking next to its own.
+    await transaction.execute(sql`select pg_advisory_xact_lock(hashtext(${sortId}), ${hourIndex}::int)`);
     await transaction
       .delete(chartPlacements)
       .where(and(eq(chartPlacements.sortId, sortId), eq(chartPlacements.observedAt, observedAt)));

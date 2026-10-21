@@ -183,6 +183,46 @@ describe.skipIf(!hasTestDatabase)("observation writers", () => {
     await expect(replaceChartSlot(database.db, "top-rated", slot, [placement])).rejects.toThrow(/must belong to the replaced slot/);
   });
 
+  it("serializes two replacements of the same chart slot", async () => {
+    const sortId = "most-engaging";
+    const placement = (universeId: number) => ({ sortId, universeId, observedAt: slot, rank: 1, playerCount: 1, isSponsored: null });
+    // The earlier ranking of the slot also creates its chunk before the holder's transaction starts.
+    await replaceChartSlot(database.db, sortId, slot, [placement(70)]);
+    const holder = new Client({ connectionString: database.url });
+    await holder.connect();
+    const first = createDatabase(database.url, { maxConnections: 1, applicationName: "radar-test-first" });
+    const second = createDatabase(database.url, { maxConnections: 1, applicationName: "radar-test-second" });
+    try {
+      // The holder's uncommitted row stops the first replacement inside its transaction, after its delete.
+      await holder.query("begin");
+      await holder.query(
+        "insert into chart_placements (sort_id, universe_id, observed_at, rank, player_count) values ($1, 71, $2, 1, 1)",
+        [sortId, slot],
+      );
+      const pendingFirst = replaceChartSlot(first.db, sortId, slot, [placement(71)]);
+      // Awaited below; this only avoids an unhandled rejection when a wait fails first.
+      pendingFirst.catch(() => undefined);
+      await waitForLockWait("radar-test-first");
+      // Unserialized, the second replacement would only wait for the row the first one deleted, then miss its new row.
+      const pendingSecond = replaceChartSlot(second.db, sortId, slot, [placement(72), placement(73)]);
+      pendingSecond.catch(() => undefined);
+      await waitForLockWait("radar-test-second");
+      await holder.query("rollback");
+      expect(await pendingFirst).toBe(1);
+      expect(await pendingSecond).toBe(2);
+    } finally {
+      await holder.end();
+      await first.pool.end();
+      await second.pool.end();
+    }
+    const stored = await database.db
+      .select({ universeId: chartPlacements.universeId })
+      .from(chartPlacements)
+      .where(and(eq(chartPlacements.sortId, sortId), eq(chartPlacements.observedAt, slot)))
+      .orderBy(chartPlacements.universeId);
+    expect(stored.map((row) => row.universeId)).toEqual([72, 73]);
+  });
+
   it("writes a batch that spans several chunks and keeps the first duplicate", async () => {
     const rows = Array.from({ length: 2_500 }, (_, index) => ({ universeId: 10_000 + index, observedAt: slot, ccu: index, visits: 0, favorites: 0 }));
     // The duplicate comes after the first 2,000 rows of the input; the first occurrence still wins.
