@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { sql } from "drizzle-orm";
 import type { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { errorMessage } from "@/lib/logger";
 import { createDatabase, type Database } from "./client";
 import { migrateDatabase } from "./migrate";
 import { hasTestDatabase, runAdminQuery, withDatabaseName } from "./test-database";
@@ -57,7 +58,7 @@ describe.skipIf(!hasTestDatabase)("production roles", () => {
   it("lets the analysis role read tables, views and continuous aggregates created by the migrations", async () => {
     for (const relation of ["games", "game_observations", "job_runs", "game_hourly", "game_daily", "census_hourly", "game_daily_all"]) {
       const result = await analysis.db.execute<{ rows: number }>(sql.raw(`select count(*)::int as rows from ${relation}`));
-      expect(result.rows[0]?.rows, relation).toBe(0);
+      expect(result.rows[0]?.rows, relation).toBeTypeOf("number");
     }
   });
 
@@ -98,5 +99,60 @@ describe.skipIf(!hasTestDatabase)("production roles", () => {
       sql`select current_setting('statement_timeout') as statement, current_setting('idle_in_transaction_session_timeout') as idle`,
     );
     expect(timeouts.rows).toEqual([{ statement: "5min", idle: "10min" }]);
+  });
+
+  // The background workers run each job as its owner; run_job runs it now, in this session of the owner. The policies
+  // start 5 minutes after migrating, so none has run yet.
+  it("runs every TimescaleDB policy as the non-superuser owner", async () => {
+    // Rows for each policy to act on: compression after 7 or 30 days, retention after 365 days, refreshes of the last
+    // days. Old hourly buckets are materialized here, so the compression of the aggregates has chunks to compress too.
+    const ages = sql`unnest(array['400 days', '40 days', '2 days']::interval[]) as age`;
+    await owner.db.execute(sql`insert into game_observations (universe_id, observed_at, ccu, visits, favorites) select 1, now() - age, 1, 1, 1 from ${ages}`);
+    await owner.db.execute(sql`insert into census_observations (place_id, observed_at, ccu) select 1, now() - age, 1 from ${ages}`);
+    await owner.db.execute(sql`insert into vote_observations (universe_id, observed_at, up_votes, down_votes) select 1, now() - age, 1, 1 from ${ages}`);
+    await owner.db.execute(
+      sql`insert into chart_placements (sort_id, universe_id, observed_at, rank, player_count) select 'top', 1, now() - age, 1, 1 from ${ages}`,
+    );
+    // Procedures that commit as they go refuse a transaction block: a parameterless CALL goes through the simple query
+    // protocol on its own.
+    for (const view of ["game_hourly", "census_hourly"]) {
+      await owner.db.execute(sql.raw(`CALL refresh_continuous_aggregate('${view}', now() - interval '500 days', now() - interval '35 days')`));
+    }
+
+    const jobs = await owner.db.execute<{ id: number; job: string; owner: string }>(sql`
+      select job_id as id, concat_ws(' on ', proc_name, hypertable_name) as job, owner::text as owner
+      from timescaledb_information.jobs where job_id >= 1000 order by job_id
+    `);
+    expect([...new Set(jobs.rows.map((job) => job.owner))]).toEqual(["radar"]);
+    const failures: string[] = [];
+    for (const job of jobs.rows) {
+      await owner.db.execute(sql.raw(`CALL run_job(${job.id})`)).catch((error: unknown) => failures.push(`${job.job}: ${errorMessage(error)}`));
+    }
+    expect(failures).toEqual([]);
+
+    // Per hypertable (an aggregate stands for its materialization): whether a chunk is compressed, whether one ends
+    // more than 365 days ago (retention drops those of the raw game and census observations only), and whether one
+    // ends in the last 3 days (for an aggregate, only its refresh policy materialized such a bucket).
+    const chunks = await owner.db.execute<{ hypertable: string; compressed: boolean; expired: boolean; recent: boolean }>(sql`
+      select coalesce(aggregate.view_name, chunk.hypertable_name) as hypertable,
+        bool_or(chunk.is_compressed) as compressed,
+        bool_or(chunk.range_end < now() - interval '365 days') as expired,
+        bool_or(chunk.range_end > now() - interval '3 days') as recent
+      from timescaledb_information.chunks chunk
+      left join timescaledb_information.continuous_aggregates aggregate
+        on aggregate.materialization_hypertable_schema = chunk.hypertable_schema
+        and aggregate.materialization_hypertable_name = chunk.hypertable_name
+      where chunk.hypertable_schema = 'public' or aggregate.view_name is not null
+      group by 1 order by 1
+    `);
+    expect(chunks.rows).toEqual([
+      { hypertable: "census_hourly", compressed: true, expired: true, recent: true },
+      { hypertable: "census_observations", compressed: true, expired: false, recent: true },
+      { hypertable: "chart_placements", compressed: true, expired: true, recent: true },
+      { hypertable: "game_daily", compressed: false, expired: false, recent: true },
+      { hypertable: "game_hourly", compressed: true, expired: true, recent: true },
+      { hypertable: "game_observations", compressed: true, expired: false, recent: true },
+      { hypertable: "vote_observations", compressed: true, expired: true, recent: true },
+    ]);
   });
 });
