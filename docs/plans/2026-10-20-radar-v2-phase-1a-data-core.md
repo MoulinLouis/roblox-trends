@@ -2990,7 +2990,7 @@ import type { RobloxApi, RobloxChartGame } from "@/lib/api/roblox";
 import { uniqueBy } from "@/lib/arrays";
 import { JOB_CONFIG, ROBLOX_DISCOVERY_CHARTS } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
-import { promoteUniverses, type PromotionCandidate } from "./promotion";
+import { PromotionApiError, promoteUniverses, type PromotionCandidate } from "./promotion";
 import type { JobDefinition } from "./runner";
 
 export interface ChartsDependencies {
@@ -3043,6 +3043,7 @@ export function createChartsJob(dependencies: ChartsDependencies): JobDefinition
       try {
         promoted = (await promoteUniverses(db, dependencies.roblox, candidates, now)).promoted;
       } catch (error) {
+        if (!(error instanceof PromotionApiError)) throw error; // database errors fail the run
         promotionError = errorMessage(error);
         logger.error("Chart promotion failed; retrying next run", { error: promotionError });
       }
@@ -3248,7 +3249,7 @@ import type { RobloxApi } from "@/lib/api/roblox";
 import { JOB_CONFIG } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
 import { normalizeTitle } from "@/lib/title";
-import { promoteUniverses, type PromotionCandidate } from "./promotion";
+import { PromotionApiError, promoteUniverses, type PromotionCandidate } from "./promotion";
 import type { JobDefinition } from "./runner";
 
 const SEARCH_STOP_WORDS = new Set([
@@ -3321,6 +3322,7 @@ export function createExploreJob(dependencies: ExploreDependencies): JobDefiniti
       try {
         promoted = (await promoteUniverses(db, dependencies.roblox, candidates, now, { recordKnown: true })).promoted;
       } catch (error) {
+        if (!(error instanceof PromotionApiError)) throw error; // database errors fail the run
         promotionError = errorMessage(error);
         logger.error("Exploration promotion failed; retrying next run", { error: promotionError });
       }
@@ -4486,14 +4488,14 @@ Expected: CI green with every database suite executed.
 - If phase 1b adds deployment to CI, the concurrency group must not cancel runs on the deploy branch.
 - After Task 2 review: fingerprints use `toLowerCase()` (never locale-dependent casing) and tests pin their exact values. Metadata versions compare against `games.metadata_fingerprint` through PostgreSQL 18 `RETURNING old.*`, so reverts are recorded; the `game_versions` unique key includes `observed_at` to keep retries and imports idempotent.
 - After Task 3 review: raw retention is 365 days; aggregates keep min/avg/max CCU and visits as a maximum; `game_hourly` and `census_hourly` compress after 30 days; `chart_placements` is segmented by game. Test databases are created from `template0` (so `CREATE EXTENSION` runs as in production) and pause TimescaleDB jobs after migrating. The pool logs idle-client errors, times out connections after 10 s and sets `application_name`. Jobs and `collect` refuse to run against a database holding v1 tables. The legacy import never re-imports raw rows older than the retention window. `@next/env` is a direct dependency, pinned to the installed `next` version.
-- After Task 4 review: `executeJob` pings start before touching the database and abandons stale `running` rows; `scripts/job.ts` sends a fail ping when a job cannot even start, refuses to run without `HEALTHCHECKS_PING_BASE` when `RADAR_REQUIRE_HEALTHCHECKS=1`, sets `statement_timeout`/`lock_timeout`, and bounds the final pool close. A fully successful run also pings `radar-<job>-quality`, so sustained degradation alerts through that check's period. `latestSuccessfulRun(db, job, since)` replaces `latestCompletedRun`; the census baseline is the latest successful run of the last 6 hours. `errorMessage` includes the `cause` chain.
+- After Task 4 review: `executeJob` pings start before touching the database and abandons stale `running` rows; `scripts/job.ts` sends a fail ping when a job cannot even start, refuses to run without `HEALTHCHECKS_PING_BASE` when `RADAR_REQUIRE_HEALTHCHECKS=1`, sets `statement_timeout`/`lock_timeout`, and bounds the final pool close. A fully successful run also pings `radar-<job>-quality`, so sustained degradation alerts through that check's period. `latestCompletedRun` was removed; the census baseline is the newest run of the last 6 hours whose `stats.listQuality` is `success` (`latestRunWithStat`), whatever the run status. `errorMessage` includes the `cause` chain.
 - After Task 6 review: `upsertGameDetails` sorts by id, ignores stale writes (`excluded.last_observed_at >= games.last_observed_at`), keeps `first_observed_at` as the minimum, reuses stored name/description when the fingerprint is unchanged, and fills null place mappings with a targeted UPDATE; `savePlaceResolution` never erases a known mapping; `recordDiscoveries` sorts and merges duplicate windows; `games` uses fillfactor 80 for HOT updates; PostgreSQL 18 is checked before migrating and before every job. The Task 6 code blocks above predate these changes; the committed code is authoritative.
 - After Task 7 review: writers return rows actually written (`rowCount`), sort by full key, and are tested against compressed chunks; charts replace a sort's whole slot atomically on retry (`replaceChartSlot`); the legacy import must keep per-statement commits (TimescaleDB limits tuples decompressed per transaction) and is tested to never overwrite v2 data.
 - After Task 6 re-review: no writer may set `games.last_observed_at` later than real time (the stale-write guard compares against it); the legacy import reads v1 games in universe-id order. Migrations 0000 and 0001 were edited in place only because no persistent v2 database existed yet; from now on, schema changes go into new migrations.
 - After Task 5 re-review: thumbnails also report `"pending"` (processing or in review), Blocked counts as no thumbnail, `countPerUniverse=3` falls back to an approved image, icons are best-effort per batch, and a thumbnails run where Roblox answered for no game fails.
 - After Task 5 review: `getGameThumbnails` uses `defaults=false` (with `defaults=true`, games without media come back as shared generic `GameMediaItem` images marked Completed), parses items one by one, and returns a custom thumbnail, `null` (no custom thumbnail) or no entry (unknown). Thumbnail versions are keyed on the media asset id through `games.thumbnail_key` (migration 0002).
 - Before phase 3: analysis must exclude every slot whose run was not `success` (failed runs can leave partial writes), not only degraded ones. Exception: census slots are filtered on `job_runs.stats.listQuality`, because a census run can be degraded by resolution or promotion problems while its list is complete.
-- After Task 8 review: game details, votes and Rolimon's entries are validated item by item (a malformed item is skipped and logged, a broken envelope still throws); a missing place resolves to `{"universeId": null}` with HTTP 200 (not 404), stored as unresolvable; census degrades when promotion fails or every resolution fails, stops resolving after a terminal 429, and treats a list below `minimumListed` as degraded; charts and explore catch promotion errors and degrade.
+- After Task 8 review: game details, votes and Rolimon's entries are validated item by item (a malformed item is skipped and logged, a broken envelope still throws); a missing place resolves to `{"universeId": null}` with HTTP 200 (not 404), stored as unresolvable; census degrades when the Games API fails during promotion (`PromotionApiError`; database errors fail the run), or when resolution is stalled (nothing answered and either rate-limited, out of budget, or at least `stalledResolutionFailures` failures; resolving stops after that many consecutive failures); its list is degraded below `minimumListed` or above `maximumRejectedShare` rejected entries; charts and explore catch only `PromotionApiError`.
 - Before phase 3: raw SQL over aggregates returns `int8`, `numeric` and `timestamptz` as strings; convert with `Number()`/`new Date()` or declare the views with `pgView(...).existing()`. Exclude the partial current UTC day from daily analysis; `game_daily` computes it in real time.
 - Before phase 4: cache the dashboard database instance on `globalThis` so Next dev hot reloads do not open new pools.
 - Task 17: update design section 2 (separate `vote_observations`, 365-day raw retention, aggregate columns).
