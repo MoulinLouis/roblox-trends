@@ -53,9 +53,12 @@ free_kb="$(df --output=avail -k /var/lib/postgresql | tail -n 1 | tr -d ' ')"
 ((free_kb > data_kb + margin_kb)) || fail "Not enough free disk: ${free_kb} kB free for ${data_kb} kB of data and ${margin_kb} kB of margin"
 
 install -d -o postgres -g postgres -m 700 "${target}" "${sockets}"
-# Synchronous archive-get: production's asynchronous archive-push owns the spool and its lock.
-runuser -u postgres -- pgbackrest --stanza=radar --pg1-path="${target}" --archive-async=n --type=immediate \
-  --target-action=promote --archive-mode=off restore >"${log}" 2>&1 \
+# Synchronous archive-get: production's asynchronous archive-push owns the spool and its lock. archive-async is not
+# a restore option, so the restore command is given whole, with the scratch cluster's path.
+runuser -u postgres -- pgbackrest --stanza=radar --pg1-path="${target}" --type=immediate \
+  --target-action=promote --archive-mode=off \
+  --recovery-option="restore_command=pgbackrest --stanza=radar --pg1-path=${target} --archive-async=n archive-get %f \"%p\"" \
+  restore >"${log}" 2>&1 \
   || fail "pgbackrest restore failed: $(tail -c 2000 "${log}")"
 # Debian keeps the configuration outside the data directory: the scratch cluster gets empty files and its settings on
 # the command line. hot_standby is off because archive recovery refuses settings below the primary's, and
@@ -79,4 +82,7 @@ if ((production_runs > 0)) && ((age < 0 || age > 2 * 86400)); then
   fail "The newest restored job run is ${age} s old"
 fi
 version="$(restored "select extversion from pg_extension where extname = 'timescaledb'")"
-ping "" "Restored ${restored_games}/${production_games} games, newest job run ${age} s old, TimescaleDB ${version}"
+summary="Restored ${restored_games}/${production_games} games, newest job run ${age} s old, TimescaleDB ${version}"
+# Printed too, so journalctl -u radar-restore-test shows the result without Healthchecks.
+echo "Restore test passed: ${summary}"
+ping "" "${summary}"

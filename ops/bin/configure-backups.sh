@@ -17,6 +17,14 @@ readonly archive_conf=/etc/postgresql/18/main/conf.d/91-radar-archive.conf
 . "${r2_env}"
 : "${R2_ENDPOINT:?R2_ENDPOINT is missing}" "${R2_BUCKET:?R2_BUCKET is missing}"
 : "${R2_ACCESS_KEY_ID:?R2_ACCESS_KEY_ID is missing}" "${R2_SECRET_ACCESS_KEY:?R2_SECRET_ACCESS_KEY is missing}"
+# pgBackRest takes the endpoint as a host only; the Cloudflare dashboard shows it as a URL.
+R2_ENDPOINT="${R2_ENDPOINT#https://}"
+R2_ENDPOINT="${R2_ENDPOINT#http://}"
+R2_ENDPOINT="${R2_ENDPOINT%/}"
+if [[ "${R2_ENDPOINT}" == */* ]]; then
+  echo "R2_ENDPOINT in ${r2_env} must be the host only (<account-id>.r2.cloudflarestorage.com), without a path" >&2
+  exit 1
+fi
 
 if [[ ! -s "${cipher_file}" ]]; then
   [[ "${mode}" != --config-only ]] || { echo "${cipher_file} is missing: restore it from the password manager" >&2; exit 1; }

@@ -62,6 +62,28 @@ describe("operations scripts", () => {
     expect(provision.indexOf("systemctl reload ssh\n")).toBeGreaterThan(provision.indexOf("sshd -t\n"));
   });
 
+  it("gives the restore test a synchronous restore command of its own scratch cluster", () => {
+    const restoreTest = script("restore-test.sh");
+    // The pgbackrest call that ends with the restore command, joined across its continuation lines.
+    const call = /runuser -u postgres -- pgbackrest (?:[^\n]*\\\n)*?[^\n]*\brestore >/.exec(restoreTest)?.[0] ?? "";
+    expect(call).not.toBe("");
+    const recoveryOption = /--recovery-option="restore_command=([^\n]*)"/.exec(call)?.[1] ?? "";
+    // pgbackrest restore rejects --archive-async: it may appear only inside the restore_command it writes.
+    expect(call.replace(recoveryOption, "")).not.toContain("--archive-async");
+    // archive-get aborts when its pg1-path differs from the cluster it runs in.
+    expect(recoveryOption).toContain("--pg1-path=${target}");
+    expect(recoveryOption).toContain("--archive-async=n archive-get %f");
+  });
+
+  it("accepts the R2 endpoint with a scheme, since pgBackRest takes the host only", () => {
+    const configureBackups = script("configure-backups.sh");
+    const steps = [". \"${r2_env}\"", 'R2_ENDPOINT="${R2_ENDPOINT#https://}"', 'R2_ENDPOINT="${R2_ENDPOINT%/}"', "repo1-s3-endpoint=${R2_ENDPOINT}"].map(
+      (step) => configureBackups.indexOf(step),
+    );
+    expect(steps).not.toContain(-1);
+    expect(steps).toEqual([...steps].sort((a, b) => a - b));
+  });
+
   it("pins the TimescaleDB version of the CI image", () => {
     const image = /timescale\/timescaledb:([\d.]+)-pg18/.exec(readFileSync(new URL("../../../.github/workflows/ci.yml", import.meta.url), "utf8"));
     expect(script("provision.sh")).toContain(`readonly timescaledb_version=${image?.[1]}`);
