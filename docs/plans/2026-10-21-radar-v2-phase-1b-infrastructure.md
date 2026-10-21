@@ -107,6 +107,7 @@ GRANT pg_monitor TO radar;
 ALTER ROLE radar_analysis SET default_transaction_read_only = on;
 ALTER ROLE radar_analysis SET statement_timeout = '5min';
 ALTER ROLE radar_analysis SET idle_in_transaction_session_timeout = '10min';
+ALTER ROLE radar_analysis CONNECTION LIMIT 5;
 ```
 
 `ops/postgresql/database.sql`:
@@ -255,6 +256,12 @@ describe.skipIf(!hasTestDatabase)("production roles", () => {
   });
 });
 ```
+
+Review additions (committed in `475b0ab` follow-ups):
+- `afterAll` resets both passwords to `NULL` (`ALTER ROLE … PASSWORD NULL`), so a local run never leaves known passwords on the developer's cluster.
+- Read-only is asserted by privilege too: `default_transaction_read_only` can be bypassed with `SET TRANSACTION READ WRITE`, so check `has_table_privilege('radar_analysis', 'job_runs', 'INSERT')` (and `UPDATE`, `DELETE`) is false for every public relation.
+- Every policy runs under the non-superuser owner: as `radar`, `CALL run_job(job_id)` for each job of `timescaledb_information.jobs` with `job_id >= 1000` succeeds.
+- Drizzle wraps driver errors (`DrizzleQueryError`): match the server message on `cause`.
 
 **Step 4: Run it**
 
@@ -575,6 +582,13 @@ describe("evaluateSystemHealth", () => {
     ]);
   });
 
+  it("reports a policy that failed from its first run, measured from its initial start", () => {
+    const failing = { ...refresh, lastRunStatus: "Failed", lastSuccessfulFinish: null, initialStart: minutesAgo(120) };
+    expect(evaluateSystemHealth({ ...healthy, jobs: [failing] }).problems).toEqual([
+      "policy_refresh_continuous_aggregate on game_hourly (job 1001) has not succeeded for 120 min (last run Failed)",
+    ]);
+  });
+
   it("allows a daily policy three of its intervals", () => {
     const retention = { ...refresh, procName: "policy_retention", scheduleIntervalSeconds: 86_400, lastSuccessfulFinish: minutesAgo(2 * 24 * 60) };
     expect(evaluateSystemHealth({ ...healthy, jobs: [retention] }).ok).toBe(true);
@@ -610,7 +624,12 @@ export interface ArchiverHealth {
   lastFailedAt: Date | null;
 }
 
-const toDate = (value: Date | string | null) => (value === null ? null : new Date(value));
+// TimescaleDB starts last_successful_finish at -infinity, which would parse to an invalid date and never look late.
+function toDate(value: Date | string | null): Date | null {
+  if (value === null) return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
 
 // The policies added by the migrations (ids from 1000; lower ids are TimescaleDB's own jobs).
 export async function readTimescaleJobs(db: Database): Promise<TimescaleJobHealth[]> {
@@ -625,7 +644,7 @@ export async function readTimescaleJobs(db: Database): Promise<TimescaleJobHealt
     initial_start: Date | string | null;
   }>(sql`
     select j.job_id, j.proc_name, j.hypertable_name, extract(epoch from j.schedule_interval)::int as schedule_seconds,
-      j.scheduled, s.last_run_status, s.last_successful_finish, j.initial_start
+      j.scheduled, s.last_run_status, nullif(s.last_successful_finish, '-infinity') as last_successful_finish, j.initial_start
     from timescaledb_information.jobs j
     left join timescaledb_information.job_stats s on s.job_id = j.job_id
     where j.job_id >= 1000
@@ -769,7 +788,7 @@ describe.skipIf(!hasTestDatabase)("system health queries", () => {
 });
 ```
 
-If the policy list differs (for example TimescaleDB reports the raw materialized hypertable name for an aggregate's compression policy), pin what TimescaleDB 2.30.2 reports and say why in a comment; the point is that every migration policy is checked.
+If the policy list differs (for example TimescaleDB reports the raw materialized hypertable name for an aggregate's compression policy), pin what TimescaleDB 2.30.2 reports and say why in a comment; the point is that every migration policy is checked. If it reports `_materialized_hypertable_N`, join `timescaledb_information.continuous_aggregates` so alerts name the aggregate. Also add a db case where a policy has never run: `last_successful_finish` must come back as `null` (TimescaleDB stores `-infinity`).
 
 **Step 6: The script**
 
@@ -1068,7 +1087,6 @@ EnvironmentFile=-/etc/radar/healthchecks.env
 ExecStart=/opt/radar/current/ops/bin/backup.sh %i
 TimeoutStartSec=3h
 Nice=10
-IOSchedulingClass=idle
 ```
 
 `ops/systemd/radar-backup-diff.timer` (and `radar-backup-full.timer` with `OnCalendar=Sun *-*-* 03:10:00` and `Unit=radar-backup@full.service`):
@@ -1099,7 +1117,6 @@ EnvironmentFile=-/etc/radar/healthchecks.env
 ExecStart=/opt/radar/current/ops/bin/restore-test.sh
 TimeoutStartSec=4h
 Nice=10
-IOSchedulingClass=idle
 ```
 
 `ops/systemd/radar-restore-test.timer`:
@@ -1171,7 +1188,7 @@ git push
 
 **Files:**
 - Create in `ops/bin/` (all `chmod 755`): `provision.sh`, `configure-database.sh`, `configure-backups.sh`, `deploy.sh`, `backup.sh`, `restore-test.sh`, `job-failed.sh`, `radar.sh`
-- Modify: `.github/workflows/ci.yml` (add `- run: shellcheck ops/bin/*.sh` after `npm ci`)
+- Modify: `.github/workflows/ci.yml` (add `- run: shellcheck --severity=warning ops/bin/*.sh` after `npm ci`)
 - Test: `src/lib/ops/operations-scripts.test.ts`
 
 **Step 1: Write the failing test**
@@ -1216,6 +1233,11 @@ Expected: FAIL.
 
 **Step 2: Write the scripts**
 
+Conventions for every script that pings Healthchecks (they follow from the plan review):
+- The ping URL holds the project's ping key, so it reaches curl through `--config -` on standard input, never the command line (`/proc/*/cmdline` is readable by every local user).
+- No `set -E`: an ERR trap inherited by command substitutions would fire inside `$(…)` even when the outer command is a tested condition. Instead an ERR trap only records where the script stopped, and an EXIT trap sends the `/fail` ping for any non-zero exit that `fail` did not already report.
+- A command substitution that may legitimately fail ends in `|| true` (or sits in a condition).
+
 `ops/bin/provision.sh`:
 
 ```bash
@@ -1252,8 +1274,9 @@ curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg -o /usr/sh
 curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list -o /etc/apt/sources.list.d/tailscale.list
 apt-get update -q
 
-# TimescaleDB stays on the version CI tests (held); PostgreSQL minor releases come from PGDG.
-pinned() { apt-cache madison "$1" | awk -v prefix="${timescaledb_version}~" 'index($3, prefix) == 1 { print $3; exit }'; }
+# TimescaleDB stays on the version CI tests (held). PostgreSQL itself is upgraded by hand too (docs/operations.md):
+# PGDG is not an unattended-upgrades origin, because a minor release once broke the extension ABI.
+pinned() { apt-cache madison "$1" | awk -v prefix="${timescaledb_version}~" 'index($3, prefix) == 1 && !found { print $3; found = 1 }'; }
 timescaledb="$(pinned timescaledb-2-postgresql-18)"
 loader="$(pinned timescaledb-2-loader-postgresql-18)"
 if [[ -z "${timescaledb}" || -z "${loader}" ]]; then
@@ -1279,7 +1302,9 @@ install -d -o radar -g radar -m 755 /opt/radar/releases
 # A missing file (conf.d is empty on a fresh cluster) must not stop the script under pipefail.
 configuration() { (cat "${cluster}"/postgresql.conf "${cluster}"/conf.d/*.conf "${cluster}"/pg_hba.conf "${cluster}"/pg_ident.conf 2>/dev/null || true) | sha256sum; }
 before="$(configuration)"
-timescaledb-tune --quiet --yes --pg-version=18 --conf-path="${cluster}/postgresql.conf" --memory=5GB --cpus=4 >/dev/null
+tune_target=(--pg-version=18)
+if [[ -x /usr/lib/postgresql/18/bin/pg_config ]]; then tune_target=(--pg-config=/usr/lib/postgresql/18/bin/pg_config); fi
+timescaledb-tune --quiet --yes "${tune_target[@]}" --conf-path="${cluster}/postgresql.conf" --memory=5GB --cpus=4 >/dev/null
 install -o postgres -g postgres -m 644 "${ops}/postgresql/90-radar.conf" "${cluster}/conf.d/90-radar.conf"
 install -o postgres -g postgres -m 640 "${ops}/postgresql/pg_hba.conf" "${cluster}/pg_hba.conf"
 install -o postgres -g postgres -m 640 "${ops}/postgresql/pg_ident.conf" "${cluster}/pg_ident.conf"
@@ -1287,20 +1312,24 @@ after="$(configuration)"
 systemctl enable --quiet postgresql
 if [[ "${before}" != "${after}" ]]; then systemctl restart postgresql@18-main; fi
 
-# System: swap for build peaks, bounded journal, automatic security and PostgreSQL minor updates with a night reboot.
+# System: swap for build peaks, a bounded journal, daily security updates with a night reboot when one needs it.
 if [[ ! -f /swapfile ]]; then
-  fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile
-  echo '/swapfile none swap sw 0 0' >>/etc/fstab
+  fallocate -l 2G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile >/dev/null
 fi
+swapon --show=NAME --noheadings | grep -qx /swapfile || swapon /swapfile
+grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >>/etc/fstab
 echo 'vm.swappiness = 10' >/etc/sysctl.d/90-radar.conf
 sysctl --quiet --system
 install -d /etc/systemd/journald.conf.d
 printf '[Journal]\nSystemMaxUse=2G\n' >/etc/systemd/journald.conf.d/90-radar.conf
 systemctl restart systemd-journald
+printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' >/etc/apt/apt.conf.d/20auto-upgrades
+# 04:48 sits between job starts (ops/systemd timers); a reboot costs at most one poll slot.
 cat >/etc/apt/apt.conf.d/52radar-unattended-upgrades <<'EOF'
-Unattended-Upgrade::Origins-Pattern { "origin=apt.postgresql.org,codename=${distro_codename}-pgdg"; };
 Unattended-Upgrade::Automatic-Reboot "true";
-Unattended-Upgrade::Automatic-Reboot-Time "04:40";
+Unattended-Upgrade::Automatic-Reboot-Time "04:48";
 EOF
 
 # Firewall: only the tailnet reaches the server. Public SSH stays open until Tailscale access is proven (Task B2
@@ -1313,7 +1342,8 @@ if [[ ! -f /etc/radar/public-ssh-closed ]]; then ufw allow 22/tcp comment 'publi
 ufw --force enable >/dev/null
 systemctl enable --now --quiet tailscaled
 
-echo "PostgreSQL $(runuser -u postgres -- psql -XAtc 'show server_version'), TimescaleDB ${timescaledb}, Node.js $(node --version), npm $(npm --version), $(pgbackrest version), Tailscale $(tailscale version | head -n 1)"
+echo "PostgreSQL $(runuser -u postgres -- psql -XAtc 'show server_version'), TimescaleDB ${timescaledb}," \
+  "Node.js $(node --version), npm $(npm --version), $(pgbackrest version), Tailscale $(tailscale version | sed -n 1p)"
 ```
 
 At execution, if `apt.postgresql.org.sh` does not accept `-y` (check `--help`), feed it `yes |` instead and record it.
@@ -1354,12 +1384,15 @@ fi
 # Configures pgBackRest on Cloudflare R2 from /etc/radar/r2.env, creates the stanza and turns WAL archiving on. The
 # repository cipher passphrase is generated once into /etc/radar/pgbackrest-cipher; without it and the R2 keys no
 # backup can be restored, so the owner keeps a copy of both outside the server. Safe to run again.
+# --config-only writes pgbackrest.conf and stops: the first step of a restore onto a new server (docs/operations.md).
 set -euo pipefail
+readonly mode="${1:-}"
 readonly r2_env=/etc/radar/r2.env
 readonly cipher_file=/etc/radar/pgbackrest-cipher
 readonly config=/etc/pgbackrest/pgbackrest.conf
 readonly archive_conf=/etc/postgresql/18/main/conf.d/91-radar-archive.conf
 
+[[ -z "${mode}" || "${mode}" == --config-only ]] || { echo "usage: configure-backups.sh [--config-only]" >&2; exit 2; }
 [[ "$(id -u)" == 0 ]] || { echo "configure-backups.sh must run as root" >&2; exit 1; }
 [[ -f "${r2_env}" ]] || { echo "${r2_env} is missing (docs/operations.md, Backups)" >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -1368,6 +1401,7 @@ readonly archive_conf=/etc/postgresql/18/main/conf.d/91-radar-archive.conf
 : "${R2_ACCESS_KEY_ID:?R2_ACCESS_KEY_ID is missing}" "${R2_SECRET_ACCESS_KEY:?R2_SECRET_ACCESS_KEY is missing}"
 
 if [[ ! -s "${cipher_file}" ]]; then
+  [[ "${mode}" != --config-only ]] || { echo "${cipher_file} is missing: restore it from the password manager" >&2; exit 1; }
   (umask 077 && openssl rand -base64 48 | tr -d '\n' >"${cipher_file}")
 fi
 install -d -o postgres -g postgres -m 750 /etc/pgbackrest /var/log/pgbackrest /var/spool/pgbackrest
@@ -1405,6 +1439,10 @@ EOF
 )
 chown postgres:postgres "${config}.new"
 mv -f "${config}.new" "${config}"
+if [[ "${mode}" == --config-only ]]; then
+  echo "Wrote ${config}; continue with the restore steps of docs/operations.md"
+  exit 0
+fi
 
 runuser -u postgres -- pgbackrest --stanza=radar stanza-create
 cat >"${archive_conf}" <<'EOF'
@@ -1417,6 +1455,8 @@ EOF
 chown postgres:postgres "${archive_conf}"
 if [[ "$(runuser -u postgres -- psql -XAtc 'show archive_mode')" != on ]]; then
   systemctl restart postgresql@18-main
+else
+  systemctl reload postgresql@18-main
 fi
 runuser -u postgres -- pgbackrest --stanza=radar check
 ```
@@ -1425,9 +1465,9 @@ runuser -u postgres -- pgbackrest --stanza=radar check
 
 ```bash
 #!/usr/bin/env bash
-# Deploys the newest commit of the deploy branch once its CI run passed: builds it next to the live release, then
-# stops the job timers only around the migration and the switch. Run every 5 minutes by radar-deploy.timer, and by
-# hand for the first deployment. Exits 0 when there is nothing to deploy.
+# Deploys the newest commit of the deploy branch once its CI run passed: builds it next to the live release, pauses
+# the job timers only when the commit brings migrations, then switches the live release. Run every 5 minutes by
+# radar-deploy.timer, and by hand for the first deployment. Exits 0 when there is nothing to deploy.
 set -euo pipefail
 
 readonly repository=MoulinLouis/roblox-trends
@@ -1437,27 +1477,53 @@ readonly mirror="${root}/repo.git"
 readonly releases="${root}/releases"
 readonly current="${root}/current"
 readonly keep_releases=3
+# A release younger than this may still run a 30-minute job or the legacy import: it is never pruned.
+readonly minimum_release_age_minutes=120
 readonly job_timers=(radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer)
 readonly job_wait_seconds=300
 readonly migration_attempts=5
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 
+# The ping URL holds the project's ping key: it reaches curl on standard input, never on the command line.
 ping() {
   [[ -n "${HEALTHCHECKS_PING_BASE:-}" ]] || return 0
-  curl --silent --show-error --max-time 10 --retry 3 --data-raw "${2:-}" \
-    "${HEALTHCHECKS_PING_BASE%/}/radar-deploy${1}?create=1" >/dev/null || log "Healthchecks ping failed"
+  printf 'url = "%s"\n' "${HEALTHCHECKS_PING_BASE%/}/radar-deploy${1}?create=1" \
+    | curl --config - --silent --show-error --max-time 10 --retry 3 --data-raw "${2:-}" >/dev/null \
+    || log "Healthchecks ping failed"
 }
 
+# Job timers that are enabled must run whenever no deploy is in its critical section. Pausing collection on purpose
+# means disabling them (docs/operations.md), which this never undoes.
+start_job_timers() {
+  local timer timers=()
+  for timer in "${job_timers[@]}"; do
+    if systemctl is-enabled --quiet "${timer}" 2>/dev/null; then timers+=("${timer}"); fi
+  done
+  if ((${#timers[@]} > 0)); then systemctl start "${timers[@]}" || log "Could not start ${timers[*]}"; fi
+}
+
+reported=false
+failed_at="an unexpected step"
+trap 'failed_at="line ${LINENO}: ${BASH_COMMAND}"' ERR
+finish() {
+  local status=$?
+  if ((status != 0)) && [[ "${reported}" == false ]]; then ping /fail "deploy.sh stopped at ${failed_at} (exit ${status})"; fi
+  start_job_timers
+}
 fail() {
+  reported=true
   log "Deploy failed: $1"
   ping /fail "$1"
   exit 1
 }
-
 as_radar() { runuser -u radar -- "$@"; }
 
 [[ "$(id -u)" == 0 ]] || { echo "deploy.sh must run as root" >&2; exit 1; }
+# One deploy at a time: a manual run and the timer's must not build the same release.
+exec 9>/run/radar-deploy.lock
+flock --nonblock 9 || { log "Another deploy is running"; exit 0; }
+trap finish EXIT
 set -a
 # shellcheck source=/dev/null
 . /etc/radar/radar.env
@@ -1473,10 +1539,15 @@ if ! as_radar git -C "${mirror}" fetch --quiet --prune origin; then
   exit 0
 fi
 target="$(as_radar git -C "${mirror}" rev-parse --verify "refs/heads/${branch}^{commit}")"
-live="$(basename "$(readlink -f "${current}" 2>/dev/null || true)")"
-if [[ "${target}" == "${live}" ]]; then
+live_path="$(readlink -e "${current}" || true)"
+live="${live_path:+$(basename "${live_path}")}"
+# .deployed is written last, so a deploy that stopped after the switch is completed by the next run.
+if [[ "${target}" == "${live}" && -f "${current}/.deployed" ]]; then
   ping "" "Up to date at ${live}"
   exit 0
+fi
+if [[ -f "${releases}/${target}.failed" ]]; then
+  fail "The build of ${target} failed earlier (${releases}/${target}.failed); push a fix"
 fi
 
 # Only a commit whose CI job "validate" passed is deployed.
@@ -1495,48 +1566,42 @@ if [[ "${ci_status}" != completed || "${ci_conclusion}" != success ]]; then
   exit 0
 fi
 
-# Build outside the live release, at low priority so the jobs keep their pace.
+# Build outside the live release, at low priority so the jobs keep their pace. A failed build is not retried until a
+# new commit arrives.
 release="${releases}/${target}"
 if [[ ! -f "${release}/.built" ]]; then
   log "Building ${target}"
-  rm -rf "${release}"
+  rm -rf "${release}" "${release}.tar"
   install -d -o radar -g radar "${release}"
-  as_radar sh -c 'git -C "$1" archive "$2" | tar -x -C "$3"' sh "${mirror}" "${target}" "${release}" \
-    || fail "Could not extract ${target}"
-  build_log="$(mktemp)"
+  as_radar git -C "${mirror}" archive --output="${release}.tar" "${target}" || fail "Could not export ${target}"
+  as_radar tar -xf "${release}.tar" -C "${release}" || fail "Could not extract ${target}"
+  rm -f "${release}.tar"
+  build_log="${releases}/${target}.log"
   if ! as_radar env -C "${release}" nice -n 10 npm ci --no-audit --no-fund >"${build_log}" 2>&1 \
     || ! as_radar env -C "${release}" nice -n 10 npm run build >>"${build_log}" 2>&1; then
-    tail -n 50 "${build_log}"
-    fail "Build of ${target} failed: $(tail -c 2000 "${build_log}")"
+    mv -f "${build_log}" "${releases}/${target}.failed"
+    rm -rf "${release}"
+    fail "Build of ${target} failed: $(tail -c 2000 "${releases}/${target}.failed")"
   fi
   rm -f "${build_log}"
   as_radar touch "${release}/.built"
 fi
 
-# Critical section: no job starts while the schema changes and the release switches; stopped timers always restart.
-stopped_timers=()
-restart_timers() {
-  if ((${#stopped_timers[@]} > 0)); then
-    systemctl start "${stopped_timers[@]}" || log "Could not restart ${stopped_timers[*]}"
-    stopped_timers=()
-  fi
-}
-trap restart_timers EXIT
-for timer in "${job_timers[@]}"; do
-  if systemctl is-active --quiet "${timer}"; then stopped_timers+=("${timer}"); fi
-done
-if ((${#stopped_timers[@]} > 0)); then systemctl stop "${stopped_timers[@]}"; fi
-# Running jobs keep their own release (never removed while among the newest); waiting lets a migration take its locks.
-waited=0
-# Captured, not piped into grep -q: an early grep exit would SIGPIPE systemctl and, under pipefail, end the wait.
-while [[ -n "$(systemctl list-units --no-legend --state=activating,active 'radar-job@*.service')" ]]; do
-  if ((waited >= job_wait_seconds)); then
-    log "Jobs still running after ${job_wait_seconds} s; migrating anyway (lock_timeout protects them)"
-    break
-  fi
-  sleep 5
-  waited=$((waited + 5))
-done
+# Job timers pause only when the release brings migrations, so a schema change never races a job's statements.
+if [[ -z "${live}" ]] || ! as_radar git -C "${mirror}" diff --quiet "${live}" "${target}" -- drizzle; then
+  for timer in "${job_timers[@]}"; do systemctl stop "${timer}" 2>/dev/null || true; done
+  # Running jobs keep their own release (never pruned while young); waiting lets the migration take its locks.
+  waited=0
+  # Captured, not piped into grep -q: an early grep exit would SIGPIPE systemctl and, under pipefail, end the wait.
+  while [[ -n "$(systemctl list-units --no-legend --state=activating,active 'radar-job@*.service')" ]]; do
+    if ((waited >= job_wait_seconds)); then
+      log "Jobs still running after ${job_wait_seconds} s; migrating anyway (lock_timeout protects them)"
+      break
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+fi
 # Migrations must stay compatible with the previous release, which may still be running a job (docs/operations.md).
 migrated=false
 for attempt in $(seq 1 "${migration_attempts}"); do
@@ -1554,13 +1619,21 @@ mv -T "${current}.next" "${current}"
 cp -r "${release}/ops/systemd/." /etc/systemd/system/
 systemctl daemon-reload
 ln -sfn "${current}/ops/bin/radar.sh" /usr/local/bin/radar
-if systemctl is-enabled --quiet radar-web.service; then systemctl restart radar-web.service; fi
-restart_timers
+if systemctl is-enabled --quiet radar-web.service; then
+  systemctl restart radar-web.service
+  for _ in $(seq 1 30); do
+    if curl --fail --silent --max-time 5 --output /dev/null http://127.0.0.1:3000/; then break; fi
+    sleep 1
+  done
+  curl --fail --silent --max-time 5 --output /dev/null http://127.0.0.1:3000/ || fail "The dashboard of ${target} does not answer"
+fi
+start_job_timers
+as_radar touch "${release}/.deployed"
 
-# Keep the newest releases and the live one.
-find "${releases}" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -rn | tail -n "+$((keep_releases + 1))" \
-  | cut -d' ' -f2- | while read -r directory; do
-    [[ "$(readlink -f "${directory}")" == "$(readlink -f "${current}")" ]] || rm -rf "${directory}"
+# Keep the newest releases, the live one and every release young enough to still run a job or an import.
+find "${releases}" -mindepth 1 -maxdepth 1 -type d -mmin "+${minimum_release_age_minutes}" -printf '%T@ %p\n' \
+  | sort -rn | tail -n "+$((keep_releases + 1))" | cut -d' ' -f2- | while read -r directory; do
+    [[ "$(readlink -e "${directory}")" == "$(readlink -e "${current}")" ]] || rm -rf "${directory}"
   done
 log "Deployed ${target}"
 ping "" "Deployed ${target} (was ${live:-none})"
@@ -1578,24 +1651,35 @@ case "${type}" in
   *) echo "usage: backup.sh full|diff" >&2; exit 2 ;;
 esac
 
+# The ping URL holds the project's ping key: it reaches curl on standard input, never on the command line.
 ping() {
   [[ -n "${HEALTHCHECKS_PING_BASE:-}" ]] || return 0
-  curl --silent --show-error --max-time 10 --retry 3 --data-raw "${2:-}" \
-    "${HEALTHCHECKS_PING_BASE%/}/radar-backup${1}?create=1" >/dev/null || true
+  printf 'url = "%s"\n' "${HEALTHCHECKS_PING_BASE%/}/radar-backup${1}?create=1" \
+    | curl --config - --silent --show-error --max-time 10 --retry 3 --data-raw "${2:-}" >/dev/null || true
+}
+
+log="$(mktemp)"
+reported=false
+failed_at="an unexpected step"
+trap 'failed_at="line ${LINENO}: ${BASH_COMMAND}"' ERR
+finish() {
+  local status=$?
+  if ((status != 0)) && [[ "${reported}" == false ]]; then ping /fail "backup.sh stopped at ${failed_at} (exit ${status})"; fi
+  rm -f "${log}"
+}
+trap finish EXIT
+fail() {
+  reported=true
+  cat "${log}" >&2
+  ping /fail "$1: $(tail -c 9000 "${log}")"
+  exit 1
 }
 
 ping /start
-log="$(mktemp)"
-trap 'rm -f "${log}"' EXIT
-if runuser -u postgres -- pgbackrest --stanza=radar --type="${type}" backup >"${log}" 2>&1 \
-  && runuser -u postgres -- pgbackrest --stanza=radar check >>"${log}" 2>&1 \
-  && runuser -u postgres -- pgbackrest --stanza=radar info >>"${log}" 2>&1; then
-  ping "" "$(tail -c 10000 "${log}")"
-else
-  cat "${log}" >&2
-  ping /fail "$(tail -c 10000 "${log}")"
-  exit 1
-fi
+runuser -u postgres -- pgbackrest --stanza=radar --type="${type}" backup >"${log}" 2>&1 || fail "pgbackrest ${type} backup failed"
+runuser -u postgres -- pgbackrest --stanza=radar check >>"${log}" 2>&1 || fail "pgbackrest check failed"
+runuser -u postgres -- pgbackrest --stanza=radar info >>"${log}" 2>&1 || fail "pgbackrest info failed"
+ping "" "$(tail -c 10000 "${log}")"
 ```
 
 `ops/bin/restore-test.sh`:
@@ -1604,56 +1688,74 @@ fi
 #!/usr/bin/env bash
 # Weekly proof that the backups restore: restores the latest backup into a scratch directory, starts it on a private
 # socket with archiving off (it must never push WAL into the repository), compares it with production and reports to
-# the radar-restore-test check.
+# the radar-restore-test check. It starts failing for lack of room around 55% disk use, before the system check's 70%.
 set -euo pipefail
 readonly target=/var/lib/postgresql/radar-restore-test
 readonly sockets=/run/radar-restore-test
 readonly port=5499
 readonly bin=/usr/lib/postgresql/18/bin
+# Production keeps writing during the test (up to max_wal_size of WAL) and the scratch cluster writes its own.
+readonly margin_kb=$((8 * 1024 * 1024))
 
+# The ping URL holds the project's ping key: it reaches curl on standard input, never on the command line.
 ping() {
   [[ -n "${HEALTHCHECKS_PING_BASE:-}" ]] || return 0
-  curl --silent --show-error --max-time 10 --retry 3 --data-raw "${2:-}" \
-    "${HEALTHCHECKS_PING_BASE%/}/radar-restore-test${1}?create=1" >/dev/null || true
+  printf 'url = "%s"\n' "${HEALTHCHECKS_PING_BASE%/}/radar-restore-test${1}?create=1" \
+    | curl --config - --silent --show-error --max-time 10 --retry 3 --data-raw "${2:-}" >/dev/null || true
 }
+restored() { runuser -u postgres -- psql -X -At -h "${sockets}" -p "${port}" -d radar -c "$1"; }
+production() { runuser -u postgres -- psql -X -At -d radar -c "$1"; }
 cleanup() {
   if [[ -f "${target}/postmaster.pid" ]]; then
     runuser -u postgres -- "${bin}/pg_ctl" -D "${target}" -m immediate stop >/dev/null 2>&1 || true
   fi
   rm -rf "${target}" "${sockets}"
 }
+
+log="$(mktemp)"
+reported=false
+failed_at="an unexpected step"
+trap 'failed_at="line ${LINENO}: ${BASH_COMMAND}"' ERR
+finish() {
+  local status=$?
+  if ((status != 0)) && [[ "${reported}" == false ]]; then ping /fail "restore-test.sh stopped at ${failed_at} (exit ${status})"; fi
+  cleanup
+  rm -f "${log}"
+}
+trap finish EXIT
 fail() {
+  reported=true
   echo "Restore test failed: $1" >&2
   ping /fail "$1"
   exit 1
 }
-restored() { runuser -u postgres -- psql -X -At -h "${sockets}" -p "${port}" -d radar -c "$1"; }
-production() { runuser -u postgres -- psql -X -At -d radar -c "$1"; }
 
 [[ "$(id -u)" == 0 ]] || { echo "restore-test.sh must run as root" >&2; exit 1; }
-trap cleanup EXIT
 ping /start
 cleanup
 
-# Room for a full copy of the data directory plus 2 GB.
-data_kb="$(du -sk /var/lib/postgresql/18/main | cut -f1)"
+# Measured by PostgreSQL rather than du, which fails when a file vanishes during the walk.
+data_kb="$(production 'select (sum(pg_database_size(oid)) / 1024)::bigint from pg_database')"
 free_kb="$(df --output=avail -k /var/lib/postgresql | tail -n 1 | tr -d ' ')"
-((free_kb > data_kb + 2 * 1024 * 1024)) || fail "Not enough free disk: ${free_kb} kB free for ${data_kb} kB of data"
+((free_kb > data_kb + margin_kb)) || fail "Not enough free disk: ${free_kb} kB free for ${data_kb} kB of data and ${margin_kb} kB of margin"
 
 install -d -o postgres -g postgres -m 700 "${target}" "${sockets}"
-log="$(mktemp)"
-runuser -u postgres -- pgbackrest --stanza=radar --pg1-path="${target}" --type=immediate --target-action=promote \
-  --archive-mode=off restore >"${log}" 2>&1 || fail "pgbackrest restore failed: $(tail -c 2000 "${log}")"
-# Debian keeps the configuration outside the data directory: the scratch cluster gets its own, settings on the command line.
+# Synchronous archive-get: production's asynchronous archive-push owns the spool and its lock.
+runuser -u postgres -- pgbackrest --stanza=radar --pg1-path="${target}" --archive-async=n --type=immediate \
+  --target-action=promote --archive-mode=off restore >"${log}" 2>&1 \
+  || fail "pgbackrest restore failed: $(tail -c 2000 "${log}")"
+# Debian keeps the configuration outside the data directory: the scratch cluster gets empty files and its settings on
+# the command line. hot_standby is off because archive recovery refuses settings below the primary's, and
+# timescaledb-tune raised max_worker_processes; the test needs connections only once the cluster is promoted.
 runuser -u postgres -- sh -c ": >'${target}/postgresql.conf'; echo 'local all postgres peer' >'${target}/pg_hba.conf'; : >'${target}/pg_ident.conf'"
 runuser -u postgres -- "${bin}/pg_ctl" -D "${target}" -w -t 1800 -l "${target}/restore-test.log" \
-  -o "-p ${port} -c listen_addresses= -c unix_socket_directories=${sockets} -c shared_preload_libraries=timescaledb -c timescaledb.telemetry_level=off -c archive_mode=off" \
+  -o "-p ${port} -c listen_addresses= -c unix_socket_directories=${sockets} -c hot_standby=off -c shared_preload_libraries=timescaledb -c timescaledb.telemetry_level=off -c archive_mode=off" \
   start >/dev/null || fail "The restored cluster did not start: $(tail -c 2000 "${target}/restore-test.log")"
 for _ in $(seq 1 360); do
-  [[ "$(restored 'select pg_is_in_recovery()')" == f ]] && break
+  if [[ "$(restored 'select pg_is_in_recovery()' 2>/dev/null || true)" == f ]]; then break; fi
   sleep 5
 done
-[[ "$(restored 'select pg_is_in_recovery()')" == f ]] || fail "The restored cluster is still in recovery after 30 min"
+[[ "$(restored 'select pg_is_in_recovery()' 2>/dev/null || true)" == f ]] || fail "The restored cluster did not finish recovery in 30 min"
 
 restored_games="$(restored 'select count(*) from games')"
 production_games="$(production 'select count(*) from games')"
@@ -1679,9 +1781,10 @@ if [[ -z "${HEALTHCHECKS_PING_BASE:-}" ]]; then
   echo "HEALTHCHECKS_PING_BASE is not set; radar-${job} failure not reported" >&2
   exit 1
 fi
-body="$(journalctl --unit "radar-job@${job}.service" --lines 40 --output cat --no-pager 2>&1 | tail -c 10000)"
-curl --fail --silent --show-error --max-time 10 --retry 3 --data-raw "${body}" \
-  "${HEALTHCHECKS_PING_BASE%/}/radar-${job}/fail?create=1" >/dev/null
+body="$(journalctl --unit "radar-job@${job}.service" --lines 40 --output cat --no-pager 2>&1 | tail -c 10000 || true)"
+# The ping URL holds the project's ping key: it reaches curl on standard input, never on the command line.
+printf 'url = "%s"\n' "${HEALTHCHECKS_PING_BASE%/}/radar-${job}/fail?create=1" \
+  | curl --config - --fail --silent --show-error --max-time 10 --retry 3 --data-raw "${body}" >/dev/null
 ```
 
 `ops/bin/radar.sh`:
@@ -1704,7 +1807,7 @@ exec runuser -u radar -- npm run --silent "$1" -- "${@:2}"
 
 **Step 3: Add shellcheck to CI, run, commit**
 
-In `.github/workflows/ci.yml`, after `- run: npm ci`, add `- run: shellcheck ops/bin/*.sh`. Locally, run `shellcheck ops/bin/*.sh` if installed (`sudo apt install shellcheck` is the owner's call; otherwise rely on CI).
+In `.github/workflows/ci.yml`, after `- run: npm ci`, add `- run: shellcheck --severity=warning ops/bin/*.sh` (info-level notes, such as functions only called from traps, would otherwise fail the run). Locally, run `shellcheck ops/bin/*.sh` if installed (`sudo apt install shellcheck` is the owner's call; otherwise rely on CI).
 
 ```bash
 chmod 755 ops/bin/*.sh
@@ -1728,11 +1831,11 @@ Sections, each with the exact commands of Part B:
 1. **Overview**: the server, the layout table, the timer schedule and the Healthchecks table above (copy them, then keep them current).
 2. **Access**: Tailscale (`ssh radar-prod` resolves to the tailnet address), the `analysis` user (`ssh radar-analysis 'psql -X -U radar_analysis -d radar -c "…"'`), and the local tunnel for scripts and tools: `ssh -N -L 15432:/var/run/postgresql/.s.PGSQL.5432 radar-analysis`, then `postgresql://radar_analysis@localhost:15432/radar` (peer authentication on the server side: no password). The dashboard URL from `tailscale serve status`.
 3. **Secrets inventory**: every file of `/etc/radar`, what it holds, who writes it, and what the owner keeps in a password manager.
-4. **Everyday commands**: `radar status`, `systemctl list-timers 'radar-*'`, `journalctl -u 'radar-job@*' -f -o cat`, a manual run with `systemctl start radar-job@poll`, pausing collection (`systemctl stop radar-*.timer` for the six job timers) and resuming.
-5. **Deployments**: how the deploy timer chooses a commit, `journalctl -u radar-deploy`, a manual deploy (`systemctl start radar-deploy`), rollback (`ln -sfn /opt/radar/releases/<sha> /opt/radar/current.next && mv -T /opt/radar/current.next /opt/radar/current && systemctl restart radar-web`, with migrations forward only), the rule that a migration must stay compatible with the previous release (add before you remove; drop columns one release later), and that removed unit files must be deleted from `/etc/systemd/system` by hand.
-6. **Backups and recovery**: what runs when, `runuser -u postgres -- pgbackrest --stanza=radar info`, a point-in-time restore on this server (stop the timers and PostgreSQL, `pgbackrest --stanza=radar --delta --type=time --target='<timestamp>' --target-action=promote restore`, start PostgreSQL, resume), and a rebuild from scratch on a new server: provision, configure-database, write `r2.env` and the cipher file from the password manager, write `pgbackrest.conf` with `configure-backups.sh` **before** any `stanza-create` against the existing repository (the stanza exists: skip creation, run `restore`), deploy, enable the timers.
+4. **Everyday commands**: `radar status`, `systemctl list-timers 'radar-*'`, `journalctl -u 'radar-job@*' -f -o cat`, a manual run with `systemctl start radar-job@poll`, pausing collection with `systemctl disable --now` on the six job timers and resuming with `systemctl enable --now` (a stopped but enabled timer is restarted by the next deploy run, on purpose: it heals a deploy killed in its critical section).
+5. **Deployments**: how the deploy timer chooses a commit, `journalctl -u radar-deploy`, a manual deploy (`systemctl start radar-deploy`), rollback (first `systemctl stop radar-deploy.timer` and pause the `radar-deploy` check, or the next run redeploys the branch head within 5 minutes; then `ln -sfn /opt/radar/releases/<sha> /opt/radar/current.next && mv -T /opt/radar/current.next /opt/radar/current && systemctl restart radar-web`; migrations are forward only; resume the timer and the check once a fix is pushed), a failed build (`/opt/radar/releases/<sha>.failed` holds its log and blocks that commit until a new one arrives), the rule that a migration must stay compatible with the previous release (add before you remove; drop columns one release later), and that removed unit files must be deleted from `/etc/systemd/system` by hand.
+6. **Backups and recovery**: what runs when, `runuser -u postgres -- pgbackrest --stanza=radar info`, a point-in-time restore on this server (stop the timers and PostgreSQL, `pgbackrest --stanza=radar --delta --type=time --target='<timestamp>' --target-action=promote restore`, start PostgreSQL, resume), and a rebuild from scratch on a new server, in this order: `provision.sh`; write `r2.env` and `/etc/radar/pgbackrest-cipher` from the password manager; `configure-backups.sh --config-only`; `systemctl stop postgresql@18-main`; `runuser -u postgres -- pgbackrest --stanza=radar --delta restore`; `systemctl start postgresql@18-main`; `configure-backups.sh` in full (its `stanza-create` is then a no-op); `configure-database.sh` (writes `radar.env`, grants are idempotent); `deploy.sh`; write `healthchecks.env`; enable the timers. The restore test starts failing for lack of room around 55% disk use, an early warning before the system check's 70%.
 7. **Monitoring**: the checks, what each alert means and the first commands to run.
-8. **Maintenance**: unattended upgrades (Ubuntu security and PostgreSQL minor releases, automatic reboot at 04:40 UTC when needed); Node.js updates by hand (`apt-get install --only-upgrade nodejs`, then `systemctl restart radar-web`); a TimescaleDB upgrade is a change set of its own: bump the CI image, `provision.sh` version and the held packages together, then `ALTER EXTENSION timescaledb UPDATE` as `postgres` with the timers stopped; `provision:healthchecks` after any change of `JOB_CONFIG` or `HEALTHCHECKS_CONFIG`.
+8. **Maintenance**: unattended upgrades cover Ubuntu security updates only, with an automatic reboot at 04:48 UTC when one needs it; PostgreSQL (PGDG) minor releases are applied by hand once CI passes on the same minor version (a PostgreSQL minor release once broke the extension ABI), with the job timers disabled during the restart; Tailscale updates itself (`tailscale set --auto-update`); Node.js updates by hand (`apt-get install --only-upgrade nodejs`, then `systemctl restart radar-web`); a TimescaleDB upgrade is a change set of its own: bump the CI image, `provision.sh` version and the held packages together, then `ALTER EXTENSION timescaledb UPDATE` as `postgres` with the timers stopped; `provision:healthchecks` after any change of `JOB_CONFIG` or `HEALTHCHECKS_CONFIG`.
 9. **Lockout recovery**: Hetzner Console → server → Rescue tab or "Reset root password" and the web console; `ufw allow 22/tcp` there restores public SSH.
 
 **Step 2: The other files**
@@ -1759,16 +1862,16 @@ The controller runs these tasks over SSH (`ssh radar-prod '…'`) from the owner
 
 ### Task B1: Base provisioning
 
-1. Clone the branch on the server (public repository, no credentials):
-   `ssh radar-prod 'git clone --quiet --branch radar-v2 https://github.com/MoulinLouis/roblox-trends.git /root/radar-bootstrap 2>/dev/null || git -C /root/radar-bootstrap pull --quiet --ff-only'`
+1. Clone the branch on the server (public repository, no credentials; `git` may be missing on the image):
+   `ssh radar-prod 'command -v git >/dev/null || apt-get install -y -q git; if [ -d /root/radar-bootstrap ]; then git -C /root/radar-bootstrap pull --quiet --ff-only; else git clone --quiet --branch radar-v2 https://github.com/MoulinLouis/roblox-trends.git /root/radar-bootstrap; fi'`
 2. Run: `ssh radar-prod /root/radar-bootstrap/ops/bin/provision.sh`
    Expected last line: PostgreSQL 18.x, TimescaleDB 2.30.2~ubuntu24.04, Node.js v24.x, npm 11.x, pgBackRest 2.x, Tailscale 1.x. If TimescaleDB 2.30.2 is not packaged for arm64, stop: pick the nearest 2.30.x that is, bump the CI image and `provision.sh` together in a commit, and rerun.
-3. Verify: `ssh radar-prod 'systemctl is-active postgresql@18-main tailscaled; ufw status verbose; swapon --show; runuser -u postgres -- psql -XAtc "select name, default_version from pg_available_extensions where name = '\''timescaledb'\''"; runuser -u postgres -- psql -XAtc "show shared_preload_libraries; show archive_mode"'`
-   Expected: both active; ufw allows `tailscale0`, 41641/udp and 22/tcp; 2 GB swap; timescaledb 2.30.2; `timescaledb`; `off`.
+3. Verify: `ssh radar-prod 'systemctl is-active postgresql@18-main tailscaled; ufw status verbose; swapon --show; runuser -u postgres -- psql -XAtc "select name, default_version from pg_available_extensions where name = '\''timescaledb'\''"; runuser -u postgres -- psql -XAtc "select name, setting, sourcefile from pg_settings where name in ('\''shared_preload_libraries'\'', '\''archive_mode'\'', '\''max_wal_size'\'', '\''checkpoint_timeout'\'', '\''max_worker_processes'\'', '\''shared_buffers'\'', '\''wal_compression'\'') order by name"'`
+   Expected: both active; ufw allows `tailscale0`, 41641/udp and 22/tcp; 2 GB swap; timescaledb 2.30.2; `shared_preload_libraries = timescaledb`, `archive_mode = off`, and `max_wal_size`, `checkpoint_timeout` and `wal_compression` coming from `conf.d/90-radar.conf` (if `timescaledb-tune` wrote one of them after the `include_dir` line, move the line and record it). Record the tuned `max_worker_processes` and `shared_buffers`.
 
 ### Task B2: Tailscale and closing public SSH
 
-1. `ssh radar-prod 'tailscale up --hostname=radar-prod'` prints a login URL. **Owner**: open it and approve the machine; in the Tailscale admin console, disable key expiry for `radar-prod`, and enable MagicDNS and HTTPS certificates (DNS page).
+1. `ssh radar-prod 'tailscale up --hostname=radar-prod'` prints a login URL and waits (run it in the background and read the URL). **Owner**: open it and approve the machine; in the Tailscale admin console, disable key expiry for `radar-prod`, and enable MagicDNS and HTTPS certificates (DNS page). Then `ssh radar-prod 'tailscale set --auto-update'`.
 2. `ssh radar-prod 'tailscale ip -4'` → note the `100.x.y.z` address.
 3. From WSL: `ssh -o BatchMode=yes -o ConnectTimeout=10 root@100.x.y.z true`. If it fails, WSL does not route through the Windows client: **Owner** installs Tailscale inside WSL (`curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up`), then retry.
 4. Update `~/.ssh/config`: `Host radar-prod` gets `HostName 100.x.y.z`; add `Host radar-analysis` with the same address, `User analysis`, the same key and `IdentitiesOnly yes`. Check `ssh radar-prod true` and `ssh radar-analysis true`.
@@ -1800,7 +1903,7 @@ The controller runs these tasks over SSH (`ssh radar-prod '…'`) from the owner
      R2_SECRET_ACCESS_KEY=...
      ```
 2. `ssh radar-prod /opt/radar/current/ops/bin/configure-backups.sh` → `check command end: completed successfully`. If R2 rejects the requests, record the error; the fallback is Backblaze B2 (S3-compatible, same script with its endpoint and region).
-3. First full backup and restore test (no Healthchecks yet, so no pings): `ssh radar-prod 'systemctl start radar-backup@full && runuser -u postgres -- pgbackrest --stanza=radar info && systemctl start radar-restore-test && journalctl -u radar-restore-test -n 20 -o cat'` → one full backup, and the restore test ends without error.
+3. First full backup and restore test (no Healthchecks yet, so no pings): `ssh radar-prod 'systemctl start radar-backup@full; runuser -u postgres -- pgbackrest --stanza=radar info; systemctl start radar-restore-test; journalctl -u radar-restore-test -n 20 -o cat'` → one full backup, and the restore test ends without error.
 4. **Owner**: from their own terminal, `ssh radar-prod cat /etc/radar/pgbackrest-cipher` and save the passphrase in the password manager. **Gate**: the owner confirms that the cipher passphrase and the R2 keys are saved outside the server.
 
 ### Task B5: Monitoring and automatic deployment
@@ -1810,7 +1913,7 @@ The controller runs these tasks over SSH (`ssh radar-prod '…'`) from the owner
    - `install -m 600 /dev/null /root/healthchecks-api-key && nano /root/healthchecks-api-key` with the API key alone.
 2. Provision the checks, then delete the API key from the server:
    `ssh radar-prod 'HEALTHCHECKS_API_KEY="$(cat /root/healthchecks-api-key)" radar provision:healthchecks; status=$?; shred -u /root/healthchecks-api-key; exit $status'`
-   Expected: 16 `Check created` lines. **Owner** sees 16 grey (new) checks.
+   Expected: 16 `Check created` or `Check updated` lines (a ping sent earlier with `create=1` may already have created a check). **Owner** sees the 16 checks with their periods.
 3. Enable the operations timers: `ssh radar-prod 'systemctl enable --now radar-system-check.timer radar-deploy.timer radar-backup-full.timer radar-backup-diff.timer radar-restore-test.timer && systemctl start radar-system-check radar-deploy radar-backup@diff && systemctl list-timers "radar-*"'`
    Expected: `radar-system`, `radar-deploy` and `radar-backup` turn green (this also proves the ping key).
 4. Automatic deployment: commit the Execution notes of B1–B5 and push. Within about 10 minutes (CI, then the next deploy run), `ssh radar-prod readlink /opt/radar/current` shows the new commit and `journalctl -u radar-deploy -n 30 -o cat` shows `Deployed`.
@@ -1819,35 +1922,51 @@ The controller runs these tasks over SSH (`ssh radar-prod '…'`) from the owner
 
 Every step is a **Gate**. v1 keeps running untouched; nothing here writes to Aiven.
 
-1. **Owner** (Aiven): download the CA certificate (service page → Overview → CA certificate) and create a read-only role. From their own terminal, with the admin connection string, run:
+1. **Owner** (Aiven): download the CA certificate (service page → Overview → CA certificate) and create a read-only role. From their own terminal, connect as the admin user and let psql prompt for its password (no password on the command line or in the shell history): `psql "host=<host> port=<port> dbname=defaultdb user=avnadmin sslmode=require"`, then:
    ```sql
-   CREATE ROLE radar_v1_reader LOGIN PASSWORD '<generated, saved in the password manager>';
+   CREATE ROLE radar_v1_reader LOGIN;
+   \password radar_v1_reader
    GRANT CONNECT ON DATABASE defaultdb TO radar_v1_reader;
    GRANT USAGE ON SCHEMA public TO radar_v1_reader;
    GRANT SELECT ON games, game_metadata_history, snapshots, daily_snapshots TO radar_v1_reader;
+   -- pg_dump -t also dumps the identity sequences; SELECT on a sequence reads last_value only.
+   GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO radar_v1_reader;
    ALTER ROLE radar_v1_reader SET default_transaction_read_only = on;
    ```
-   (Use the real database name if it is not `defaultdb`.) Then on the server: `/etc/radar/aiven-ca.pem` (mode 644) with the certificate, and `install -m 600 /dev/null /etc/radar/legacy.env && nano /etc/radar/legacy.env` with `LEGACY_DATABASE_URL=postgres://radar_v1_reader:<password>@<host>:<port>/defaultdb?sslmode=verify-full&sslrootcert=/etc/radar/aiven-ca.pem`.
+   (Use the real database name if it is not `defaultdb`; the password is letters and digits only, saved in the password manager.) Then on the server, from their own terminal: `/etc/radar/aiven-ca.pem` (mode 644) with the certificate, and `install -m 600 /dev/null /etc/radar/legacy.env && nano /etc/radar/legacy.env` with, quotes included (the `&` would otherwise break `. legacy.env` in a shell; systemd strips the quotes too):
+   ```
+   LEGACY_DATABASE_URL='postgres://radar_v1_reader@<host>:<port>/defaultdb?sslmode=verify-full&sslrootcert=/etc/radar/aiven-ca.pem'
+   PGPASSWORD='<password>'
+   ```
+   The URL holds no secret, so it may appear on command lines; psql, pg_dump and node-postgres read the password from `PGPASSWORD` (the v2 socket connection uses peer authentication and ignores it).
 2. Connectivity, read-only proof: `ssh radar-prod 'set -a; . /etc/radar/legacy.env; set +a; psql "$LEGACY_DATABASE_URL" -XAtc "select current_user, current_setting('\''default_transaction_read_only'\''), (select count(*) from snapshots)"'` → `radar_v1_reader|on|<count>`.
-3. Dump the four v1 tables to R2:
+3. Dump the four v1 tables, prove the dump reads back completely, then upload it with a checksum (after phase 4 it is the only copy of v1):
    ```bash
    ssh radar-prod 'set -euo pipefail; set -a; . /etc/radar/legacy.env; . /etc/radar/r2.env; set +a
      export RCLONE_CONFIG_R2_TYPE=s3 RCLONE_CONFIG_R2_PROVIDER=Cloudflare RCLONE_CONFIG_R2_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID" \
        RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY" RCLONE_CONFIG_R2_ENDPOINT="https://$R2_ENDPOINT" RCLONE_CONFIG_R2_NO_CHECK_BUCKET=true
-     name="v1/radar-v1-$(date -u +%Y%m%dT%H%MZ).dump"
-     pg_dump "$LEGACY_DATABASE_URL" --format=custom --no-owner --no-privileges -t games -t game_metadata_history -t snapshots -t daily_snapshots \
-       | rclone rcat "r2:$R2_BUCKET/$name"
-     rclone cat "r2:$R2_BUCKET/$name" | pg_restore --list | grep -c "TABLE DATA"
-     rclone lsl "r2:$R2_BUCKET/v1/"'
+     name="radar-v1-$(date -u +%Y%m%dT%H%MZ).dump"
+     dump="/var/tmp/$name"
+     pg_dump "$LEGACY_DATABASE_URL" --format=custom --no-owner --no-privileges \
+       -t games -t game_metadata_history -t snapshots -t daily_snapshots --file="$dump"
+     pg_restore --list "$dump" | grep -c "TABLE DATA"
+     pg_restore --file=/dev/null "$dump"
+     rclone copyto "$dump" "r2:$R2_BUCKET/v1/$name"
+     [ "$(sha256sum <"$dump")" = "$(rclone cat "r2:$R2_BUCKET/v1/$name" | sha256sum)" ] && echo "checksum ok"
+     rclone lsl "r2:$R2_BUCKET/v1/"
+     rm -f "$dump"'
    ```
-   Expected: `4`, and the dump listed with a plausible size. The pgBackRest expiry never touches `v1/` (it only manages `/pgbackrest`).
+   Expected: `4`, no error from the full `pg_restore` read, `checksum ok`, and the dump listed with a plausible size. The pgBackRest expiry never touches `v1/` (it only manages `/pgbackrest`).
 4. Chart label check: `ssh radar-prod 'set -a; . /etc/radar/legacy.env; set +a; psql "$LEGACY_DATABASE_URL" -XAc "select chart, count(*) from snapshots where source = '\''roblox-charts'\'' group by chart order by chart"'` and compare every label with `src/lib/legacy/mapping.ts`. An unmapped label is fixed in the repository (and deployed) before the import.
-5. Import, as a transient unit that survives an SSH disconnect:
+5. Quiet the server for the import: stop `radar-deploy.timer` (no release switch mid-import) and `radar-system-check.timer`, and pause the TimescaleDB policies so compression and aggregate refreshes do not contend with the import's writes into old chunks:
+   `ssh radar-prod 'systemctl stop radar-deploy.timer radar-system-check.timer && runuser -u postgres -- psql -X -d radar -Atc "select alter_job(job_id, scheduled => false) from timescaledb_information.jobs where job_id >= 1000" | wc -l'`
+6. Import, as a transient unit that survives an SSH disconnect:
    `ssh radar-prod 'systemd-run --unit=radar-import-legacy --uid=radar --gid=radar -p WorkingDirectory=/opt/radar/current -p EnvironmentFile=/etc/radar/radar.env -p EnvironmentFile=/etc/radar/legacy.env /opt/radar/current/node_modules/.bin/tsx scripts/import-legacy.ts'`
    Follow with `ssh radar-prod 'journalctl -u radar-import-legacy -f -o cat'`. On failure, rerun the same command with `--since=<window start from the log>` appended (a new unit name, for example `radar-import-legacy-2`).
-6. Review the summary (`journalctl -u radar-import-legacy -o cat | grep "Legacy import completed"`): `unmappedLabels` must be 0 and `invalidRows` explained; then `ssh radar-prod radar status` (games and observations imported, jobs still "never").
-7. Start collecting: `ssh radar-prod 'systemctl enable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer && systemctl list-timers "radar-*"'`.
-8. Watch the first runs: `ssh radar-prod 'journalctl -u "radar-job@*" -f -o cat'` until poll and census have each completed once, then `radar status` after 15 minutes. **Owner**: the job checks turn green in Healthchecks (quality checks stay grey or red until the first fully successful runs; poll is degraded until census has promoted games).
+7. Review the summary (`journalctl -u radar-import-legacy -o cat | grep "Legacy import completed"`): `unmappedLabels` must be 0 and `invalidRows` explained; then `ssh radar-prod radar status` (games and observations imported, jobs still "never").
+8. Resume the policies and the operations timers: `ssh radar-prod 'runuser -u postgres -- psql -X -d radar -Atc "select alter_job(job_id, scheduled => true) from timescaledb_information.jobs where job_id >= 1000" | wc -l && systemctl start radar-deploy.timer radar-system-check.timer'`.
+9. Start collecting: `ssh radar-prod 'systemctl enable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer && systemctl list-timers "radar-*"'`.
+10. Watch the first runs: `ssh radar-prod 'journalctl -u "radar-job@*" -f -o cat'` until poll and census have each completed once, then `radar status` after 15 minutes. **Owner**: the job checks turn green in Healthchecks (quality checks stay grey or red until the first fully successful runs; poll is degraded until census has promoted games).
 
 ### Task B7: 24-hour observation and close-out
 
@@ -1865,6 +1984,20 @@ Every step is a **Gate**. v1 keeps running untouched; nothing here writes to Aiv
 ## Execution notes
 
 (Record decisions and surprises here as tasks complete; committed code is authoritative over the code blocks above.)
+
+- Plan review (before execution), folded into the tasks above:
+  - The restore test starts the scratch cluster with `hot_standby=off`, because archive recovery refuses settings below the primary's and `timescaledb-tune` raises `max_worker_processes`. It uses a synchronous `archive-get` (`--archive-async=n`), measures the data size with `pg_database_size`, and keeps an 8 GB margin.
+  - `legacy.env` quotes the URL (its `&` broke shell sourcing) and keeps the password in `PGPASSWORD`. The Aiven role also reads the identity sequences, which `pg_dump -t` includes, and gets its password with `\password`.
+  - The v1 dump is read back in full and checksummed before it is uploaded.
+  - The system check maps TimescaleDB's `-infinity` `last_successful_finish` to `null`, so a policy that never succeeded is measured from its initial start.
+  - Scripts:
+    - Healthchecks URLs reach curl on stdin.
+    - No `set -E`; an ERR trap records the failing line, and an EXIT trap pings `/fail` for any unreported non-zero exit.
+    - `deploy.sh` takes a `flock`, marks a release `.deployed` last, blocks a failed build until a new commit arrives, pauses the job timers only when `drizzle/` changed, probes the dashboard after a restart, never prunes releases younger than 2 h, and restarts enabled job timers on every exit (pausing collection therefore means disabling the timers).
+  - PostgreSQL minor upgrades are manual (PGDG is not an unattended origin), and the reboot time is 04:48.
+  - Rollback starts by stopping the deploy timer; `configure-backups.sh --config-only` is the first step of a rebuild.
+  - The import pauses the TimescaleDB policies, the deploy timer and the system check.
+  - CI runs `shellcheck --severity=warning`.
 
 ## Out of scope (later phases)
 
