@@ -103,7 +103,7 @@ Estimated volume: about 1M rows per day in each of `game_observations` and `cens
 | `votes` | 1 h | Calls the votes endpoint for the active set and writes `vote_observations`. |
 | `charts` | 1 h | Reads the 22 discovery sorts, writes `chart_placements` and discovers new universes. |
 | `explore` | 1 h | Runs bounded Roblox searches and recommendation expansion from rising games. Search terms come from cluster vocabulary instead of a fixed taxonomy; until clusters exist (phase 2), they are the words shared by the titles of rising young games. |
-| `thumbnails` | 1 h | Records the 16:9 thumbnail and the icon of new games, and refreshes games at or above 50 CCU every 24 hours, in batches of 50 (at most 4,000 games per run), for classification and display. |
+| `thumbnails` | 1 h | Records the 16:9 thumbnail and the icon of new games, and refreshes games at or above 50 CCU every 24 hours, in batches of 50 (at most 4,000 games per run), for classification and display. A new game that gets no usable answer is retried after 6 hours, behind the other games. |
 
 A game is active when it reached 50 CCU or more in the last 24 hours, when it is at most 90 days old and had players in the last 7 days, or when it is on the watchlist. Older games that revive show up in `census` first and then re-enter `poll`.
 

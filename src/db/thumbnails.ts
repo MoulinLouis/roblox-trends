@@ -17,27 +17,62 @@ export function thumbnailKey(thumbnail: GameThumbnail): string {
   return thumbnail.mediaId !== null ? `media:${thumbnail.mediaId}` : `url:${urlFingerprint(thumbnail.imageUrl)}`;
 }
 
-// Games never checked come first, busiest first, whatever their CCU time. A checked game is refreshed when its last
-// check is older than the refresh interval and it is busy now: its CCU must be recent, because a game that Roblox stops
-// returning keeps its last CCU forever. A game left pending, erroring or unanswered keeps its check time, so it stays
-// due and the next run retries it.
+// Games never requested come first, busiest first, whatever their CCU time. A checked game is refreshed next, oldest
+// check first, when that check is older than the refresh interval and the game is busy now: its CCU must be recent,
+// because a game that Roblox stops returning keeps its last CCU forever. A game left pending, erroring or unanswered
+// keeps its check time, so it stays due: a checked one on the next run, a never-checked one only once its last request
+// is older than the retry interval, and after the others, so games that never get an answer cannot crowd the queue.
 export async function selectGamesNeedingThumbnails(
   db: Database,
   now: Date,
-  options: { refreshHours: number; refreshMinimumCcu: number; refreshMaximumCcuAgeHours: number; limit: number },
+  options: {
+    refreshHours: number;
+    refreshMinimumCcu: number;
+    refreshMaximumCcuAgeHours: number;
+    retryUnansweredAfterHours: number;
+    limit: number;
+  },
 ): Promise<number[]> {
   const at = now.toISOString();
   const result = await db.execute<{ universe_id: string }>(sql`
     select universe_id
     from games
-    where thumbnails_checked_at is null
+    where (thumbnails_checked_at is null
+           and (thumbnails_attempted_at is null
+                or thumbnails_attempted_at < ${at}::timestamptz - make_interval(hours => ${options.retryUnansweredAfterHours}::int)))
        or (thumbnails_checked_at < ${at}::timestamptz - make_interval(hours => ${options.refreshHours}::int)
            and last_ccu >= ${options.refreshMinimumCcu}
            and last_ccu_at > ${at}::timestamptz - make_interval(hours => ${options.refreshMaximumCcuAgeHours}::int))
-    order by thumbnails_checked_at nulls first, last_ccu desc, universe_id
+    order by
+      case
+        when thumbnails_checked_at is null and thumbnails_attempted_at is null then 0
+        when thumbnails_checked_at is not null then 1
+        else 2
+      end,
+      thumbnails_checked_at, thumbnails_attempted_at, last_ccu desc, universe_id
     limit ${options.limit}
   `);
   return result.rows.map((row) => Number(row.universe_id));
+}
+
+// Records every game requested, answered or not, including the games of a batch Roblox answered for none: a game that
+// never gets an answer then waits for the retry interval instead of being requested again by every run. An older run
+// that finishes last keeps the newer time. Rows are locked in universe-id order first, like every other writer to
+// games, so a concurrent poll cannot deadlock with it.
+export async function markThumbnailsAttempted(db: Database, universeIds: number[], attemptedAt: Date): Promise<void> {
+  if (universeIds.length === 0) return;
+  await db.execute(sql`
+    with locked as materialized (
+      select universe_id from games
+      where universe_id = any(${sql.param(universeIds)}::bigint[])
+      order by universe_id
+      for update
+    )
+    update games g
+    set thumbnails_attempted_at = greatest(g.thumbnails_attempted_at, ${attemptedAt.toISOString()}::timestamptz)
+    from locked
+    where g.universe_id = locked.universe_id
+  `);
 }
 
 // Saves one batch in one transaction, so a game's update and its version commit together: a version lost after the

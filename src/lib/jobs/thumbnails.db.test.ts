@@ -1,4 +1,4 @@
-import { eq, isNotNull } from "drizzle-orm";
+import { eq, isNotNull, isNull } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { upsertGameDetails } from "@/db/games";
 import { games, gameVersions, jobRuns } from "@/db/schema";
@@ -12,7 +12,8 @@ import { createThumbnailsJob, type ThumbnailsDependencies } from "./thumbnails";
 
 type Roblox = ThumbnailsDependencies["roblox"];
 
-const { batchSize, deadlineMs, maximumConsecutiveFailedBatches } = JOB_CONFIG.thumbnails;
+const { batchSize, deadlineMs, maximumConsecutiveFailedBatches, retryUnansweredAfterHours } = JOB_CONFIG.thumbnails;
+const hourMs = 60 * 60 * 1000;
 
 const iconsFor: Roblox["getThumbnails"] = async (ids) => new Map(ids.map((id) => [id, `https://tr.rbxcdn.com/icon-${id}`]));
 const noIcons: Roblox["getThumbnails"] = async () => new Map();
@@ -162,6 +163,7 @@ describe.skipIf(!hasTestDatabase)("thumbnails job", () => {
       thumbnailUrl: "https://tr.rbxcdn.com/e/Image",
       thumbnailKey: "media:404",
       thumbnailsCheckedAt: new Date("2026-10-26T21:01:00Z"),
+      thumbnailsAttemptedAt: new Date("2026-10-26T21:01:00Z"),
     });
     expect((await thumbnailVersions(1)).map((version) => version.rawFingerprint)).toEqual(["media:101", "media:202", "media:303", "media:404"]);
   });
@@ -206,14 +208,19 @@ describe.skipIf(!hasTestDatabase)("thumbnails job batches and game selection", (
     return run.stats;
   }
 
-  function due() {
+  function due(at = now) {
     const config = JOB_CONFIG.thumbnails;
-    return selectGamesNeedingThumbnails(database.db, now, {
+    return selectGamesNeedingThumbnails(database.db, at, {
       refreshHours: config.refreshHours,
       refreshMinimumCcu: config.refreshMinimumCcu,
       refreshMaximumCcuAgeHours: config.refreshMaximumCcuAgeHours,
+      retryUnansweredAfterHours: config.retryUnansweredAfterHours,
       limit: config.maximumGamesPerRun,
     });
+  }
+
+  function hoursLater(hours: number): Date {
+    return new Date(now.getTime() + hours * hourMs);
   }
 
   it("saves every batch", async () => {
@@ -274,11 +281,34 @@ describe.skipIf(!hasTestDatabase)("thumbnails job batches and game selection", (
     expect(await runStats()).toMatchObject({ attempted: batchSize, answered: batchSize, skipped: batchSize, stoppedBy: "deadline" });
   });
 
-  it("counts errors as answers and keeps the erroring games due", async () => {
+  it("counts errors as answers and retries the erroring games after the retry interval", async () => {
     await insertGames(2);
     expect(await executeJob(job({ "1": "error", "2": "error" }), database.db, now)).toBe("success");
     expect(await runStats()).toMatchObject({ requested: 2, answered: 2, errored: 2, withThumbnail: 0 });
-    expect(await due()).toEqual([1, 2]);
+    expect(await database.db.select().from(games).where(isNotNull(games.thumbnailsCheckedAt))).toEqual([]);
+    expect(await due()).toEqual([]);
+    expect(await due(hoursLater(retryUnansweredAfterHours))).toEqual([]);
+    expect(await due(hoursLater(retryUnansweredAfterHours + 1))).toEqual([1, 2]);
+  });
+
+  it("retries games that got no answer after new games and refreshes", async () => {
+    // Games 1 to 3 were requested: game 1 is pending, game 2 erroring and game 3 unanswered. Game 4 is new.
+    await insertGames(3);
+    expect(await executeJob(job({ "1": "pending", "2": "error" }), database.db, now)).toBe("degraded");
+    expect(await database.db.select().from(games).where(isNull(games.thumbnailsAttemptedAt))).toEqual([]);
+    await upsertGameDetails(database.db, [gameDetail(4, { playing: 10 }), gameDetail(5)], now);
+    // Game 5 was checked more than a day before the run: due for a refresh.
+    await database.db.update(games).set({ thumbnailsCheckedAt: hoursLater(-25) }).where(eq(games.universeId, 5));
+
+    expect(await due()).toEqual([4, 5]);
+    expect(await due(hoursLater(retryUnansweredAfterHours + 1))).toEqual([4, 5, 1, 2, 3]);
+  });
+
+  it("backs off the games of a run that Roblox answered for none", async () => {
+    await insertGames(2);
+    expect(await executeJob(job({}), database.db, now)).toBe("failed");
+    expect(await due()).toEqual([]);
+    expect(await due(hoursLater(retryUnansweredAfterHours + 1))).toEqual([1, 2]);
   });
 
   it("does not refresh a busy game whose CCU is stale", async () => {

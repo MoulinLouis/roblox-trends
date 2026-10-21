@@ -113,6 +113,10 @@ export const JOB_CONFIG = {
     // Unanswered batches in a row that point to an outage of the thumbnail endpoint rather than to bad games.
     maximumConsecutiveFailedBatches: 3,
     refreshHours: 24,
+    // A never-checked game that Roblox answered as pending, with an error or not at all waits this long, behind new
+    // games and refreshes, before it is requested again: an image in review still arrives within hours, while deleted
+    // or moderated games no longer head every run. Each one costs four requests a day instead of 24.
+    retryUnansweredAfterHours: 6,
     refreshMinimumCcu: 50,
     // A checked game is refreshed only while its CCU is this recent: a game Roblox stops returning keeps its last CCU.
     refreshMaximumCcuAgeHours: 24,

@@ -44,6 +44,8 @@ export const games = pgTable(
     // Identity of the current thumbnail: "media:<asset id>", or "url:<sha1>" when Roblox gives no asset id.
     thumbnailKey: text("thumbnail_key"),
     thumbnailsCheckedAt: timestamptz("thumbnails_checked_at"),
+    // The latest thumbnail request, answered or not: a game never checked is retried only once this is old enough.
+    thumbnailsAttemptedAt: timestamptz("thumbnails_attempted_at"),
   },
   (table) => [
     index("games_roblox_created_idx").on(table.robloxCreatedAt),

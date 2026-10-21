@@ -1,4 +1,4 @@
-import { saveThumbnails, selectGamesNeedingThumbnails, type ThumbnailResult } from "@/db/thumbnails";
+import { markThumbnailsAttempted, saveThumbnails, selectGamesNeedingThumbnails, type ThumbnailResult } from "@/db/thumbnails";
 import { getHttpRequestMetrics } from "@/lib/api/http";
 import type { RobloxApi } from "@/lib/api/roblox";
 import { JOB_CONFIG } from "@/lib/config";
@@ -26,6 +26,7 @@ export function createThumbnailsJob(dependencies: ThumbnailsDependencies): JobDe
         refreshHours: config.refreshHours,
         refreshMinimumCcu: config.refreshMinimumCcu,
         refreshMaximumCcuAgeHours: config.refreshMaximumCcuAgeHours,
+        retryUnansweredAfterHours: config.retryUnansweredAfterHours,
         limit: config.maximumGamesPerRun,
       });
       const httpBefore = getHttpRequestMetrics();
@@ -55,6 +56,9 @@ export function createThumbnailsJob(dependencies: ThumbnailsDependencies): JobDe
           changed += (await saveThumbnails(db, results, now)).changed;
         },
       });
+      // Batches run in order, so the requested games are the first `attempted` ones. A game skipped by a stop or by the
+      // deadline keeps its previous request time.
+      await markThumbnailsAttempted(db, universeIds.slice(0, outcome.attempted), now);
       const answers = outcome.results.map((result) => result.answer).filter((answer) => answer !== undefined);
       if (universeIds.length > 0 && answers.length === 0) {
         throw new Error(
