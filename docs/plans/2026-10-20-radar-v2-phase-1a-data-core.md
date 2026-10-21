@@ -3037,11 +3037,20 @@ export function createChartsJob(dependencies: ChartsDependencies): JobDefinition
       // A failed sort keeps whatever an earlier attempt in this hour stored for it.
       let placements = 0;
       for (const [sortId, rows] of placementsBySort) placements += await replaceChartSlot(db, sortId, slot, rows);
-      const promotion = await promoteUniverses(db, dependencies.roblox, candidates, now);
+      // A promotion failure must not discard the placements already stored; the next run retries it.
+      let promoted = 0;
+      let promotionError: string | undefined;
+      try {
+        promoted = (await promoteUniverses(db, dependencies.roblox, candidates, now)).promoted;
+      } catch (error) {
+        promotionError = errorMessage(error);
+        logger.error("Chart promotion failed; retrying next run", { error: promotionError });
+      }
       const succeededSorts = sortIds.length - failedSorts;
+      const sortsOk = sortIds.length > 0 && succeededSorts / sortIds.length >= config.minimumSortShare;
       return {
-        status: sortIds.length && succeededSorts / sortIds.length >= config.minimumSortShare ? "success" : "degraded",
-        stats: { sorts: sortIds.length, failedSorts, placements, promoted: promotion.promoted },
+        status: sortsOk && !promotionError ? "success" : "degraded",
+        stats: { sorts: sortIds.length, failedSorts, placements, promotionRequested: candidates.length, promoted, promotionError },
       };
     },
   };
@@ -3307,10 +3316,17 @@ export function createExploreJob(dependencies: ExploreDependencies): JobDefiniti
           logger.warn("Search exploration failed", { term, error: errorMessage(error) });
         }
       }
-      const promotion = await promoteUniverses(db, dependencies.roblox, candidates, now, { recordKnown: true });
+      let promoted = 0;
+      let promotionError: string | undefined;
+      try {
+        promoted = (await promoteUniverses(db, dependencies.roblox, candidates, now, { recordKnown: true })).promoted;
+      } catch (error) {
+        promotionError = errorMessage(error);
+        logger.error("Exploration promotion failed; retrying next run", { error: promotionError });
+      }
       return {
-        status: requests > 0 && failures === requests ? "degraded" : "success",
-        stats: { seeds: seeds.length, terms, requests, failures, candidates: candidates.length, promoted: promotion.promoted },
+        status: (requests > 0 && failures === requests) || promotionError ? "degraded" : "success",
+        stats: { seeds: seeds.length, terms, requests, failures, candidates: candidates.length, promoted, promotionError },
       };
     },
   };
@@ -4476,7 +4492,8 @@ Expected: CI green with every database suite executed.
 - After Task 6 re-review: no writer may set `games.last_observed_at` later than real time (the stale-write guard compares against it); the legacy import reads v1 games in universe-id order. Migrations 0000 and 0001 were edited in place only because no persistent v2 database existed yet; from now on, schema changes go into new migrations.
 - After Task 5 re-review: thumbnails also report `"pending"` (processing or in review), Blocked counts as no thumbnail, `countPerUniverse=3` falls back to an approved image, icons are best-effort per batch, and a thumbnails run where Roblox answered for no game fails.
 - After Task 5 review: `getGameThumbnails` uses `defaults=false` (with `defaults=true`, games without media come back as shared generic `GameMediaItem` images marked Completed), parses items one by one, and returns a custom thumbnail, `null` (no custom thumbnail) or no entry (unknown). Thumbnail versions are keyed on the media asset id through `games.thumbnail_key` (migration 0002).
-- Before phase 3: analysis must exclude every slot whose run was not `success` (failed runs can leave partial writes), not only degraded ones.
+- Before phase 3: analysis must exclude every slot whose run was not `success` (failed runs can leave partial writes), not only degraded ones. Exception: census slots are filtered on `job_runs.stats.listQuality`, because a census run can be degraded by resolution or promotion problems while its list is complete.
+- After Task 8 review: game details, votes and Rolimon's entries are validated item by item (a malformed item is skipped and logged, a broken envelope still throws); a missing place resolves to `{"universeId": null}` with HTTP 200 (not 404), stored as unresolvable; census degrades when promotion fails or every resolution fails, stops resolving after a terminal 429, and treats a list below `minimumListed` as degraded; charts and explore catch promotion errors and degrade.
 - Before phase 3: raw SQL over aggregates returns `int8`, `numeric` and `timestamptz` as strings; convert with `Number()`/`new Date()` or declare the views with `pgView(...).existing()`. Exclude the partial current UTC day from daily analysis; `game_daily` computes it in real time.
 - Before phase 4: cache the dashboard database instance on `globalThis` so Next dev hot reloads do not open new pools.
 - Task 17: update design section 2 (separate `vote_observations`, 365-day raw retention, aggregate columns).
