@@ -2063,7 +2063,7 @@ Every step is a **Gate**. v1 keeps running untouched; nothing here writes to Aiv
 
   A controller mistake contaminated two of the probes. `systemctl stop radar-poll.timer` is undone within 5 minutes by the deploy run's self-heal; pausing must use `disable --now`, as the runbook says. Oneshot job units report `activating` while they run, so a wait loop must use `systemctl list-units --state=activating,active`, not `is-active`.
 - Follow-ups:
-  - The Healthchecks poll checks still have the 5-minute period (300 s plus 570 s grace, which covers the 10-minute runs). Re-provision with a temporary API key to set 600/840.
+  - The owner set the Healthchecks poll checks to the 10-minute period in the UI (poll job: 10 min, 14 min grace; poll quality: 10 min, 1 h grace), which matches `desiredChecks()`. Checks are listed by name in the UI (`poll job`), not by slug (`radar-poll`).
   - Watch `oldestTailDetailsMinutes` settle at 20–30 min. The first run carried v1 timestamps, about 30 days old.
   - Census, charts and explore promotions also call `/v1/games` from their own processes, with no cross-process pacing.
 
