@@ -2025,6 +2025,20 @@ Every step is a **Gate**. v1 keeps running untouched; nothing here writes to Aiv
   - SSH hardening. The image allowed password authentication for non-root users: no account had a password, but bots made 72 attempts in the first two hours. `/etc/ssh/sshd_config.d/01-radar.conf` now sets `PasswordAuthentication no`, `KbdInteractiveAuthentication no` and `PermitRootLogin prohibit-password`; `provision.sh` must write it too. Public port 22 is closed by ufw, with the marker in place.
   - Hetzner had no Cloud Firewall. The owner creates one: inbound UDP 41641 only, no outbound rule.
 - B3. `configure-database.sh` ran. First deploy `24f8db8`: the build took about 30 s, then the migrations ran as `radar`. `systemd-analyze verify` is clean, and `radar status` answers. The analysis role reads with `default_transaction_read_only` on. `radar-web` serves through `tailscale serve` at `https://radar-prod.tail6e77de.ts.net`.
+- A6 (`39e0b1c`, `3073a82`, `4df14d6`): `docs/operations.md` is the runbook; `provision.sh` writes the sshd drop-in and verifies it with `sshd -T`.
+- B2: the Hetzner Cloud Firewall (inbound UDP 41641 only) is attached. Tailscale reaches the owner's PC directly over IPv6, and outbound traffic to GitHub and Roblox works.
+- B4:
+  - R2 bucket `radar-backups`.
+  - The first token could only read: listing worked, writes returned 403, and pgBackRest got 401 on HEAD. The owner recreated it as Object Read & Write.
+  - The owner pasted the endpoint with `https://`, so `configure-backups.sh` now strips it.
+  - The first full backup took 5 s: 32.3 MB of database, 3.9 MB in the repository.
+  - `pgbackrest restore` rejects `--archive-async`. The restore test now passes a whole `restore_command`, synchronous and with the scratch `--pg1-path` (`3073a82`), and it passed on the server.
+  - rclone 1.60 `rcat` to R2 reported `501 NotImplemented`, yet the object was written; B6 uses `copyto` and a checksum.
+  - The owner saved the cipher passphrase and the R2 keys in a password manager.
+- B5:
+  - A new Healthchecks project.
+  - `provision:healthchecks` created 15 checks and updated `radar-restore-test`, which an earlier ping had already created. The API key was shredded from the server.
+  - The operations timers are enabled. First runs: system check OK, deploy up to date at `4df14d6`, differential backup OK.
 
 ## Out of scope (later phases)
 
