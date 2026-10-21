@@ -21,6 +21,7 @@
     "job": "tsx scripts/job.ts",
     "import:legacy": "tsx scripts/import-legacy.ts",
     "status": "tsx scripts/status.ts",
+    "provision:healthchecks": "tsx scripts/provision-healthchecks.ts",
     "validate": "npm run lint && npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {

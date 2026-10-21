@@ -158,3 +158,43 @@ export const STATUS_CONFIG = {
   // The window of the run counts, the 429 figures, the last error, the census list lookup and the data totals.
   summaryWindowHours: 24,
 } as const;
+
+// The Healthchecks checks (npm run provision:healthchecks). Periods come from JOB_CONFIG; graces from here.
+export const HEALTHCHECKS_CONFIG = {
+  // A run may use its whole timeoutMs before it pings, so a heartbeat is late only after that plus this margin.
+  heartbeatGraceMarginMinutes: 5,
+  // A degraded run pings only the heartbeat: the quality check alerts after this long without a fully successful
+  // run. It stays below the census baselineMaxAgeHours, so an alert fires before the census loses its baseline.
+  qualityGraceMinutes: 60,
+  // Checks of the operations units (ops/systemd); ops/bin scripts ping the same slugs.
+  operations: {
+    deploy: {
+      slug: "radar-deploy",
+      name: "deploy",
+      periodMinutes: 5,
+      graceMinutes: 30,
+      description: "Every run of radar-deploy.timer, also when there is nothing to deploy.",
+    },
+    system: {
+      slug: "radar-system",
+      name: "system",
+      periodMinutes: 15,
+      graceMinutes: 15,
+      description: "Disk usage, WAL archiving and TimescaleDB policies (npm run system-check).",
+    },
+    backup: {
+      slug: "radar-backup",
+      name: "backup",
+      periodMinutes: 24 * 60,
+      graceMinutes: 3 * 60,
+      description: "Daily pgBackRest backup to R2 (differential, full on Sundays).",
+    },
+    restoreTest: {
+      slug: "radar-restore-test",
+      name: "restore test",
+      periodMinutes: 7 * 24 * 60,
+      graceMinutes: 6 * 60,
+      description: "Weekly restore of the latest backup into a scratch cluster.",
+    },
+  },
+} as const;
