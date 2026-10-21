@@ -3,8 +3,15 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import type { PgTable } from "drizzle-orm/pg-core";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { errorMessage } from "@/lib/logger";
 import { createDatabase, type Database } from "./client";
-import { writeCensusObservations, writeChartPlacements, writeGameObservations, writeVoteObservations } from "./observations";
+import {
+  replaceChartSlot,
+  writeCensusObservations,
+  writeChartPlacements,
+  writeGameObservations,
+  writeVoteObservations,
+} from "./observations";
 import { censusObservations, chartPlacements, gameObservations, voteObservations } from "./schema";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "./test-database";
 
@@ -133,6 +140,47 @@ describe.skipIf(!hasTestDatabase)("observation writers", () => {
     await writeChartPlacements(database.db, [{ ...placement, rank: 1, playerCount: 1, isSponsored: true }], "keep");
     const [chart] = await database.db.select().from(chartPlacements).where(eq(chartPlacements.universeId, 20));
     expect(chart).toMatchObject({ rank: 5, playerCount: 120, isSponsored: null });
+  });
+
+  it("replaces only the given sort and slot of the chart placements", async () => {
+    const placement = (sortId: string, universeId: number, observedAt = slot) => ({ sortId, universeId, observedAt, rank: 1, playerCount: 1, isSponsored: null });
+    await writeChartPlacements(database.db, [
+      placement("top-rated", 50),
+      placement("top-rated", 51),
+      placement("top-rated", 50, nextSlot),
+      placement("top-earning", 50),
+    ]);
+    expect(await replaceChartSlot(database.db, "top-rated", slot, [placement("top-rated", 52), placement("top-rated", 52)])).toBe(1);
+    const stored = await database.db
+      .select({ sortId: chartPlacements.sortId, universeId: chartPlacements.universeId, observedAt: chartPlacements.observedAt })
+      .from(chartPlacements)
+      .where(between(chartPlacements.universeId, 50, 59))
+      .orderBy(chartPlacements.sortId, chartPlacements.observedAt, chartPlacements.universeId);
+    expect(stored).toEqual([
+      { sortId: "top-earning", universeId: 50, observedAt: slot },
+      { sortId: "top-rated", universeId: 52, observedAt: slot },
+      { sortId: "top-rated", universeId: 50, observedAt: nextSlot },
+    ]);
+  });
+
+  it("keeps the previous chart slot when its replacement fails", async () => {
+    const placement = (universeId: number, playerCount = 1) => ({ sortId: "top-revisited", universeId, observedAt: slot, rank: 1, playerCount, isSponsored: null });
+    expect(await replaceChartSlot(database.db, "top-revisited", slot, [placement(60), placement(61)])).toBe(2);
+    // The delete runs first; a player count beyond the integer column then fails the insert.
+    const failure = await replaceChartSlot(database.db, "top-revisited", slot, [placement(62, 3_000_000_000)]).catch((error: unknown) => error);
+    expect(errorMessage(failure)).toMatch(/out of range/);
+    const stored = await database.db
+      .select({ universeId: chartPlacements.universeId })
+      .from(chartPlacements)
+      .where(and(eq(chartPlacements.sortId, "top-revisited"), eq(chartPlacements.observedAt, slot)))
+      .orderBy(chartPlacements.universeId);
+    expect(stored.map((row) => row.universeId)).toEqual([60, 61]);
+  });
+
+  it("refuses chart placements outside the replaced slot", async () => {
+    const placement = { sortId: "top-revisited", universeId: 63, observedAt: slot, rank: 1, playerCount: 1, isSponsored: null };
+    await expect(replaceChartSlot(database.db, "top-revisited", nextSlot, [placement])).rejects.toThrow(/must belong to the replaced slot/);
+    await expect(replaceChartSlot(database.db, "top-rated", slot, [placement])).rejects.toThrow(/must belong to the replaced slot/);
   });
 
   it("writes a batch that spans several chunks and keeps the first duplicate", async () => {

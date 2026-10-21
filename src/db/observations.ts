@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { chunk, compareText, uniqueBy } from "@/lib/arrays";
 import type { Database } from "./client";
 import { censusObservations, chartPlacements, gameObservations, voteObservations } from "./schema";
@@ -90,6 +90,28 @@ export async function writeChartPlacements(db: Database, rows: ChartPlacementRow
     written += result.rowCount ?? 0;
   }
   return written;
+}
+
+// Replaces every placement of one sort in one slot, atomically: a chart is a ranking, so a retry within the hour must
+// not leave a game that dropped out next to the game that took its rank. Rows are sorted by key, like the other writers.
+// Two replacements of the same slot at once are not serialized: the later one fails on the primary key or leaves rows
+// of the earlier one. systemd never overlaps a job with itself.
+export async function replaceChartSlot(db: Database, sortId: string, observedAt: Date, rows: ChartPlacementRow[]): Promise<number> {
+  if (rows.some((row) => row.sortId !== sortId || row.observedAt.getTime() !== observedAt.getTime())) {
+    throw new Error(`Every placement must belong to the replaced slot (${sortId} at ${observedAt.toISOString()})`);
+  }
+  const unique = uniqueBy(rows, (row) => row.universeId).sort((left, right) => left.universeId - right.universeId);
+  return db.transaction(async (transaction) => {
+    await transaction
+      .delete(chartPlacements)
+      .where(and(eq(chartPlacements.sortId, sortId), eq(chartPlacements.observedAt, observedAt)));
+    let written = 0;
+    for (const part of chunk(unique, CHUNK_SIZE)) {
+      const result = await transaction.insert(chartPlacements).values(part);
+      written += result.rowCount ?? 0;
+    }
+    return written;
+  });
 }
 
 function compareUniverseTime(left: { universeId: number; observedAt: Date }, right: { universeId: number; observedAt: Date }): number {
