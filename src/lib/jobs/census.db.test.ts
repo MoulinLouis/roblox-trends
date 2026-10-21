@@ -20,11 +20,14 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
 
   it("stores the list, resolves eligible places and promotes their universes", async () => {
     const job = createCensusJob({
-      fetchGames: async () => [
-        { placeId: "1", name: "Big", ccu: 500, thumbnailUrl: "" },
-        { placeId: "2", name: "Small", ccu: 50, thumbnailUrl: "" },
-        { placeId: "404", name: "Gone", ccu: 300, thumbnailUrl: "" },
-      ],
+      fetchGames: async () => ({
+        games: [
+          { placeId: "1", name: "Big", ccu: 500, thumbnailUrl: "" },
+          { placeId: "2", name: "Small", ccu: 50, thumbnailUrl: "" },
+          { placeId: "404", name: "Gone", ccu: 300, thumbnailUrl: "" },
+        ],
+        rejected: 0,
+      }),
       roblox: {
         resolveUniverseId: async (placeId) => {
           if (placeId === "404") throw new HttpError(404, "Not Found", "https://apis.roblox.com/universes");
@@ -50,7 +53,7 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
 
   it("marks a run degraded when the list shrinks sharply against the last successful run", async () => {
     const job = createCensusJob({
-      fetchGames: async () => [{ placeId: "1", name: "Big", ccu: 500, thumbnailUrl: "" }],
+      fetchGames: async () => ({ games: [{ placeId: "1", name: "Big", ccu: 500, thumbnailUrl: "" }], rejected: 0 }),
       roblox: {
         resolveUniverseId: async (placeId) => String(Number(placeId) + 1_000),
         getGameDetails: async (universeIds) => universeIds.map((universeId) => gameDetail(Number(universeId))),

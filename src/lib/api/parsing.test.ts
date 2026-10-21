@@ -189,6 +189,40 @@ describe("Roblox API response parsing", () => {
 
 describe("Rolimon's response parsing", () => {
   it("maps public Place ID tuples", () => {
-    expect(parseRolimonsResponse({ success: true, game_count: 1, games: { "1818": ["Classic: Crossroads", 37, "https://example.com/icon.webp"] } })).toEqual([{ placeId: "1818", name: "Classic: Crossroads", ccu: 37, thumbnailUrl: "https://example.com/icon.webp" }]);
+    expect(parseRolimonsResponse({ success: true, game_count: 1, games: { "1818": ["Classic: Crossroads", 37, "https://example.com/icon.webp"] } })).toEqual({
+      games: [{ placeId: "1818", name: "Classic: Crossroads", ccu: 37, thumbnailUrl: "https://example.com/icon.webp" }],
+      rejected: 0,
+    });
+  });
+
+  it("accepts tuples with extra elements", () => {
+    const { games } = parseRolimonsResponse({ success: true, game_count: 1, games: { "1818": ["Crossroads", 37, "https://example.com/icon.webp", 99] } });
+    expect(games).toEqual([{ placeId: "1818", name: "Crossroads", ccu: 37, thumbnailUrl: "https://example.com/icon.webp" }]);
+  });
+
+  it("rejects malformed entries and non-canonical keys without dropping the others", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const entry = ["Game", 10, ""];
+    const list = parseRolimonsResponse({
+      success: true,
+      game_count: 8,
+      games: {
+        "1818": ["Crossroads", 37, ""],
+        "0123": entry,
+        "-5": entry,
+        "1.5": entry,
+        "9007199254740993": entry,
+        "77": ["Game", -1, ""],
+        "88": "not a tuple",
+        "99": ["Game", 10],
+      },
+    });
+    expect(list).toEqual({ games: [{ placeId: "1818", name: "Crossroads", ccu: 37, thumbnailUrl: "" }], rejected: 7 });
+    expect(loggedDetails(warn)).toEqual({ rejected: 7, placeIds: expect.any(Array) });
+  });
+
+  it("rejects a malformed envelope", () => {
+    expect(() => parseRolimonsResponse({ success: true, game_count: 1, games: "x" })).toThrow();
+    expect(() => parseRolimonsResponse({ success: false, game_count: 0, games: {} })).toThrow();
   });
 });

@@ -3,14 +3,14 @@ import { latestSuccessfulRun } from "@/db/job-runs";
 import { writeCensusObservations } from "@/db/observations";
 import { HttpError } from "@/lib/api/http";
 import type { RobloxApi } from "@/lib/api/roblox";
-import type { RolimonsGame } from "@/lib/api/rolimons";
+import type { RolimonsGame, RolimonsGameList } from "@/lib/api/rolimons";
 import { JOB_CONFIG } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
 import { promoteUniverses } from "./promotion";
 import type { JobDefinition } from "./runner";
 
 export interface CensusDependencies {
-  fetchGames(): Promise<RolimonsGame[]>;
+  fetchGames(): Promise<RolimonsGameList>;
   roblox: Pick<RobloxApi, "resolveUniverseId" | "getGameDetails">;
   clock?: () => number;
 }
@@ -35,7 +35,8 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
     intervalMinutes: config.intervalMinutes,
     timeoutMs: config.timeoutMs,
     async run({ db, now, slot }) {
-      const listed = (await dependencies.fetchGames()).filter((game) => Number.isSafeInteger(Number(game.placeId)));
+      // The parser only accepts canonical place ids, so Number(placeId) is exact.
+      const { games: listed, rejected } = await dependencies.fetchGames();
       await writeCensusObservations(
         db,
         listed.map((game) => ({ placeId: Number(game.placeId), observedAt: slot, ccu: Math.round(game.ccu) })),
@@ -87,6 +88,7 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
         status,
         stats: {
           listed: listed.length,
+          rejected,
           eligible: eligibleIds.length,
           resolved,
           unresolvable,
