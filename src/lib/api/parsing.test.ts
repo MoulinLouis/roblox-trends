@@ -39,7 +39,29 @@ describe("Roblox API response parsing", () => {
   it("parses current Charts sort and game fields", () => {
     const sort = parseSortContentResponse({ contentType: "Games", sortId: "top-trending", sortDisplayName: "Top Trending", games: [{ universeId: 101, rootPlaceId: 202, name: "Game", playerCount: 345, totalUpVotes: 90, totalDownVotes: 10, isSponsored: false }] });
     expect(sort.sortId).toBe("top-trending");
-    expect(sort.games[0]).toEqual({ universeId: 101, rootPlaceId: 202, name: "Game", playerCount: 345, totalUpVotes: 90, totalDownVotes: 10, isSponsored: false });
+    expect(sort.skipped).toBe(0);
+    expect(sort.games[0]).toEqual({ universeId: 101, rootPlaceId: 202, name: "Game", playerCount: 345, totalUpVotes: 90, totalDownVotes: 10, isSponsored: false, position: 1 });
+  });
+
+  it("skips a malformed chart game and keeps the listed position of the others", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const sort = parseSortContentResponse({
+      sortId: "top-trending",
+      games: [
+        { universeId: 101, rootPlaceId: 202, name: "First", playerCount: 50 },
+        { universeId: 102, rootPlaceId: 203, name: 7, playerCount: 40 },
+        // Vote totals and the sponsored flag may be null: charts never store the totals, and null means unknown.
+        { universeId: 103, rootPlaceId: 204, name: "Third", playerCount: 30, totalUpVotes: null, totalDownVotes: null, isSponsored: null },
+      ],
+    });
+    expect(sort.games.map((game) => [game.universeId, game.position])).toEqual([[101, 1], [103, 3]]);
+    expect(sort.skipped).toBe(1);
+    expect(loggedDetails(warn)).toEqual({ sortId: "top-trending", skipped: 1, universeIds: [102], issues: [expect.stringContaining("name")] });
+  });
+
+  it("rejects a malformed sort envelope", () => {
+    expect(() => parseSortContentResponse({ sortId: "top-trending", games: "x" })).toThrow();
+    expect(() => parseSortContentResponse({ games: [] })).toThrow();
   });
 
   it("filters non-game sort content from get-sorts", () => {
@@ -100,12 +122,44 @@ describe("Roblox API response parsing", () => {
     });
   });
 
+  it("skips a malformed recommendation without dropping the others", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const games = parseRecommendationsResponse({ games: [
+      { universeId: 101, placeId: "x", name: "Broken" },
+      { universeId: 102, placeId: 203, name: "Recommended", playerCount: 5, totalUpVotes: null, isSponsored: null },
+    ] });
+    expect(games.map((game) => game.universeId)).toEqual([102]);
+    expect(loggedDetails(warn)).toEqual({ skipped: 1, universeIds: [101], issues: [expect.stringContaining("placeId")] });
+  });
+
+  it("rejects a malformed recommendations envelope", () => {
+    expect(() => parseRecommendationsResponse({ games: "x" })).toThrow();
+  });
+
   it("flattens game contents from omni-search and ignores other content", () => {
     const games = parseSearchResponse({ searchResults: [{ contents: [
       { contentType: "Game", universeId: 101, rootPlaceId: 202, name: "Search result", playerCount: 75 },
       { contentType: "Avatar", universeId: 303, rootPlaceId: 404, name: "Ignored", playerCount: 0 },
     ] }] });
     expect(games).toEqual([{ universeId: 101, rootPlaceId: 202, name: "Search result", playerCount: 75 }]);
+  });
+
+  it("skips a malformed search result without dropping the others", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const games = parseSearchResponse({ searchResults: [
+      { contents: [{ contentType: "Game", universeId: 101, rootPlaceId: "x", name: "Broken" }] },
+      { contents: [
+        // Other content types have other fields; they are ignored, not counted as malformed.
+        { contentType: "Avatar", name: "Ignored" },
+        { contentType: "Game", universeId: 102, rootPlaceId: 203, name: "Kept", playerCount: 9, totalUpVotes: null, isSponsored: null },
+      ] },
+    ] });
+    expect(games).toEqual([{ universeId: 102, rootPlaceId: 203, name: "Kept", playerCount: 9 }]);
+    expect(loggedDetails(warn)).toEqual({ skipped: 1, universeIds: [101], issues: [expect.stringContaining("rootPlaceId")] });
+  });
+
+  it("rejects a malformed search envelope", () => {
+    expect(() => parseSearchResponse({ searchResults: [{ contents: "x" }] })).toThrow();
   });
 
   it("maps a completed 16:9 game thumbnail to its image and media id", () => {

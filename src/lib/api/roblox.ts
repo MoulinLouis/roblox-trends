@@ -4,25 +4,26 @@ import { errorMessage, logger } from "@/lib/logger";
 import { fetchJson } from "./http";
 import { describeIssue } from "./schema-issues";
 
+// Vote totals and the sponsored flag may be null: no collector relies on the totals, and a null flag means unknown.
 const chartGameSchema = z.object({
   universeId: z.number(),
   rootPlaceId: z.number(),
   name: z.string(),
   playerCount: z.number().nonnegative().default(0),
-  totalUpVotes: z.number().int().nonnegative().optional(),
-  totalDownVotes: z.number().int().nonnegative().optional(),
-  isSponsored: z.boolean().optional(),
+  totalUpVotes: z.number().int().nonnegative().nullish(),
+  totalDownVotes: z.number().int().nonnegative().nullish(),
+  isSponsored: z.boolean().nullish(),
 });
 
+// Games are validated one by one so that a single malformed entry cannot discard the whole sort.
 const sortSchema = z.object({
   contentType: z.string().optional(),
   sortId: z.string(),
   sortDisplayName: z.string().default("Unknown chart"),
-  games: z.array(chartGameSchema).default([]),
+  games: z.array(z.unknown()).default([]),
 });
 
 const sortsResponseSchema = z.object({ sorts: z.array(sortSchema) });
-const sortContentSchema = sortSchema;
 
 const gameDetailSchema = z.object({
   id: z.number(),
@@ -50,32 +51,14 @@ const gameVoteSchema = z.object({
 });
 // Items are validated one by one so that a single malformed game cannot discard the whole batch.
 const itemsResponseSchema = z.object({ data: z.array(z.unknown()) });
-const recommendationResponseSchema = z.object({
-  games: z.array(
-    z.object({
-      universeId: z.number(),
-      placeId: z.number(),
-      name: z.string(),
-      playerCount: z.number().nonnegative().default(0),
-      totalUpVotes: z.number().int().nonnegative().optional(),
-      totalDownVotes: z.number().int().nonnegative().optional(),
-      isSponsored: z.boolean().optional(),
-    }),
-  ).default([]),
-});
-const searchContentSchema = z.object({
-  universeId: z.number(),
-  rootPlaceId: z.number(),
-  name: z.string(),
-  playerCount: z.number().nonnegative().default(0),
-  totalUpVotes: z.number().int().nonnegative().optional(),
-  totalDownVotes: z.number().int().nonnegative().optional(),
-  isSponsored: z.boolean().optional(),
-  contentType: z.string().optional(),
-});
+const recommendationSchema = chartGameSchema.omit({ rootPlaceId: true }).extend({ placeId: z.number() });
+// Items are validated one by one so that a single malformed game cannot discard the whole response.
+const recommendationResponseSchema = z.object({ games: z.array(z.unknown()).default([]) });
+// Other content types (avatars, for example) have other fields, so only the type is read before an item is validated.
+const searchContentTypeSchema = z.object({ contentType: z.string().nullish() });
 const searchResponseSchema = z.object({
   searchResults: z.array(
-    z.object({ contents: z.array(searchContentSchema).default([]) }),
+    z.object({ contents: z.array(z.unknown()).default([]) }),
   ).default([]),
 });
 const universeResponseSchema = z.object({ universeId: z.number().nullable() });
@@ -99,7 +82,20 @@ const gameThumbnailItemSchema = z.object({
 const pendingThumbnailStates = new Set(["Pending", "InReview", "TemporarilyUnavailable"]);
 
 export type RobloxChartGame = z.infer<typeof chartGameSchema>;
-export type RobloxSort = z.infer<typeof sortSchema>;
+
+export interface RobloxSortGame extends RobloxChartGame {
+  // 1-based place in the sort as Roblox listed it. Malformed entries count too, so a skipped one leaves a gap.
+  position: number;
+}
+
+export interface RobloxSort {
+  contentType?: string;
+  sortId: string;
+  sortDisplayName: string;
+  games: RobloxSortGame[];
+  // Entries skipped as malformed.
+  skipped: number;
+}
 export type RobloxGameDetail = z.infer<typeof gameDetailSchema>;
 export type RobloxGameVote = z.infer<typeof gameVoteSchema>;
 
@@ -114,11 +110,19 @@ export interface GameThumbnail {
 export type GameThumbnailAnswer = GameThumbnail | null | "pending";
 
 export function parseSortsResponse(value: unknown): RobloxSort[] {
-  return sortsResponseSchema.parse(value).sorts.filter((sort) => sort.contentType === "Games" || sort.games.length > 0);
+  return sortsResponseSchema
+    .parse(value)
+    .sorts.filter((sort) => sort.contentType === "Games" || sort.games.length > 0)
+    .map(toSort);
 }
 
 export function parseSortContentResponse(value: unknown): RobloxSort {
-  return sortContentSchema.parse(value);
+  return toSort(sortSchema.parse(value));
+}
+
+function toSort({ games, ...sort }: z.infer<typeof sortSchema>): RobloxSort {
+  const { parsed, skipped } = parseEachItem(games, chartGameSchema, { label: "chart games", idKey: "universeId", details: { sortId: sort.sortId } });
+  return { ...sort, games: parsed.map(({ value, position }) => ({ ...value, position })), skipped };
 }
 
 export function parseGameDetailsResponse(value: unknown): RobloxGameDetail[] {
@@ -129,55 +133,66 @@ export function parseGameVotesResponse(value: unknown): RobloxGameVote[] {
   return parseItems(itemsResponseSchema.parse(value).data, gameVoteSchema, "game votes");
 }
 
-// Malformed items are skipped with one warning per batch, so a format change that breaks every item cannot flood
-// the logs. The warning names the skipped universes and the first issues of the first one.
-function parseItems<T>(items: unknown[], schema: z.ZodType<T>, label: string): T[] {
-  const parsed: T[] = [];
+function parseItems<T>(items: unknown[], schema: z.ZodType<T>, label: string, idKey = "id"): T[] {
+  return parseEachItem(items, schema, { label, idKey }).parsed.map(({ value }) => value);
+}
+
+// Malformed items are skipped with one warning per response, so a format change that breaks every item cannot flood
+// the logs. The warning names the skipped universes (read from idKey) and the first issues of the first one. Each
+// parsed item keeps its 1-based position among all the items.
+function parseEachItem<T>(
+  items: unknown[],
+  schema: z.ZodType<T>,
+  options: { label: string; idKey: string; details?: Record<string, unknown> },
+): { parsed: { value: T; position: number }[]; skipped: number } {
+  const parsed: { value: T; position: number }[] = [];
   const skippedUniverseIds: unknown[] = [];
   let issues: string[] = [];
-  for (const item of items) {
+  items.forEach((item, index) => {
     const result = schema.safeParse(item);
     if (result.success) {
-      parsed.push(result.data);
-      continue;
+      parsed.push({ value: result.data, position: index + 1 });
+      return;
     }
     if (!skippedUniverseIds.length) {
       issues = result.error.issues.slice(0, 3).map(describeIssue);
     }
-    skippedUniverseIds.push(typeof item === "object" && item !== null && "id" in item ? item.id : null);
-  }
+    skippedUniverseIds.push(typeof item === "object" && item !== null && options.idKey in item ? item[options.idKey as keyof typeof item] : null);
+  });
   if (skippedUniverseIds.length) {
-    logger.warn(`Skipped malformed ${label}`, { skipped: skippedUniverseIds.length, universeIds: skippedUniverseIds, issues });
+    logger.warn(`Skipped malformed ${options.label}`, {
+      ...options.details,
+      skipped: skippedUniverseIds.length,
+      universeIds: skippedUniverseIds,
+      issues,
+    });
   }
-  return parsed;
+  return { parsed, skipped: skippedUniverseIds.length };
 }
 
 export function parseRecommendationsResponse(value: unknown): RobloxChartGame[] {
-  return recommendationResponseSchema.parse(value).games.map((game) => ({
-    universeId: game.universeId,
-    rootPlaceId: game.placeId,
-    name: game.name,
-    playerCount: game.playerCount,
-    totalUpVotes: game.totalUpVotes,
-    totalDownVotes: game.totalDownVotes,
-    isSponsored: game.isSponsored,
-  }));
+  const games = recommendationResponseSchema.parse(value).games;
+  return parseItems(games, recommendationSchema, "recommendations", "universeId").map(({ placeId, ...game }) => ({ ...game, rootPlaceId: placeId }));
 }
 
 export function parseSearchResponse(value: unknown): RobloxChartGame[] {
-  return searchResponseSchema
+  const contents = searchResponseSchema
     .parse(value)
     .searchResults.flatMap((result) => result.contents)
-    .filter((game) => !game.contentType || game.contentType === "Game")
-    .map((game) => ({
-      universeId: game.universeId,
-      rootPlaceId: game.rootPlaceId,
-      name: game.name,
-      playerCount: game.playerCount,
-      ...(game.totalUpVotes === undefined ? {} : { totalUpVotes: game.totalUpVotes }),
-      ...(game.totalDownVotes === undefined ? {} : { totalDownVotes: game.totalDownVotes }),
-      ...(game.isSponsored === undefined ? {} : { isSponsored: game.isSponsored }),
-    }));
+    .filter((item) => {
+      // An item that is not even an object is kept here and reported as malformed below.
+      const type = searchContentTypeSchema.safeParse(item);
+      return !type.success || !type.data.contentType || type.data.contentType === "Game";
+    });
+  return parseItems(contents, chartGameSchema, "search results", "universeId").map((game) => ({
+    universeId: game.universeId,
+    rootPlaceId: game.rootPlaceId,
+    name: game.name,
+    playerCount: game.playerCount,
+    ...(game.totalUpVotes == null ? {} : { totalUpVotes: game.totalUpVotes }),
+    ...(game.totalDownVotes == null ? {} : { totalDownVotes: game.totalDownVotes }),
+    ...(game.isSponsored == null ? {} : { isSponsored: game.isSponsored }),
+  }));
 }
 
 // A universe without an entry is unknown: its item was malformed or carried an error, or its thumbnails are in a

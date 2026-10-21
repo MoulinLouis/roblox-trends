@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { chartPlacements, discoverySources, games, jobRuns } from "@/db/schema";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/test-database";
 import { HttpError } from "@/lib/api/http";
-import type { RobloxChartGame } from "@/lib/api/roblox";
+import type { RobloxChartGame, RobloxSort } from "@/lib/api/roblox";
 import { gameDetail } from "@/test/fixtures";
 import { createChartsJob, type ChartsDependencies } from "./charts";
 import { PromotionApiError } from "./promotion";
@@ -15,15 +15,22 @@ function chartGame(universeId: number, overrides: Partial<RobloxChartGame> = {})
   return { universeId, rootPlaceId: universeId * 10, name: `Game ${universeId}`, playerCount: 100, ...overrides };
 }
 
-// Every sort lists the same games unless the test says otherwise.
-function chartsJob(listed: Record<string, RobloxChartGame[] | Error>, roblox: Partial<ChartsDependencies["roblox"]> = {}) {
+// The games are listed in order, after `skipped` malformed entries the parser dropped.
+function sortOf(sortId: string, games: RobloxChartGame[], skipped = 0): RobloxSort {
+  return { sortId, sortDisplayName: sortId, games: games.map((game, index) => ({ ...game, position: skipped + index + 1 })), skipped };
+}
+
+type Listing = RobloxChartGame[] | { games: RobloxChartGame[]; skipped: number } | Error;
+
+// One entry per sort, in collection order: the games it lists, or the error its request throws.
+function chartsJob(listings: Record<string, Listing>, roblox: Partial<ChartsDependencies["roblox"]> = {}) {
   return createChartsJob({
-    sortIds: Object.keys(listed),
+    sortIds: Object.keys(listings),
     roblox: {
       getSortContent: async (sortId) => {
-        const games = listed[sortId];
-        if (games instanceof Error) throw games;
-        return { sortId, sortDisplayName: sortId, games };
+        const listing = listings[sortId];
+        if (listing instanceof Error) throw listing;
+        return Array.isArray(listing) ? sortOf(sortId, listing) : sortOf(sortId, listing.games, listing.skipped);
       },
       getGameDetails,
       ...roblox,
@@ -68,7 +75,7 @@ describe.skipIf(!hasTestDatabase)("charts job", () => {
       roblox: {
         getSortContent: async (sortId) => {
           if (sortId === "top-rated") throw new Error("unavailable");
-          return { sortId, sortDisplayName: sortId, games: [{ universeId: 7, rootPlaceId: 70, name: "Seven", playerCount: 900 }] };
+          return sortOf(sortId, [{ universeId: 7, rootPlaceId: 70, name: "Seven", playerCount: 900 }]);
         },
         getGameDetails: async (ids) => ids.map((id) => gameDetail(Number(id))),
       },
@@ -102,11 +109,7 @@ describe.skipIf(!hasTestDatabase)("charts job", () => {
       roblox: {
         getSortContent: async (sortId) => {
           attempt += 1;
-          return {
-            sortId,
-            sortDisplayName: sortId,
-            games: lists[attempt].map((universeId) => ({ universeId, rootPlaceId: universeId * 10, name: `Game ${universeId}`, playerCount: 100 })),
-          };
+          return sortOf(sortId, lists[attempt].map((universeId) => chartGame(universeId)));
         },
         getGameDetails: async (ids) => ids.map((id) => gameDetail(Number(id))),
       },
@@ -205,7 +208,7 @@ describe.skipIf(!hasTestDatabase)("charts job", () => {
       roblox: {
         // The second sort never answers, like a request stuck in its retries.
         getSortContent: async (sortId) =>
-          sortId === "top-trending" ? { sortId, sortDisplayName: sortId, games: [chartGame(7)] } : new Promise(() => undefined),
+          sortId === "top-trending" ? sortOf(sortId, [chartGame(7)]) : new Promise(() => undefined),
         getGameDetails,
       },
     });
