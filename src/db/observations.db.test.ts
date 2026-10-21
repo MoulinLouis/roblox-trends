@@ -73,10 +73,12 @@ describe.skipIf(!hasTestDatabase)("observation writers", () => {
 
   it("replaces a game observation written twice in the same slot", async () => {
     await writeGameObservations(database.db, [{ universeId: 1, observedAt: slot, ccu: 100, visits: 10, favorites: 1 }]);
-    await writeGameObservations(database.db, [
+    // Replace mode reports every distinct row, updated or inserted.
+    const written = await writeGameObservations(database.db, [
       { universeId: 1, observedAt: slot, ccu: 150, visits: 11, favorites: 2 },
       { universeId: 1, observedAt: slot, ccu: 999, visits: 99, favorites: 9 },
     ]);
+    expect(written).toBe(1);
     const rows = await database.db.select().from(gameObservations).where(eq(gameObservations.universeId, 1));
     expect(rows).toHaveLength(1);
     expect(rows[0].ccu).toBe(150);
@@ -84,10 +86,15 @@ describe.skipIf(!hasTestDatabase)("observation writers", () => {
 
   it("keeps existing rows in keep mode", async () => {
     await writeGameObservations(database.db, [{ universeId: 2, observedAt: slot, ccu: 150, visits: 11, favorites: 2 }]);
-    await writeGameObservations(database.db, [{ universeId: 2, observedAt: slot, ccu: 1, visits: 1, favorites: 1, source: "legacy" }], "keep");
+    const legacy = { observedAt: slot, ccu: 1, visits: 1, favorites: 1, source: "legacy" as const };
+    expect(await writeGameObservations(database.db, [{ universeId: 2, ...legacy }], "keep")).toBe(0);
+    // Keep mode reports only the rows it inserted.
+    expect(await writeGameObservations(database.db, [{ universeId: 2, ...legacy }, { universeId: 3, ...legacy }], "keep")).toBe(1);
     const [row] = await database.db.select().from(gameObservations).where(eq(gameObservations.universeId, 2));
     expect(row.ccu).toBe(150);
     expect(row.source).toBe("poll");
+    const [inserted] = await database.db.select().from(gameObservations).where(eq(gameObservations.universeId, 3));
+    expect(inserted).toMatchObject({ ccu: 1, source: "legacy" });
   });
 
   it("writes census, vote and chart rows idempotently", async () => {

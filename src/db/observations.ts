@@ -17,67 +17,79 @@ const CHUNK_SIZE = 2_000;
 
 // Every writer deduplicates first (PostgreSQL rejects an upsert that affects one row twice; the first occurrence
 // wins), then sorts by primary key: concurrent writers to one hypertable lock rows in the same order and cannot
-// deadlock. Each chunk commits on its own, and the result is the number of distinct rows submitted, including rows
-// that keep mode left unchanged.
+// deadlock. The result is the number of rows written: every distinct row in replace mode, only the inserted ones in
+// keep mode. Each chunk commits on its own, so when a later chunk throws, the earlier ones stay written.
 
 export async function writeGameObservations(db: Database, rows: GameObservationRow[], mode: WriteMode = "replace"): Promise<number> {
   const unique = uniqueBy(rows, (row) => `${row.universeId}:${row.observedAt.getTime()}`).sort(compareUniverseTime);
+  let written = 0;
   for (const part of chunk(unique, CHUNK_SIZE)) {
     const insert = db.insert(gameObservations).values(part);
-    if (mode === "keep") await insert.onConflictDoNothing();
-    else
-      await insert.onConflictDoUpdate({
-        target: [gameObservations.universeId, gameObservations.observedAt],
-        set: { ccu: sql`excluded.ccu`, visits: sql`excluded.visits`, favorites: sql`excluded.favorites`, source: sql`excluded.source` },
-      });
+    const result =
+      mode === "keep"
+        ? await insert.onConflictDoNothing()
+        : await insert.onConflictDoUpdate({
+            target: [gameObservations.universeId, gameObservations.observedAt],
+            set: { ccu: sql`excluded.ccu`, visits: sql`excluded.visits`, favorites: sql`excluded.favorites`, source: sql`excluded.source` },
+          });
+    written += result.rowCount ?? 0;
   }
-  return unique.length;
+  return written;
 }
 
 export async function writeCensusObservations(db: Database, rows: CensusObservationRow[], mode: WriteMode = "replace"): Promise<number> {
   const unique = uniqueBy(rows, (row) => `${row.placeId}:${row.observedAt.getTime()}`).sort(
     (left, right) => left.placeId - right.placeId || compareTime(left, right),
   );
+  let written = 0;
   for (const part of chunk(unique, CHUNK_SIZE)) {
     const insert = db.insert(censusObservations).values(part);
-    if (mode === "keep") await insert.onConflictDoNothing();
-    else
-      await insert.onConflictDoUpdate({
-        target: [censusObservations.placeId, censusObservations.observedAt],
-        set: { ccu: sql`excluded.ccu` },
-      });
+    const result =
+      mode === "keep"
+        ? await insert.onConflictDoNothing()
+        : await insert.onConflictDoUpdate({
+            target: [censusObservations.placeId, censusObservations.observedAt],
+            set: { ccu: sql`excluded.ccu` },
+          });
+    written += result.rowCount ?? 0;
   }
-  return unique.length;
+  return written;
 }
 
 export async function writeVoteObservations(db: Database, rows: VoteObservationRow[], mode: WriteMode = "replace"): Promise<number> {
   const unique = uniqueBy(rows, (row) => `${row.universeId}:${row.observedAt.getTime()}`).sort(compareUniverseTime);
+  let written = 0;
   for (const part of chunk(unique, CHUNK_SIZE)) {
     const insert = db.insert(voteObservations).values(part);
-    if (mode === "keep") await insert.onConflictDoNothing();
-    else
-      await insert.onConflictDoUpdate({
-        target: [voteObservations.universeId, voteObservations.observedAt],
-        set: { upVotes: sql`excluded.up_votes`, downVotes: sql`excluded.down_votes` },
-      });
+    const result =
+      mode === "keep"
+        ? await insert.onConflictDoNothing()
+        : await insert.onConflictDoUpdate({
+            target: [voteObservations.universeId, voteObservations.observedAt],
+            set: { upVotes: sql`excluded.up_votes`, downVotes: sql`excluded.down_votes` },
+          });
+    written += result.rowCount ?? 0;
   }
-  return unique.length;
+  return written;
 }
 
 export async function writeChartPlacements(db: Database, rows: ChartPlacementRow[], mode: WriteMode = "replace"): Promise<number> {
   const unique = uniqueBy(rows, (row) => `${row.sortId}:${row.universeId}:${row.observedAt.getTime()}`).sort(
     (left, right) => compareText(left.sortId, right.sortId) || compareUniverseTime(left, right),
   );
+  let written = 0;
   for (const part of chunk(unique, CHUNK_SIZE)) {
     const insert = db.insert(chartPlacements).values(part);
-    if (mode === "keep") await insert.onConflictDoNothing();
-    else
-      await insert.onConflictDoUpdate({
-        target: [chartPlacements.sortId, chartPlacements.universeId, chartPlacements.observedAt],
-        set: { rank: sql`excluded.rank`, playerCount: sql`excluded.player_count`, isSponsored: sql`excluded.is_sponsored` },
-      });
+    const result =
+      mode === "keep"
+        ? await insert.onConflictDoNothing()
+        : await insert.onConflictDoUpdate({
+            target: [chartPlacements.sortId, chartPlacements.universeId, chartPlacements.observedAt],
+            set: { rank: sql`excluded.rank`, playerCount: sql`excluded.player_count`, isSponsored: sql`excluded.is_sponsored` },
+          });
+    written += result.rowCount ?? 0;
   }
-  return unique.length;
+  return written;
 }
 
 function compareUniverseTime(left: { universeId: number; observedAt: Date }, right: { universeId: number; observedAt: Date }): number {
