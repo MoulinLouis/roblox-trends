@@ -34,3 +34,14 @@ export function parseLegacyId(value: string): number | null {
   const id = Number(value);
   return Number.isSafeInteger(id) ? id : null;
 }
+
+// The largest value of a PostgreSQL integer column; bigint columns hold up to Number.MAX_SAFE_INTEGER here.
+export const INTEGER_MAX = 2_147_483_647;
+
+// A v1 count as v2 stores it: finite, non-negative and within the column's range, rounded because v1 kept visits as
+// real. Null when the value cannot be stored, so the caller skips the row instead of failing the whole statement.
+export function legacyCount(value: number, maximum: number = Number.MAX_SAFE_INTEGER): number | null {
+  if (!Number.isFinite(value)) return null;
+  const rounded = Math.round(value);
+  return rounded >= 0 && rounded <= maximum ? rounded : null;
+}

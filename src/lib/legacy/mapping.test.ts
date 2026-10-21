@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { legacyDiscovery, parseLegacyId, sortIdFromLegacyChartLabel } from "./mapping";
+import { INTEGER_MAX, legacyCount, legacyDiscovery, parseLegacyId, sortIdFromLegacyChartLabel } from "./mapping";
 
 describe("sortIdFromLegacyChartLabel", () => {
   it.each([
@@ -40,5 +40,21 @@ describe("parseLegacyId", () => {
 
   it.each(["", " 1", "1.5", "-1", "1e3", "abc", "9007199254740993"])("rejects %j", (value) => {
     expect(parseLegacyId(value)).toBeNull();
+  });
+});
+
+describe("legacyCount", () => {
+  it("rounds v1 reals to the integers v2 stores", () => {
+    expect(legacyCount(5_000_100.4)).toBe(5_000_100);
+    expect(legacyCount(0)).toBe(0);
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1, 3.4e38])("rejects %d", (value) => {
+    expect(legacyCount(value)).toBeNull();
+  });
+
+  it("rejects values above the column's maximum", () => {
+    expect(legacyCount(INTEGER_MAX, INTEGER_MAX)).toBe(INTEGER_MAX);
+    expect(legacyCount(INTEGER_MAX + 1, INTEGER_MAX)).toBeNull();
   });
 });
