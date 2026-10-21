@@ -20,6 +20,7 @@ describe.skipIf(!hasTestDatabase)("selectActiveUniverses", () => {
       gameDetail(4, { playing: 10, created: new Date("2026-10-10T00:00:00Z") }),
       gameDetail(5, { playing: 0, created: old }),
       gameDetail(6, { playing: 0, created: old }),
+      gameDetail(10, { playing: 0, created: old }),
     ], now);
     // Game 7 was busy when last returned, two days ago: Roblox has not returned it since (deleted, or malformed).
     await upsertGameDetails(database.db, [gameDetail(7, { playing: 3_000, created: old })], new Date("2026-10-18T14:00:00Z"));
@@ -29,10 +30,11 @@ describe.skipIf(!hasTestDatabase)("selectActiveUniverses", () => {
     await upsertGameDetails(database.db, [gameDetail(9, { playing: 20, created: young })], new Date("2026-10-18T14:00:00Z"));
     await upsertGameDetails(database.db, [gameDetail(8, { playing: 0, created: young }), gameDetail(9, { playing: 0, created: young })], now);
     // Game 2 peaked earlier today; game 3 only appears in the census; game 5 is quiet and its census count is too old;
-    // game 6 peaked two days ago.
+    // game 6 peaked two days ago; game 10 peaked 23.5 hours ago, in the hour that straddles the window's start.
     await writeGameObservations(database.db, [
       { universeId: 2, observedAt: new Date("2026-10-20T09:00:00Z"), ccu: 800, visits: 1, favorites: 1 },
       { universeId: 6, observedAt: new Date("2026-10-18T09:00:00Z"), ccu: 900, visits: 1, favorites: 1 },
+      { universeId: 10, observedAt: new Date("2026-10-19T14:30:00Z"), ccu: 300, visits: 1, favorites: 1 },
     ]);
     await savePlaceResolution(database.db, { placeId: 333, universeId: 3, resolvedAt: now, error: null });
     await savePlaceResolution(database.db, { placeId: 555, universeId: 5, resolvedAt: now, error: null });
@@ -51,6 +53,7 @@ describe.skipIf(!hasTestDatabase)("selectActiveUniverses", () => {
     expect(active).toEqual([
       { universeId: 1, priority: 5_000 },
       { universeId: 2, priority: 800 },
+      { universeId: 10, priority: 300 },
       { universeId: 3, priority: 120 },
       { universeId: 4, priority: 10 },
       { universeId: 9, priority: 0 },

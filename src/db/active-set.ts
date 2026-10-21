@@ -19,7 +19,8 @@ export async function selectActiveUniverses(db: Database, now: Date): Promise<Ac
     with recent as (
       select universe_id, max(ccu_max) as peak
       from game_hourly
-      where bucket > ${at}::timestamptz - make_interval(hours => ${config.lookbackHours}::int)
+      -- The hour that straddles the window's start counts: its peak may fall inside the window.
+      where bucket >= time_bucket(interval '1 hour', ${at}::timestamptz - make_interval(hours => ${config.lookbackHours}::int))
       group by universe_id
     ),
     census_now as (
