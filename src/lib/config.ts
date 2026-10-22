@@ -209,11 +209,13 @@ export const RADAR_CONFIG = {
   minimumCcuOptions: [50, 100, 500, 1_000, 5_000],
   defaultMinimumCcu: 100,
   // The current window: the whole UTC hours before as_of. Acceleration compares its average CCU with the window
-  // before it; weekday-safe growth compares the game's share of tracked CCU with the same window one week earlier.
+  // before it; weekday-safe growth compares the game's share of tracked CCU with its share in the same hours one week
+  // earlier, among the games read in both.
   windowHours: 24,
   // The growth score is ln((share now × market + k) / (share a week ago × market + k)), in CCU at the current market
-  // size: k keeps a game going from 5 to 50 CCU from outranking real risers. A game created after the start of the
-  // week-ago window counts from 0; one that existed but was not tracked then has no score.
+  // size: k keeps a game going from 5 to 50 CCU from outranking real risers. A game without a week-ago reading counts
+  // from 0, ln((CCU + k) / k), when it is new or when the radar read some game in every hour of the week-ago window (it
+  // then had fewer players than the active-set minimum); otherwise it has no score.
   smoothingCcu: 100,
   // An hour whose peak reaches this multiple of the window's median hourly CCU is an event (admin abuse, a promotion)
   // rather than organic growth. The median of the same window, not of seven days: a game rising tenfold in a week
@@ -223,6 +225,9 @@ export const RADAR_CONFIG = {
   // Velocity: hours from the start to the middle threshold and from the middle to the end one, measured only when
   // the radar (poll or census) saw the game below the threshold it starts from.
   velocityThresholds: { start: 100, middle: 1_000, end: 10_000 },
+  // Velocity is measured only when the reading before each crossing is at most this many hours older: v2 reads every
+  // game at least hourly, while v1 read 6–7 hours a day, so a crossing across a longer gap cannot be dated.
+  velocityMaximumGapHours: 2,
   pageSize: 100,
 } as const;
 

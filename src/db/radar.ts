@@ -5,6 +5,12 @@ import type { Database } from "./client";
 export const RADAR_SORTS = ["growth", "acceleration", "ccu", "age"] as const;
 export type RadarSort = (typeof RADAR_SORTS)[number];
 
+// What the week-over-week growth compares with. "tracked": the radar read the game in some hour of the current window
+// and in the same hour one week earlier. "new": created after the start of the week-ago window. "untracked": not read
+// a week ago while the radar read some game in every hour of that window, so it had fewer players than the active-set
+// minimum. "unknown": the radar was not watching every hour then (v1 read 6–7 hours a day).
+export type WeekBaseline = "tracked" | "new" | "untracked" | "unknown";
+
 // One row of rising_games (drizzle/0007_rising_games.sql). Sample counts are hourly buckets.
 export interface RisingGame {
   universeId: number;
@@ -12,17 +18,20 @@ export interface RisingGame {
   iconUrl: string | null;
   robloxCreatedAt: Date;
   firstObservedAt: Date;
-  // The latest observation of the window; null when none is that recent.
+  // The latest observation of the window and its time; null when none is that recent.
   ccuLast: number | null;
+  ccuLastAt: Date | null;
   // Average hourly CCU of the current window.
   ccuAverage: number;
   ccuPeak: number;
   windowPeak: number;
   windowMedian: number;
   isEvent: boolean;
-  // Share of tracked CCU now against the same window a week earlier; null without week-ago samples.
+  weekBaseline: WeekBaseline;
+  // Share of tracked CCU now against the same hours a week earlier, among the games read in both; null without such
+  // hours, or when the game had 0 CCU a week ago.
   weekGrowth: number | null;
-  // The sort key of "growth": null when the game existed a week ago but was not tracked.
+  // The sort key of "growth": null when the week baseline is unknown. New and untracked games count from 0.
   weekGrowthScore: number | null;
   // Average CCU of the window against the window before it.
   dayGrowth: number | null;
@@ -31,6 +40,7 @@ export interface RisingGame {
   hoursToEnd: number | null;
   samples: number;
   previousSamples: number;
+  // Hours of the current window paired with the same hour a week earlier.
   weekSamples: number;
 }
 
@@ -58,11 +68,13 @@ type RisingGameRow = {
   roblox_created_at: Date | string;
   first_observed_at: Date | string;
   ccu_last: number | null;
+  ccu_last_at: Date | string | null;
   ccu_avg: number;
   ccu_peak: number | null;
   window_peak: number;
   window_median: number;
   is_event: boolean;
+  week_baseline: WeekBaseline;
   week_growth: number | null;
   week_growth_score: number | null;
   day_growth: number | null;
@@ -86,7 +98,8 @@ export async function risingGames(db: Database, query: RisingGamesQuery, config 
       event_min_samples => ${config.eventMinimumSamples}::int,
       velocity_start => ${config.velocityThresholds.start}::int,
       velocity_middle => ${config.velocityThresholds.middle}::int,
-      velocity_end => ${config.velocityThresholds.end}::int
+      velocity_end => ${config.velocityThresholds.end}::int,
+      velocity_max_gap_hours => ${config.velocityMaximumGapHours}::int
     )
     order by ${sql.raw(orderBy[query.sort])}
     limit ${query.limit}::int
@@ -98,11 +111,13 @@ export async function risingGames(db: Database, query: RisingGamesQuery, config 
     robloxCreatedAt: new Date(row.roblox_created_at),
     firstObservedAt: new Date(row.first_observed_at),
     ccuLast: row.ccu_last,
+    ccuLastAt: row.ccu_last_at === null ? null : new Date(row.ccu_last_at),
     ccuAverage: row.ccu_avg,
     ccuPeak: row.ccu_peak ?? 0,
     windowPeak: row.window_peak,
     windowMedian: row.window_median,
     isEvent: row.is_event,
+    weekBaseline: row.week_baseline,
     weekGrowth: row.week_growth,
     weekGrowthScore: row.week_growth_score,
     dayGrowth: row.day_growth,
