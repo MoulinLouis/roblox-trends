@@ -49,21 +49,23 @@ function byOldestRequest(left: ActiveUniverse, right: ActiveUniverse): number {
   return left.universeId - right.universeId;
 }
 
-// How far behind the rotation runs: the age of the oldest details among the tail games requested. Games whose details
-// were never stored have no age, and the games Roblox did not answer are left out: their details stay old however
-// often they are requested, so one such game would pin this age. Null when no other requested tail game has details.
-export function oldestTailDetailsMinutes(
+// How long the tail waits between two refreshes: the median age of the details of the tail games requested. Games
+// whose details were never stored have no age, and the games Roblox did not answer are left out: their details stay old
+// however often they are requested. A median, not a maximum: a game that re-enters the active set brings the details
+// of its last active day (41,260 minutes on 2026-10-21), which would pin a maximum. Null when no other requested tail
+// game has details.
+export function medianTailDetailsMinutes(
   tailRequested: readonly ActiveUniverse[],
   unanswered: ReadonlySet<number>,
   now: Date,
 ): number | null {
-  let oldest: number | null = null;
-  for (const game of tailRequested) {
-    if (game.lastDetailsAt === null || unanswered.has(game.universeId)) continue;
-    const at = game.lastDetailsAt.getTime();
-    if (oldest === null || at < oldest) oldest = at;
-  }
-  return oldest === null ? null : Math.max(0, Math.round((now.getTime() - oldest) / 60_000));
+  const ages = tailRequested
+    .flatMap((game) => (game.lastDetailsAt === null || unanswered.has(game.universeId) ? [] : [game.lastDetailsAt]))
+    .map((at) => Math.max(0, (now.getTime() - at.getTime()) / 60_000))
+    .sort((left, right) => left - right);
+  if (ages.length === 0) return null;
+  const middle = Math.floor(ages.length / 2);
+  return Math.round(ages.length % 2 ? ages[middle] : (ages[middle - 1] + ages[middle]) / 2);
 }
 
 export function createPollJob(dependencies: PollDependencies): JobDefinition {
@@ -151,7 +153,7 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
           // The priority of the first requested game left out: every game before it in the request order (the hot
           // set by priority, then the tail by request age) was attempted.
           shedBelowCcu: outcome.skippedItems > 0 ? requested[outcome.attempted].priority : null,
-          oldestTailDetailsMinutes: oldestTailDetailsMinutes(plan.tailRequested, new Set(missing), now),
+          medianTailDetailsMinutes: medianTailDetailsMinutes(plan.tailRequested, new Set(missing), now),
           // The requested games Roblox did not answer: every requested game is answered, missing or skipped.
           missing: missing.length,
           missingSample: missing.slice(0, config.missingSampleSize),

@@ -362,7 +362,7 @@ A 429 storm in `radar status`:
 
 - On the `poll` row, `degraded` and `rate-limited` grow, and `429s/requests` rises from about 0 to a few per run.
 - The watched stats of the last completed run show `http.rateLimitedResponses` above 0 and `http.endpointIntervalMs={"games.roblox.com/v1/games":…}` above 7000 (10500, 15750, 23625, then 30000). With `rateLimited=true stoppedBy=error`, a 429 outlasted the retries and the rest of the requested games was skipped; with `stoppedBy=deadline`, the slower spacing ran out of time. Either way `skipped` counts the requested games left out, the end of the request order (tail before hot set), and `shedBelowCcu` is the priority of the first of them.
-- `oldestTailDetailsMinutes`, the age of the oldest details among the tail games requested (games Roblox did not answer left out), rises above its usual 20–30 minutes: the shed tail games fall behind.
+- `medianTailDetailsMinutes`, the median age of the details of the tail games requested (games Roblox did not answer left out), rises above its usual 20–30 minutes: the tail rotation falls behind.
 - Coverage (Rolimon's places at or above 100 CCU polled within 60 minutes, which a tail game polled every 20–30 minutes still meets) falls below its usual share.
 
 The journal (`journalctl -u radar-job@poll -n 100 -o cat`) shows `External service throttled or unavailable; retrying` with a `retryDelayMs` of about 30–60 s (the limit's reset), and one `Slowed down a rate-limited endpoint for the rest of the process` line per new spacing.

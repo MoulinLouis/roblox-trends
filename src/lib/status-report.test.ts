@@ -75,7 +75,7 @@ describe("formatStatusReport", () => {
             missing: 1,
             missingSample: [3_269_082_462],
             shedBelowCcu: 63,
-            oldestTailDetailsMinutes: 31,
+            medianTailDetailsMinutes: 31,
           },
         },
         recent: { runs: 288, degraded: 3, failed: 2, rateLimitedRuns: 1, http: { rateLimitedResponses: 12, attempts: 20_160 } },
@@ -104,7 +104,7 @@ describe("formatStatusReport", () => {
         "         promotionError: Game details request failed: 503 Service Unavailable",
         "poll     failed 7m ago    success 11m ago    288         3       2             1      12/20,160",
         "         rateLimited=true stoppedBy=error http.rateLimitedResponses=4 requested=3150 skipped=600 missing=1",
-        '         shedBelowCcu=63 oldestTailDetailsMinutes=31 http.endpointIntervalMs={"games.roblox.com/v1/games":10500}',
+        '         shedBelowCcu=63 medianTailDetailsMinutes=31 http.endpointIntervalMs={"games.roblox.com/v1/games":10500}',
         "         error 7m ago: poll exceeded 270000 ms",
         "votes    failed 3d ago    never                0         0       0",
         "         error 3d ago: votes went quiet",
@@ -120,11 +120,11 @@ describe("formatStatusReport", () => {
 
   it("renders null and missing watched stats as a dash and leaves out absent messages", () => {
     const lines = reportLines([
-      completed("poll", { rateLimited: false, stoppedBy: null, http: {}, skipped: 0, shedBelowCcu: null, oldestTailDetailsMinutes: null }),
+      completed("poll", { rateLimited: false, stoppedBy: null, http: {}, skipped: 0, shedBelowCcu: null, medianTailDetailsMinutes: null }),
       completed("census", { listQuality: "success", listed: 7_800 }),
     ]);
     expect(lines).toContain("rateLimited=false stoppedBy=- http.rateLimitedResponses=- requested=- skipped=0 missing=- shedBelowCcu=-");
-    expect(lines).toContain("oldestTailDetailsMinutes=- http.endpointIntervalMs=-");
+    expect(lines).toContain("medianTailDetailsMinutes=- http.endpointIntervalMs=-");
     expect(lines).toContain("listQuality=success listed=7800 rejected=- resolved=- resolutionFailures=- deferred=- rateLimited=-");
     expect(lines.some((line) => line.startsWith("promotionError") || line.startsWith("listError"))).toBe(false);
   });
@@ -198,7 +198,7 @@ describe("formatStatusReport", () => {
         skipped: 12_345,
         missing: 123_456,
         shedBelowCcu: 12_345,
-        oldestTailDetailsMinutes: 12_345,
+        medianTailDetailsMinutes: 12_345,
       },
       { rateLimitedResponses: 123_456, attempts: 1_234_567 },
     );

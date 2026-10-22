@@ -23,8 +23,8 @@ export const WATCHED_STATS: Partial<Record<JobName, { values: readonly string[];
   // stoppedBy tells games shed at the deadline from games skipped after a rate limit or repeated failed batches;
   // requested is the hot set plus the tail slice the run planned, and skipped the part of it left out; missing counts
   // the requested games Roblox did not answer (job_runs.stats.missingSample lists some);
-  // oldestTailDetailsMinutes shows how far behind the tail rotation runs; http.endpointIntervalMs shows the game
-  // details spacing the run ended with, above its configured value after a 429.
+  // medianTailDetailsMinutes shows how long the tail games wait between two refreshes; http.endpointIntervalMs shows
+  // the game details spacing the run ended with, above its configured value after a 429.
   poll: {
     values: [
       "rateLimited",
@@ -34,7 +34,7 @@ export const WATCHED_STATS: Partial<Record<JobName, { values: readonly string[];
       "skipped",
       "missing",
       "shedBelowCcu",
-      "oldestTailDetailsMinutes",
+      "medianTailDetailsMinutes",
       "http.endpointIntervalMs",
     ],
   },

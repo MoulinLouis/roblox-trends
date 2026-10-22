@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveUniverse } from "@/db/active-set";
-import { oldestTailDetailsMinutes, planPollRun } from "./poll";
+import { medianTailDetailsMinutes, planPollRun } from "./poll";
 
 const now = new Date("2026-10-20T14:07:00Z");
 
@@ -88,7 +88,7 @@ describe("planPollRun", () => {
   });
 });
 
-describe("oldestTailDetailsMinutes", () => {
+describe("medianTailDetailsMinutes", () => {
   const tailRequested = [
     game(5, 500, null),
     game(8, 450, minutesAgo(26 * 24 * 60), minutesAgo(30)),
@@ -96,20 +96,25 @@ describe("oldestTailDetailsMinutes", () => {
     game(7, 300, minutesAgo(40)),
   ];
 
-  it("reports the age of the oldest details among the tail games requested, skipping never-detailed games", () => {
-    expect(oldestTailDetailsMinutes(tailRequested, new Set(), now)).toBe(26 * 24 * 60);
-    expect(oldestTailDetailsMinutes(tailRequested.slice(2), new Set(), now)).toBe(50);
-    expect(oldestTailDetailsMinutes(tailRequested.slice(0, 1), new Set(), now)).toBeNull();
-    expect(oldestTailDetailsMinutes([], new Set(), now)).toBeNull();
+  it("reports the median age of the details among the tail games requested, skipping never-detailed games", () => {
+    expect(medianTailDetailsMinutes(tailRequested, new Set(), now)).toBe(50);
+    expect(medianTailDetailsMinutes(tailRequested.slice(2), new Set(), now)).toBe(45);
+    expect(medianTailDetailsMinutes(tailRequested.slice(0, 1), new Set(), now)).toBeNull();
+    expect(medianTailDetailsMinutes([], new Set(), now)).toBeNull();
+  });
+
+  it("is not pinned by a game that re-enters the active set with old details", () => {
+    const rotation = [20, 22, 24, 26, 28].map((minutes, index) => game(10 + index, 100, minutesAgo(minutes)));
+    expect(medianTailDetailsMinutes([...rotation, game(9, 100, minutesAgo(41_260))], new Set(), now)).toBe(25);
   });
 
   it("leaves out the games Roblox did not answer, whose details stay old forever", () => {
-    expect(oldestTailDetailsMinutes(tailRequested, new Set([8]), now)).toBe(50);
-    expect(oldestTailDetailsMinutes(tailRequested, new Set([8, 4]), now)).toBe(40);
-    expect(oldestTailDetailsMinutes(tailRequested, new Set([8, 4, 7]), now)).toBeNull();
+    expect(medianTailDetailsMinutes(tailRequested, new Set([8]), now)).toBe(45);
+    expect(medianTailDetailsMinutes(tailRequested, new Set([8, 4]), now)).toBe(40);
+    expect(medianTailDetailsMinutes(tailRequested, new Set([8, 4, 7]), now)).toBeNull();
   });
 
   it("never reports a negative age", () => {
-    expect(oldestTailDetailsMinutes([game(9, 100, new Date(now.getTime() + 60_000))], new Set(), now)).toBe(0);
+    expect(medianTailDetailsMinutes([game(9, 100, new Date(now.getTime() + 60_000))], new Set(), now)).toBe(0);
   });
 });
