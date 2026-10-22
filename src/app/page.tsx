@@ -61,7 +61,7 @@ export default async function RadarPage({ searchParams }: { searchParams: Promis
               {Object.entries(sortLabels).map(([sort, label]) => <option key={sort} value={sort}>{label}</option>)}
             </select>
           </div>
-          <div className="field">
+          <div className="field wide-mobile">
             <label htmlFor="asOf">As of (UTC, empty for now)</label>
             <input id="asOf" name="asOf" type="datetime-local" className="input" defaultValue={query.asOf ? toDateTimeInput(query.asOf) : ""} max={toDateTimeInput(now)} />
           </div>

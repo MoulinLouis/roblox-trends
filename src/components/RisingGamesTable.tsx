@@ -9,7 +9,7 @@ export function RisingGamesTable({ games, asOf }: { games: RisingGame[]; asOf: D
   const { start, middle, end } = RADAR_CONFIG.velocityThresholds;
   return (
     <div className="table-scroll">
-      <table>
+      <table className="rising-table">
         <thead>
           <tr>
             <th>Game</th>
@@ -34,7 +34,7 @@ export function RisingGamesTable({ games, asOf }: { games: RisingGame[]; asOf: D
                   </div>
                 </Link>
               </td>
-              <td>
+              <td className="ccu-cell">
                 <strong>{formatCount(game.ccuLast ?? game.ccuAverage)}</strong>
                 <span className="table-subline">
                   {formatCount(game.ccuAverage)} on average over {game.samples} h
