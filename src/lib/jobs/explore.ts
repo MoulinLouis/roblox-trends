@@ -73,9 +73,9 @@ export function titleVocabulary(titles: string[], minimumTitles: number): Vocabu
     .sort((left, right) => right.titles - left.titles || compareText(left.word, right.word));
 }
 
-// The search order: a word's titles times the hours since its last search, capped (a word never searched counts the
-// cap). The most shared words come back every run or two and the rarest within about a cap, while a word just
-// searched waits behind the others. Ties go to the more shared word.
+// The search order: a word's titles times the hours since its last search, capped (a word not searched within the cap
+// counts the cap). A word just searched waits behind the others until its score catches up, so the most shared words
+// come back often and the rarest still come back. Ties go to the more shared word.
 export function rankSearchTerms(
   vocabulary: VocabularyWord[],
   lastSearchedAt: ReadonlyMap<string, Date>,

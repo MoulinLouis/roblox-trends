@@ -148,9 +148,11 @@ export const JOB_CONFIG = {
     minimumTermTitles: 2,
     // Page 2 lists smaller games than page 1: on 2026-10-22 it found more untracked games than page 1 did.
     searchPagesPerTerm: 2,
-    // Terms are searched in order of titles × hours since their last search, the hours capped here (a term never
-    // searched counts the cap): the most shared words come back every run or two, the rarest within about a day.
-    termRecencyCapHours: 24,
+    // Terms are searched in order of titles × hours since their last search, the hours capped here (a term not searched
+    // within the cap counts the cap). The most shared words come back every run or two and the rarest every one to four
+    // days. A one-day cap would starve them: simulated on 2026-10-22, a vocabulary twice today's 232 words left every
+    // word of two titles unsearched for good.
+    termRecencyCapHours: 7 * 24,
     // The global sorts list a game only once it leads worldwide; a game rising in one market enters that country's
     // sorts first (on 2026-10-22, Steal the Moon was in Up-and-Coming for the US and Great Britain only).
     countrySortIds: ["up-and-coming", "top-trending"],

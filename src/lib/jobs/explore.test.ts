@@ -81,6 +81,14 @@ describe("rankSearchTerms", () => {
     expect(terms(rankSearchTerms(vocabulary, searched, now, 24))).toEqual(["+1", "steal", "egg", "chop", "plane"]);
   });
 
+  it("brings a rare word back ahead of a shared one once it has waited long enough", () => {
+    // egg, searched an hour ago, scores 96 × 1 = 96; plane scores 2 × 47 = 94 after 47 hours and 2 × 49 = 98 after 49.
+    const rank = (planeHoursAgo: number) =>
+      terms(rankSearchTerms(vocabulary, new Map([["egg", hoursAgo(1)], ["plane", hoursAgo(planeHoursAgo)]]), now, 168));
+    expect(rank(47).indexOf("plane")).toBeGreaterThan(rank(47).indexOf("egg"));
+    expect(rank(49).indexOf("plane")).toBeLessThan(rank(49).indexOf("egg"));
+  });
+
   it("caps the hours, so an old search counts like no search", () => {
     const searched = new Map([["chop", hoursAgo(100)]]);
     expect(rankSearchTerms(vocabulary, searched, now, 24)).toEqual(rankSearchTerms(vocabulary, new Map(), now, 24));
