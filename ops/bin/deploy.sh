@@ -12,7 +12,7 @@ readonly mirror="${root}/repo.git"
 readonly releases="${root}/releases"
 readonly current="${root}/current"
 readonly keep_releases=3
-# A release younger than this may still run a 30-minute job or the legacy import: it is never pruned.
+# A release younger than this may still run a job (explore runs up to 55 minutes) or the legacy import: it is never pruned.
 readonly minimum_release_age_minutes=120
 readonly job_timers=(radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer)
 readonly job_wait_seconds=300

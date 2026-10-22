@@ -9,7 +9,7 @@ import { errorMessage, logger } from "@/lib/logger";
 
 // Runs every collector once, for local setup and manual catch-up; production runs one systemd timer per job instead.
 // Census registers the places that poll and votes sample, and thumbnails run last so they also cover the games
-// that charts and explore discovered in this pass.
+// that charts discovered in this pass. Explore queues the games it finds: the next poll run promotes them.
 const ORDER: readonly JobName[] = ["census", "poll", "votes", "charts", "explore", "thumbnails"];
 
 let exitCode = 1;

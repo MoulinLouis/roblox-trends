@@ -155,16 +155,25 @@ describe("Roblox API response parsing", () => {
   });
 
   it("flattens game contents from omni-search and ignores other content", () => {
-    const games = parseSearchResponse({ searchResults: [{ contents: [
+    const page = parseSearchResponse({ searchResults: [{ contents: [
       { contentType: "Game", universeId: 101, rootPlaceId: 202, name: "Search result", playerCount: 75 },
       { contentType: "Avatar", universeId: 303, rootPlaceId: 404, name: "Ignored", playerCount: 0 },
-    ] }] });
-    expect(games).toEqual([{ universeId: 101, rootPlaceId: 202, name: "Search result", playerCount: 75 }]);
+    ] }], nextPageToken: "eyJzdGFydCI6NDB9" });
+    expect(page).toEqual({
+      games: [{ universeId: 101, rootPlaceId: 202, name: "Search result", playerCount: 75 }],
+      nextPageToken: "eyJzdGFydCI6NDB9",
+    });
+  });
+
+  it("reads the last search page as one without a next page", () => {
+    expect(parseSearchResponse({ searchResults: [], nextPageToken: null })).toEqual({ games: [], nextPageToken: null });
+    expect(parseSearchResponse({ searchResults: [], nextPageToken: "" })).toEqual({ games: [], nextPageToken: null });
+    expect(parseSearchResponse({ searchResults: [] })).toEqual({ games: [], nextPageToken: null });
   });
 
   it("skips a malformed search result without dropping the others", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const games = parseSearchResponse({ searchResults: [
+    const { games } = parseSearchResponse({ searchResults: [
       { contents: [{ contentType: "Game", universeId: 101, rootPlaceId: "x", name: "Broken" }] },
       { contents: [
         // Other content types have other fields; they are ignored, not counted as malformed.

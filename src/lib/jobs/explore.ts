@@ -1,4 +1,8 @@
-import { selectRisingSeeds } from "@/db/explore";
+import { enqueueCandidates } from "@/db/candidates";
+import type { Database } from "@/db/client";
+import { recordDiscoveries } from "@/db/discovery";
+import { lastSearchedTerms, selectExplorationSeeds } from "@/db/explore";
+import { knownUniverseIds } from "@/db/games";
 import { getHttpRequestMetrics } from "@/lib/api/http";
 import type { RobloxApi, RobloxChartGame } from "@/lib/api/roblox";
 import { compareText } from "@/lib/arrays";
@@ -6,8 +10,8 @@ import { JOB_CONFIG } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
 import { normalizeTitle } from "@/lib/title";
 import { httpMetricsSince, isRateLimited } from "./batching";
-import { PromotionApiError, promoteUniverses, type PromotionCandidate } from "./promotion";
 import type { JobDefinition } from "./runner";
+import type { DiscoverySource } from "./types";
 
 // Words too generic to point to one trend: searching them returns the platform's biggest games, not related ones.
 const SEARCH_STOP_WORDS = new Set([
@@ -21,6 +25,17 @@ const SEARCH_STOP_WORDS = new Set([
   "into",
   "but",
   "are",
+  "all",
+  "can",
+  "not",
+  "how",
+  "who",
+  "what",
+  "this",
+  "that",
+  "its",
+  "our",
+  "out",
   "game",
   "games",
   "roblox",
@@ -31,9 +46,17 @@ const SEARCH_STOP_WORDS = new Set([
   "new",
 ]);
 
-// The words that rising games share are the vocabulary of what is trending now. A word counts once per title and
-// must be shared by `minimumTitles` titles, or by every title when fewer are available.
-export function selectSearchTerms(titles: string[], count: number, minimumTitles: number): string[] {
+export interface VocabularyWord {
+  // The folded word ("egg" for "Eggs" and "Egg's"), by which titles are counted.
+  word: string;
+  // Its commonest spelling in the titles, which the search sends.
+  term: string;
+  titles: number;
+}
+
+// The words that young games share are the vocabulary of what is made now. A word counts once per title and must be
+// shared by `minimumTitles` titles, or by every title when fewer are available. Most shared first.
+export function titleVocabulary(titles: string[], minimumTitles: number): VocabularyWord[] {
   const words = new Map<string, { titles: number; forms: Map<string, number> }>();
   for (const title of titles) {
     for (const [word, form] of titleWords(title)) {
@@ -46,17 +69,52 @@ export function selectSearchTerms(titles: string[], count: number, minimumTitles
   const minimumOccurrences = Math.min(minimumTitles, titles.length);
   return [...words.entries()]
     .filter(([, entry]) => entry.titles >= minimumOccurrences)
-    .sort(([leftWord, left], [rightWord, right]) => right.titles - left.titles || compareText(leftWord, rightWord))
-    .slice(0, count)
-    .map(([, entry]) => commonestForm(entry.forms));
+    .map(([word, entry]) => ({ word, term: commonestForm(entry.forms), titles: entry.titles }))
+    .sort((left, right) => right.titles - left.titles || compareText(left.word, right.word));
+}
+
+// The search order: a word's titles times the hours since its last search, capped (a word never searched counts the
+// cap). The most shared words come back every run or two and the rarest within about a cap, while a word just
+// searched waits behind the others. Ties go to the more shared word.
+export function rankSearchTerms(
+  vocabulary: VocabularyWord[],
+  lastSearchedAt: ReadonlyMap<string, Date>,
+  now: Date,
+  capHours: number,
+): VocabularyWord[] {
+  const score = (entry: VocabularyWord) => {
+    const searchedAt = lastSearchedAt.get(entry.word);
+    const hours = searchedAt ? Math.max(0, (now.getTime() - searchedAt.getTime()) / 3_600_000) : capHours;
+    return entry.titles * Math.min(hours, capHours);
+  };
+  return vocabulary
+    .map((entry) => ({ entry, score: score(entry) }))
+    .sort((left, right) => right.score - left.score || right.entry.titles - left.entry.titles || compareText(left.entry.word, right.entry.word))
+    .map(({ entry }) => entry);
+}
+
+// The folded word of a searched term, keyed like titleVocabulary; the latest search of any spelling counts.
+export function termSearchTimes(searched: ReadonlyMap<string, Date>): Map<string, Date> {
+  const byWord = new Map<string, Date>();
+  for (const [term, searchedAt] of searched) {
+    const word = [...titleWords(term).keys()][0] ?? term.toLowerCase();
+    const previous = byWord.get(word);
+    if (!previous || searchedAt > previous) byWord.set(word, searchedAt);
+  }
+  return byWord;
 }
 
 // The words of a title, each folded word mapped to the form the title spells it in. Hyphens join words
 // ("Steal-a-Brainrot"); a possessive or a plural folds into the word ("Egg's" and "Eggs" into "egg"), but a double s
-// does not ("boss").
+// does not ("boss"). A plus and a number are a word of their own ("+1 Speed Every Second" formats), other numbers are
+// not.
 function titleWords(title: string): Map<string, string> {
   const words = new Map<string, string>();
   for (const token of normalizeTitle(title).toLowerCase().split(/[\s-]+/)) {
+    if (/^\+\d+$/.test(token)) {
+      if (!words.has(token)) words.set(token, token);
+      continue;
+    }
     const form = token.replace(/^['+]+|['+]+$/g, "").replace(/'s$/, "");
     const word = form.length >= 4 && form.endsWith("s") && !form.endsWith("ss") ? form.slice(0, -1) : form;
     if (word.length < 3 || !/\p{L}/u.test(word) || SEARCH_STOP_WORDS.has(word) || SEARCH_STOP_WORDS.has(form)) continue;
@@ -75,130 +133,195 @@ function commonestForm(forms: Map<string, number>): string {
 }
 
 export interface ExploreDependencies {
-  roblox: Pick<RobloxApi, "getRecommendations" | "searchGames" | "getGameDetails">;
+  roblox: Pick<RobloxApi, "getSortContent" | "getRecommendations" | "searchGames">;
+  // Measures the deadline only.
+  clock?: () => number;
+  // Tests read fewer countries; production takes JOB_CONFIG.explore.
+  countries?: readonly string[];
+}
+
+interface Sighting {
+  universeId: number;
+  source: DiscoverySource;
+  detail: string;
+  playerCount: number;
 }
 
 interface EndpointOutcome {
-  candidates: PromotionCandidate[];
   requests: number;
   failures: number;
   // Successful responses that listed no games: one is a quiet answer, all of them a format change.
   emptyResponses: number;
-  // Requests not made because an earlier one was rate limited.
-  skippedRequests: number;
+  // Games listed at or above the minimum CCU, tracked or not.
+  sightings: number;
   rateLimited: boolean;
 }
 
-// One request per detail (a seed or a search term). A failed request is logged and the next one runs, except after a
-// rate limit that outlasted the client's retries: the next requests to the same endpoint would only extend it.
-async function exploreEndpoint(
-  source: "recommendation" | "search",
-  details: string[],
-  minimumCcu: number,
-  request: (detail: string) => Promise<RobloxChartGame[]>,
-): Promise<EndpointOutcome> {
-  const outcome: EndpointOutcome = { candidates: [], requests: 0, failures: 0, emptyResponses: 0, skippedRequests: 0, rateLimited: false };
-  for (const [index, detail] of details.entries()) {
-    outcome.requests += 1;
-    let listed: RobloxChartGame[];
+// One endpoint's requests. A failed request is logged and counted, and the next one runs, except after a rate limit
+// that outlasted the client's retries: the next requests to the same endpoint would only extend it.
+class Endpoint {
+  readonly outcome: EndpointOutcome = { requests: 0, failures: 0, emptyResponses: 0, sightings: 0, rateLimited: false };
+
+  constructor(
+    private readonly source: DiscoverySource,
+    private readonly minimumCcu: number,
+  ) {}
+
+  // The response and the games it listed at or above the minimum CCU, or null when the request failed.
+  async request<T>(detail: string, call: () => Promise<T>, games: (response: T) => RobloxChartGame[]) {
+    this.outcome.requests += 1;
+    let response: T;
     try {
-      listed = await request(detail);
+      response = await call();
     } catch (error) {
-      outcome.failures += 1;
-      logger.warn("Exploration request failed", { source, detail, error: errorMessage(error) });
+      this.outcome.failures += 1;
+      logger.warn("Exploration request failed", { source: this.source, detail, error: errorMessage(error) });
       if (isRateLimited(error)) {
-        outcome.rateLimited = true;
-        outcome.skippedRequests = details.length - index - 1;
-        logger.warn("Exploration rate limited; skipping the remaining requests", { source, skipped: outcome.skippedRequests });
-        break;
+        this.outcome.rateLimited = true;
+        logger.warn("Exploration rate limited; skipping the remaining requests", { source: this.source });
       }
-      continue;
+      return null;
     }
-    if (!listed.length) outcome.emptyResponses += 1;
-    for (const game of listed) {
-      if (game.playerCount >= minimumCcu) outcome.candidates.push({ universeId: game.universeId, source, detail });
-    }
+    const listed = games(response);
+    if (!listed.length) this.outcome.emptyResponses += 1;
+    const sightings: Sighting[] = listed
+      .filter((game) => game.playerCount >= this.minimumCcu)
+      .map((game) => ({ universeId: game.universeId, source: this.source, detail, playerCount: game.playerCount }));
+    this.outcome.sightings += sightings.length;
+    return { response, sightings };
   }
-  return outcome;
+
+  // An endpoint that answered no request with games is down or changed its format. Single failures stay isolated.
+  get failed(): boolean {
+    return this.outcome.requests > 0 && this.outcome.failures + this.outcome.emptyResponses === this.outcome.requests;
+  }
 }
 
-// An endpoint that answered no request with games is down or changed its format. Single failures stay isolated.
-function endpointFailed(outcome: EndpointOutcome): boolean {
-  return outcome.requests > 0 && outcome.failures + outcome.emptyResponses === outcome.requests;
+// Sightings of tracked games are recorded as discoveries: they show how games relate, not only how they were first
+// found. Untracked games join the promotion queue, which poll works through within the game details budget.
+async function recordSightings(db: Database, sightings: Sighting[], now: Date) {
+  if (!sightings.length) return { discoveries: 0, queued: [] as number[] };
+  const known = await knownUniverseIds(db, [...new Set(sightings.map((sighting) => sighting.universeId))]);
+  const discoveries = await recordDiscoveries(
+    db,
+    sightings
+      .filter((sighting) => known.has(sighting.universeId))
+      .map(({ universeId, source, detail }) => ({ universeId, source, detail, firstSeenAt: now, lastSeenAt: now })),
+  );
+  const unknown = sightings.filter((sighting) => !known.has(sighting.universeId));
+  await enqueueCandidates(db, unknown.map((sighting) => ({ ...sighting, seenAt: now })));
+  return { discoveries, queued: unknown.map((sighting) => sighting.universeId) };
 }
 
-function endpointStats({ candidates, ...stats }: EndpointOutcome) {
-  return { ...stats, candidates: candidates.length };
-}
-
-// Expands the recommendations of rising young games and searches the words shared by the titles of a wider set of
-// them. Discoveries of games already tracked are recorded too: they show how games relate, not only how they were
-// first found.
+// Reads Up-and-Coming and Top Trending by country, then expands the recommendations of the young games and searches
+// the words their titles share, until the deadline.
 export function createExploreJob(dependencies: ExploreDependencies): JobDefinition {
   const config = JOB_CONFIG.explore;
+  const clock = dependencies.clock ?? Date.now;
   return {
     name: "explore",
     intervalMinutes: config.intervalMinutes,
     timeoutMs: config.timeoutMs,
     async run({ db, now }) {
-      // One query serves both: the top seeds for recommendations, every returned title for search terms.
-      const rising = await selectRisingSeeds(db, now, {
-        count: Math.max(config.seedCount, config.termTitleCount),
+      const deadline = clock() + config.deadlineMs;
+      const pastDeadline = () => clock() > deadline;
+      const seeds = await selectExplorationSeeds(db, now, {
+        count: config.seedCount,
         maximumAgeDays: config.seedMaximumAgeDays,
-        currentWindowHours: config.currentWindowHours,
-        previousWindowOffsetHours: config.previousWindowOffsetHours,
-        smoothingCcu: config.seedSmoothingCcu,
-        minimumCurrentCcu: config.seedMinimumCurrentCcu,
+        windowHours: config.seedWindowHours,
+        minimumCcu: config.seedMinimumCcu,
       });
-      const seeds = rising.slice(0, config.seedCount);
-      const titles = rising.slice(0, config.termTitleCount).map((game) => game.name);
-      const terms = selectSearchTerms(titles, config.searchTermCount, config.minimumTermTitles);
-      const httpBefore = getHttpRequestMetrics();
-      // Recommendations and search are separate endpoints, so a rate limit on one does not stop the other.
-      const recommendation = await exploreEndpoint(
-        "recommendation",
-        seeds.map((seed) => String(seed.universeId)),
-        config.minimumDiscoveryCcu,
-        (seed) => dependencies.roblox.getRecommendations(seed, config.recommendationsPerSeed),
+      const vocabulary = titleVocabulary(
+        seeds.map((seed) => seed.name),
+        config.minimumTermTitles,
       );
-      const search = await exploreEndpoint("search", terms, config.minimumDiscoveryCcu, (term) => dependencies.roblox.searchGames(term));
-      const candidates = [...recommendation.candidates, ...search.candidates];
-      const rateLimited = recommendation.rateLimited || search.rateLimited;
-      // The Games API shares the recommendations host: after a rate limit there, only known games are recorded, and
-      // the next run finds the unknown ones again.
-      const promotionSkipped = recommendation.rateLimited ? ("rateLimited" as const) : undefined;
-      if (promotionSkipped) logger.warn("Exploration promotion skipped: the Games API host is rate limited", { candidates: candidates.length });
-      let promoted = 0;
+      const searched = await lastSearchedTerms(db, new Date(now.getTime() - config.termRecencyCapHours * 3_600_000), now);
+      const ranked = rankSearchTerms(vocabulary, termSearchTimes(searched), now, config.termRecencyCapHours);
+      const httpBefore = getHttpRequestMetrics();
       let discoveries = 0;
-      let promotionError: string | undefined;
-      try {
-        ({ promoted, discoveries } = await promoteUniverses(db, dependencies.roblox, candidates, now, {
-          recordKnown: true,
-          skipApi: promotionSkipped !== undefined,
-        }));
-      } catch (error) {
-        // Only a Games API failure is tolerated; a database error fails the run. The message already includes the cause.
-        if (!(error instanceof PromotionApiError)) throw error;
-        promotionError = error.message;
-        discoveries = error.recordedDiscoveries;
-        logger.error("Exploration promotion failed; retrying next run", { error: promotionError });
+      const queued = new Set<number>();
+      const record = async (sightings: Sighting[]) => {
+        const recorded = await recordSightings(db, sightings, now);
+        discoveries += recorded.discoveries;
+        for (const universeId of recorded.queued) queued.add(universeId);
+      };
+      let stoppedByDeadline = false;
+      // Whether another request may start on this endpoint; past the deadline, none may on any.
+      const mayRequest = (endpoint: Endpoint) => {
+        if (endpoint.outcome.rateLimited) return false;
+        if (pastDeadline()) stoppedByDeadline = true;
+        return !stoppedByDeadline;
+      };
+
+      // Sorts and search share apis.roblox.com, whose client waits out each search's one-minute window: sorts go first.
+      const chart = new Endpoint("chart", config.minimumDiscoveryCcu);
+      const countries = dependencies.countries ?? config.countries;
+      for (const country of countries) {
+        for (const sortId of config.countrySortIds) {
+          if (!mayRequest(chart)) break;
+          const answer = await chart.request(
+            `${sortId}:${country}`,
+            () => dependencies.roblox.getSortContent(sortId, country),
+            (sort) => sort.games,
+          );
+          if (answer) await record(answer.sightings);
+        }
       }
-      const degraded =
-        endpointFailed(recommendation) || endpointFailed(search) || rateLimited || promotionError !== undefined || promotionSkipped !== undefined;
+
+      // Recommendations and search run side by side: each is paced on its own endpoint (recommendations every 2.5 s,
+      // search once a minute), so neither waits for the other. Every answer is recorded at once, so poll promotes what
+      // the run finds while it goes on, and a run that times out keeps it.
+      const recommendation = new Endpoint("recommendation", config.minimumDiscoveryCcu);
+      const search = new Endpoint("search", config.minimumDiscoveryCcu);
+      const terms: string[] = [];
+      const recommend = async () => {
+        for (const seed of seeds) {
+          if (!mayRequest(recommendation)) break;
+          const answer = await recommendation.request(
+            String(seed.universeId),
+            () => dependencies.roblox.getRecommendations(String(seed.universeId), config.recommendationsPerSeed),
+            (games) => games,
+          );
+          if (answer) await record(answer.sightings);
+        }
+      };
+      const searchTerms = async () => {
+        for (const { term } of ranked) {
+          let pageToken: string | undefined;
+          for (let page = 0; page < config.searchPagesPerTerm; page += 1) {
+            if (!mayRequest(search)) return;
+            const answer = await search.request(
+              term,
+              () => dependencies.roblox.searchGames(term, pageToken),
+              (result) => result.games,
+            );
+            if (!answer) break;
+            if (page === 0) terms.push(term);
+            await record(answer.sightings);
+            if (!answer.response.nextPageToken) break;
+            pageToken = answer.response.nextPageToken;
+          }
+        }
+      };
+      await Promise.all([recommend(), searchTerms()]);
+
+      const rateLimited = chart.outcome.rateLimited || recommendation.outcome.rateLimited || search.outcome.rateLimited;
+      const degraded = chart.failed || recommendation.failed || search.failed || rateLimited;
       return {
         status: degraded ? "degraded" : "success",
         stats: {
           seeds: seeds.length,
-          titles: titles.length,
+          vocabulary: vocabulary.length,
+          // The terms whose first page answered this run: the next runs rank the terms by when they were searched.
           terms,
-          recommendation: endpointStats(recommendation),
-          search: endpointStats(search),
+          chart: chart.outcome,
+          recommendation: recommendation.outcome,
+          search: search.outcome,
           rateLimited,
-          promotionRequested: new Set(candidates.map((candidate) => candidate.universeId)).size,
-          promoted,
+          stoppedBy: stoppedByDeadline ? "deadline" : null,
+          // Untracked games found this run, queued for promotion by poll.
+          queued: queued.size,
           discoveries,
-          promotionError,
-          promotionSkipped,
           http: httpMetricsSince(httpBefore),
         },
       };

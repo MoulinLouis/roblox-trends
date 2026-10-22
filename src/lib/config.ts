@@ -129,21 +129,32 @@ export const JOB_CONFIG = {
   },
   explore: {
     intervalMinutes: 60,
-    timeoutMs: 30 * 60_000,
-    // Rising young games: the average hourly CCU of the current window against the same window a day earlier.
+    // Search answers one request per minute from the production IP (x-ratelimit-limit "1;w=60", enforced with 429s,
+    // measured on 2026-10-22; a residential IP gets 4 per second), so the run spends most of its hour searching.
+    timeoutMs: 55 * 60_000,
+    // No request starts after this. Leaves time for the wait of a search that started just before it, and for writes.
+    deadlineMs: 45 * 60_000,
+    // Seeds: the young games with at least this average hourly CCU over the window, busiest first. Their
+    // recommendations are expanded and their titles make the search vocabulary.
     seedMaximumAgeDays: 60,
-    currentWindowHours: 6,
-    previousWindowOffsetHours: 24,
-    // Growth is ln((current + k) / (previous + k)): k keeps a game going from 5 to 50 CCU from outranking real risers.
-    seedSmoothingCcu: 100,
-    seedMinimumCurrentCcu: 150,
-    // Recommendations expand the top seeds; search terms come from the titles of a wider set of rising games.
-    seedCount: 10,
-    recommendationsPerSeed: 20,
-    termTitleCount: 50,
-    // A term must be shared by this many titles; with fewer titles available, by every one of them.
-    minimumTermTitles: 3,
-    searchTermCount: 4,
+    seedWindowHours: 6,
+    seedMinimumCcu: 50,
+    // At the recommendations' 2.5 s spacing (EXTERNAL_REQUEST_CONFIG.minimumIntervalByEndpoint), 1,000 seeds take about
+    // 42 minutes, within the deadline: the quietest seeds are the ones it sheds.
+    seedCount: 1_000,
+    // Roblox returns at most 6 recommendations whatever maxRows asks for, and its next pages repeat them (2026-10-22).
+    recommendationsPerSeed: 6,
+    // A word becomes a search term once this many seed titles share it; with fewer titles available, every one of them.
+    minimumTermTitles: 2,
+    // Page 2 lists smaller games than page 1: on 2026-10-22 it found more untracked games than page 1 did.
+    searchPagesPerTerm: 2,
+    // Terms are searched in order of titles × hours since their last search, the hours capped here (a term never
+    // searched counts the cap): the most shared words come back every run or two, the rarest within about a day.
+    termRecencyCapHours: 24,
+    // The global sorts list a game only once it leads worldwide; a game rising in one market enters that country's
+    // sorts first (on 2026-10-22, Steal the Moon was in Up-and-Coming for the US and Great Britain only).
+    countrySortIds: ["up-and-coming", "top-trending"],
+    countries: ["us", "br", "ph", "id", "mx", "gb", "de", "fr", "ca", "au", "th", "sa", "vn", "tr"],
     minimumDiscoveryCcu: 50,
   },
   thumbnails: {

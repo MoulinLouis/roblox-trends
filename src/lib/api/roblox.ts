@@ -62,6 +62,7 @@ const searchResponseSchema = z.object({
   searchResults: z.array(
     z.object({ contents: z.array(z.unknown()).default([]) }),
   ).default([]),
+  nextPageToken: z.string().nullish(),
 });
 const universeResponseSchema = z.object({ universeId: z.number().nullable() });
 // Icon and thumbnail items are validated one by one so that a single malformed universe cannot discard the whole batch.
@@ -81,6 +82,12 @@ const pendingThumbnailStates = new Set(["Pending", "InReview", "TemporarilyUnava
 export const ROBLOX_MAXIMUM_IDS_PER_REQUEST = 50;
 
 export type RobloxChartGame = z.infer<typeof chartGameSchema>;
+
+export interface RobloxSearchPage {
+  games: RobloxChartGame[];
+  // Requests the next page of the same query; null on the last page.
+  nextPageToken: string | null;
+}
 
 export interface RobloxSortGame extends RobloxChartGame {
   // 1-based place in the sort as Roblox listed it. Malformed entries count too, so a skipped one leaves a gap.
@@ -175,16 +182,16 @@ export function parseRecommendationsResponse(value: unknown): RobloxChartGame[] 
   return parseItems(games, recommendationSchema, "recommendations", "universeId").map(({ placeId, ...game }) => ({ ...game, rootPlaceId: placeId }));
 }
 
-export function parseSearchResponse(value: unknown): RobloxChartGame[] {
-  const contents = searchResponseSchema
-    .parse(value)
-    .searchResults.flatMap((result) => result.contents)
+export function parseSearchResponse(value: unknown): RobloxSearchPage {
+  const response = searchResponseSchema.parse(value);
+  const contents = response.searchResults
+    .flatMap((result) => result.contents)
     .filter((item) => {
       // An item that is not even an object is kept here and reported as malformed below.
       const type = searchContentTypeSchema.safeParse(item);
       return !type.success || !type.data.contentType || type.data.contentType === "Game";
     });
-  return parseItems(contents, chartGameSchema, "search results", "universeId").map((game) => ({
+  const games = parseItems(contents, chartGameSchema, "search results", "universeId").map((game) => ({
     universeId: game.universeId,
     rootPlaceId: game.rootPlaceId,
     name: game.name,
@@ -193,6 +200,7 @@ export function parseSearchResponse(value: unknown): RobloxChartGame[] {
     ...(game.totalDownVotes == null ? {} : { totalDownVotes: game.totalDownVotes }),
     ...(game.isSponsored == null ? {} : { isSponsored: game.isSponsored }),
   }));
+  return { games, nextPageToken: response.nextPageToken || null };
 }
 
 // A universe without an entry is unknown: its item was malformed, or its thumbnails are in a state that is neither
@@ -250,11 +258,13 @@ async function fetchThumbnailBatch<T>(
 }
 
 export interface RobloxApi {
-  getSortContent(sortId: string): Promise<RobloxSort>;
+  // country: a country code, or "all"; the client's own country when absent.
+  getSortContent(sortId: string, country?: string): Promise<RobloxSort>;
   getGameDetails(universeIds: string[]): Promise<RobloxGameDetail[]>;
   getGameVotes(universeIds: string[]): Promise<RobloxGameVote[]>;
   getRecommendations(universeId: string, maximumRows?: number): Promise<RobloxChartGame[]>;
-  searchGames(query: string): Promise<RobloxChartGame[]>;
+  // pageToken: the nextPageToken of the previous page of the same query; the first page when absent.
+  searchGames(query: string, pageToken?: string): Promise<RobloxSearchPage>;
   // null: Roblox knows no universe for this place. The endpoint answers a missing place with HTTP 200 and
   // { "universeId": null }; it returns 404 only for an empty id.
   resolveUniverseId(placeId: string): Promise<string | null>;
@@ -278,12 +288,12 @@ export class RobloxClient implements RobloxApi {
     return parseSortsResponse(await fetchJson(url.toString(), { cacheTtlMs: 10 * 60 * 1000 }));
   }
 
-  async getSortContent(sortId: string): Promise<RobloxSort> {
+  async getSortContent(sortId: string, country = this.country): Promise<RobloxSort> {
     const url = new URL("https://apis.roblox.com/explore-api/v1/get-sort-content");
     url.searchParams.set("sessionId", this.sessionId);
     url.searchParams.set("sortId", sortId);
     url.searchParams.set("device", this.device);
-    url.searchParams.set("country", this.country);
+    url.searchParams.set("country", country);
     return parseSortContentResponse(await fetchJson(url.toString(), { cacheTtlMs: 10 * 60 * 1000 }));
   }
 
@@ -315,11 +325,12 @@ export class RobloxClient implements RobloxApi {
     return parseRecommendationsResponse(await fetchJson(url.toString(), { cacheTtlMs: 30 * 60 * 1000 }));
   }
 
-  async searchGames(query: string): Promise<RobloxChartGame[]> {
+  async searchGames(query: string, pageToken?: string): Promise<RobloxSearchPage> {
     const url = new URL("https://apis.roblox.com/search-api/omni-search");
     url.searchParams.set("searchQuery", query);
     url.searchParams.set("sessionId", this.sessionId);
     url.searchParams.set("pageType", "all");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
     return parseSearchResponse(await fetchJson(url.toString(), { cacheTtlMs: 30 * 60 * 1000 }));
   }
 

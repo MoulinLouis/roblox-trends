@@ -116,3 +116,48 @@ describe("RobloxClient.resolveUniverseId", () => {
     expect(await new RobloxClient().resolveUniverseId("123")).toBeNull();
   });
 });
+
+describe("RobloxClient.searchGames", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    clearResponseCache();
+  });
+
+  it("requests the next page with the token of the previous one, in the same session", async () => {
+    const urls: URL[] = [];
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      urls.push(new URL(String(input)));
+      return Response.json({ searchResults: [], nextPageToken: urls.length === 1 ? "page-2" : null });
+    }));
+    const client = new RobloxClient();
+    const first = await client.searchGames("+1");
+    expect(await client.searchGames("+1", first.nextPageToken ?? undefined)).toEqual({ games: [], nextPageToken: null });
+    expect(urls.map((url) => [url.searchParams.get("searchQuery"), url.searchParams.get("pageToken")])).toEqual([
+      ["+1", null],
+      ["+1", "page-2"],
+    ]);
+    expect(urls[1].searchParams.get("sessionId")).toBe(urls[0].searchParams.get("sessionId"));
+  });
+});
+
+describe("RobloxClient.getSortContent", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    clearResponseCache();
+  });
+
+  it("reads a sort for the client's country, or for the country asked", async () => {
+    const urls: URL[] = [];
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      urls.push(new URL(String(input)));
+      return Response.json({ sortId: "up-and-coming", games: [] });
+    }));
+    const client = new RobloxClient("all", "computer");
+    await client.getSortContent("up-and-coming");
+    await client.getSortContent("up-and-coming", "us");
+    expect(urls.map((url) => [url.searchParams.get("country"), url.searchParams.get("device")])).toEqual([
+      ["all", "computer"],
+      ["us", "computer"],
+    ]);
+  });
+});

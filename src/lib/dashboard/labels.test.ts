@@ -12,6 +12,7 @@ describe("labels", () => {
   it("describes how a game was found", () => {
     expect(discoveryLabel("rolimons", "")).toBe("Rolimon's list");
     expect(discoveryLabel("chart", "up-and-coming")).toBe("the Up & Coming chart");
+    expect(discoveryLabel("chart", "up-and-coming:us")).toBe("the Up & Coming chart in US");
     expect(discoveryLabel("search", "fake an egg")).toBe("a search for “fake an egg”");
     expect(discoveryLabel("recommendation", "10769384180")).toBe("recommendations from universe 10769384180");
   });
