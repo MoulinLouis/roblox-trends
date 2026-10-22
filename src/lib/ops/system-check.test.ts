@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ArchiverHealth, TimescaleJobHealth } from "@/db/system-health";
-import { evaluateSystemHealth } from "./system-check";
+import { diskUsedShare, evaluateSystemHealth } from "./system-check";
 
 const now = new Date("2026-10-22T12:00:00Z");
 const minutesAgo = (minutes: number) => new Date(now.getTime() - minutes * 60_000);
@@ -78,5 +78,11 @@ describe("evaluateSystemHealth", () => {
     const retention = { ...refresh, procName: "policy_retention", scheduleIntervalSeconds: 86_400, lastSuccessfulFinish: minutesAgo(2 * 24 * 60) };
     expect(evaluateSystemHealth({ ...healthy, jobs: [retention] }).ok).toBe(true);
     expect(evaluateSystemHealth({ ...healthy, jobs: [{ ...retention, lastSuccessfulFinish: minutesAgo(3 * 24 * 60 + 1) }] }).ok).toBe(false);
+  });
+});
+
+describe("diskUsedShare", () => {
+  it("counts the blocks reserved for root as neither used nor available, as df does", () => {
+    expect(diskUsedShare({ blocks: 100, bfree: 40, bavail: 20 })).toBe(0.75);
   });
 });

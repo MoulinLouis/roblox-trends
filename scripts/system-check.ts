@@ -6,7 +6,7 @@ import { readArchiver, readTimescaleJobs } from "@/db/system-health";
 import { DATABASE_SESSION_CONFIG, HEALTHCHECKS_CONFIG } from "@/lib/config";
 import { healthchecksPingBase, sendPing } from "@/lib/jobs/healthchecks";
 import { errorMessage, logger } from "@/lib/logger";
-import { evaluateSystemHealth } from "@/lib/ops/system-check";
+import { diskUsedShare, evaluateSystemHealth } from "@/lib/ops/system-check";
 
 // Run every 15 minutes by radar-system-check.timer: disk usage, WAL archiving and the TimescaleDB policies, reported to
 // the radar-system check. Not being able to read them is reported as a failure too.
@@ -30,9 +30,7 @@ try {
   });
   await assertNotLegacyDatabase(database);
   const [jobs, archiver, disk] = await Promise.all([readTimescaleJobs(database), readArchiver(database), statfs("/")]);
-  // The share df reports: blocks reserved for root count as neither used nor available.
-  const used = disk.blocks - disk.bfree;
-  const result = evaluateSystemHealth({ now: new Date(), diskUsedShare: used / (used + disk.bavail), archiver, jobs });
+  const result = evaluateSystemHealth({ now: new Date(), diskUsedShare: diskUsedShare(disk), archiver, jobs });
   await sendPing(slug, result.ok ? "success" : "fail", runId, result.summary);
   if (result.ok) logger.info("System check passed", { summary: result.summary });
   else logger.error("System check failed", { problems: result.problems });

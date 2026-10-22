@@ -14,6 +14,12 @@ export interface SystemHealthResult {
   summary: string;
 }
 
+// The share df reports: blocks reserved for root count as neither used nor available.
+export function diskUsedShare(disk: { blocks: number; bfree: number; bavail: number }): number {
+  const used = disk.blocks - disk.bfree;
+  return used / (used + disk.bavail);
+}
+
 const percent = (share: number) => `${Math.round(share * 1_000) / 10}%`;
 const minutesBetween = (from: Date, to: Date) => Math.floor((to.getTime() - from.getTime()) / 60_000);
 
