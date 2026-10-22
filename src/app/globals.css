@@ -52,8 +52,8 @@ button { color: inherit; }
   display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px;
   color: #07110d; background: var(--accent); box-shadow: 0 0 35px rgba(132, 240, 193, .24);
 }
-.brand-title { font-weight: 800; font-size: 14px; letter-spacing: .02em; }
-.brand-kicker { color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .15em; }
+.brand-title { display: block; font-weight: 800; font-size: 14px; letter-spacing: .02em; }
+.brand-kicker { display: block; color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .15em; }
 .nav { display: grid; gap: 6px; }
 .nav-link {
   display: flex; align-items: center; gap: 12px; color: var(--muted-strong); padding: 11px 12px;
