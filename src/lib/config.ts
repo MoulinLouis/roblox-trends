@@ -168,6 +168,11 @@ export const DATABASE_SESSION_CONFIG = {
   statusLockTimeoutMs: 5_000,
   // Every statement of the legacy import commits on its own and stays short: one window, one page or one refresh.
   legacyImportStatementTimeoutMs: 10 * 60_000,
+  // The dashboard (radar-web) only reads: its sessions are read-only, a slow page gives up instead of holding a
+  // connection, and its pool stays small beside the jobs' connections.
+  dashboardStatementTimeoutMs: 15_000,
+  dashboardLockTimeoutMs: 5_000,
+  dashboardMaxConnections: 5,
   // Scripts exit after this even when a query left running by a timed-out job keeps its client checked out.
   closeTimeoutMs: 5_000,
   // A run still marked running this long after its timeout belongs to a process that crashed or was killed.
