@@ -213,8 +213,8 @@ async function recordSightings(db: Database, sightings: Sighting[], seenAt: Date
   return { discoveries, queued: unknown.map((sighting) => sighting.universeId) };
 }
 
-// Reads Up-and-Coming and Top Trending by country, then expands the recommendations of the young games and searches
-// the words their titles share, until the deadline.
+// Until the deadline, expands the recommendations of the young games and, beside them, reads Up-and-Coming and Top
+// Trending by country, then searches the words the young games' titles share.
 export function createExploreJob(dependencies: ExploreDependencies): JobDefinition {
   const config = JOB_CONFIG.explore;
   const clock = dependencies.clock ?? Date.now;
@@ -257,24 +257,26 @@ export function createExploreJob(dependencies: ExploreDependencies): JobDefiniti
         return !stoppedByDeadline;
       };
 
-      // Sorts and search share apis.roblox.com, whose client waits out each search's one-minute window: sorts go first.
       const chart = new Endpoint("chart", config.minimumDiscoveryCcu);
       const countries = dependencies.countries ?? config.countries;
-      for (const country of countries) {
-        for (const sortId of config.countrySortIds) {
-          if (!mayRequest(chart)) break;
-          const answer = await chart.request(
-            `${sortId}:${country}`,
-            () => dependencies.roblox.getSortContent(sortId, country),
-            (sort) => sort.games,
-          );
-          if (answer) await record(answer.sightings);
+      const readSorts = async () => {
+        for (const country of countries) {
+          for (const sortId of config.countrySortIds) {
+            if (!mayRequest(chart)) break;
+            const answer = await chart.request(
+              `${sortId}:${country}`,
+              () => dependencies.roblox.getSortContent(sortId, country),
+              (sort) => sort.games,
+            );
+            if (answer) await record(answer.sightings);
+          }
         }
-      }
+      };
 
-      // Recommendations and search run side by side: each is paced on its own endpoint (recommendations every 2.5 s,
-      // search once a minute), so neither waits for the other. Every answer is recorded at once, so poll promotes what
-      // the run finds while it goes on, and a run that times out keeps it.
+      // Recommendations run beside the sorts and the search, each paced on its own endpoint (recommendations every
+      // 2.5 s, search once a minute), so none waits for another. Sorts and search share apis.roblox.com, whose client
+      // waits out each search's one-minute window: the search starts once the sorts are read. Every answer is recorded
+      // at once, so poll promotes what the run finds while it goes on, and a run that times out keeps it.
       const recommendation = new Endpoint("recommendation", config.minimumDiscoveryCcu);
       const search = new Endpoint("search", config.minimumDiscoveryCcu);
       const terms: string[] = [];
@@ -307,7 +309,7 @@ export function createExploreJob(dependencies: ExploreDependencies): JobDefiniti
           }
         }
       };
-      await Promise.all([recommend(), searchTerms()]);
+      await Promise.all([recommend(), readSorts().then(searchTerms)]);
 
       const rateLimited = chart.outcome.rateLimited || recommendation.outcome.rateLimited || search.outcome.rateLimited;
       const degraded = chart.failed || recommendation.failed || search.failed || rateLimited;

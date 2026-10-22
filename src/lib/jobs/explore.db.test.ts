@@ -290,6 +290,41 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
     });
   });
 
+  it("expands the recommendations while it reads the sorts, and searches once the sorts are read", async () => {
+    await youngGame(1, "Steal An Egg", 5_000);
+    await youngGame(4, "Egg Obby", 3_000);
+    const events: string[] = [];
+    let recommendationsDone = () => {};
+    const recommended = new Promise<void>((resolve) => {
+      recommendationsDone = resolve;
+    });
+    const job = exploreJob({
+      // Each sort answers once the recommendations are done, or after a second if they have not started.
+      getSortContent: async (sortId, country) => {
+        await Promise.race([recommended, new Promise((resolve) => setTimeout(resolve, 1_000))]);
+        events.push(`sort ${sortId}:${country}`);
+        return sort(sortId, [tiny]);
+      },
+      getRecommendations: async (seed) => {
+        events.push(`recommendation ${seed}`);
+        if (seed === "4") recommendationsDone();
+        return [tiny];
+      },
+      searchGames: async (term) => {
+        events.push(`search ${term}`);
+        return page([tiny]);
+      },
+    });
+    expect(await executeJob(job, database.db, now)).toBe("success");
+    expect(events).toEqual([
+      "recommendation 1",
+      "recommendation 4",
+      "sort up-and-coming:us",
+      "sort top-trending:us",
+      "search egg",
+    ]);
+  });
+
   it("fails the run when the database fails while recording", async () => {
     await youngGame(1, "Steal An Egg", 5_000);
     await database.db.execute(sql`alter table discovery_candidates rename to discovery_candidates_hidden`);
@@ -330,14 +365,14 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
     } finally {
       vi.unstubAllGlobals();
     }
-    // The sorts come first; recommendations and search then run side by side, each at its own pace.
-    expect(requested.slice(0, 2)).toEqual([
+    // On apis.roblox.com the sorts come before the search; recommendations run beside them, each at its own pace.
+    expect(requested.filter((request) => request.startsWith("apis.roblox.com"))).toEqual([
       "apis.roblox.com/explore-api/v1/get-sort-content?us",
       "apis.roblox.com/explore-api/v1/get-sort-content?us",
-    ]);
-    expect(requested.slice(2).sort()).toEqual([
       "apis.roblox.com/search-api/omni-search?",
       "apis.roblox.com/search-api/omni-search?page-2",
+    ]);
+    expect(requested.filter((request) => request.startsWith("games.roblox.com"))).toEqual([
       "games.roblox.com/v1/games/recommendations/game/1?",
       "games.roblox.com/v1/games/recommendations/game/4?",
     ]);
