@@ -12,7 +12,7 @@ export const metadata: Metadata = { title: "Radar" };
 const sortLabels: Record<RadarSort, string> = {
   growth: "Growth vs last week",
   acceleration: "Growth vs the day before",
-  ccu: "CCU",
+  ccu: `Average CCU over ${RADAR_CONFIG.windowHours} h`,
   age: "Newest",
 };
 
