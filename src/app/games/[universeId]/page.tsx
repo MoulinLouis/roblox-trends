@@ -121,7 +121,7 @@ export default async function GamePage({ params }: { params: Promise<{ universeI
         <div className="card card-pad">
           <h2>Timeline</h2>
           {timeline.length ? (
-            <div className="list">
+            <div className="list timeline">
               {timeline.map((entry, index) => (
                 <div className="list-row" key={`${entry.at.getTime()}-${index}`}>
                   <div className="list-row-main"><strong>{entry.label}</strong></div>

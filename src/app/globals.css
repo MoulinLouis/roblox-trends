@@ -325,9 +325,10 @@ tbody tr:hover { background: rgba(255,255,255,.018); }
 .badge.status-failed { color: var(--red); background: rgba(255,114,125,.08); }
 .badge.status-running { color: var(--blue); background: rgba(108,165,255,.08); }
 .radar-filters { grid-template-columns: repeat(4, minmax(130px, 1fr)) auto; align-items: end; }
-.stat-line { display: block; margin-top: 4px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; line-height: 1.5; word-break: break-word; }
+.stat-line { display: block; min-width: 260px; margin-top: 4px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; line-height: 1.5; word-break: break-word; }
 .signal-detail { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; font-style: normal; line-height: 1.5; }
 .timeline-time { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.timeline .list-row-main strong { white-space: normal; }
 
 @media (max-width: 1120px) {
   .grid-4 { grid-template-columns: repeat(2, 1fr); }
@@ -351,7 +352,7 @@ tbody tr:hover { background: rgba(255,255,255,.018); }
   .content { padding: 25px 16px; }
   .page-heading { display: block; }
   .page-heading .button { margin-top: 14px; }
-  .grid-4, .grid-3, .grid-2, .settings-grid { grid-template-columns: 1fr; }
+  .grid-4, .grid-3, .grid-2, .settings-grid { grid-template-columns: minmax(0, 1fr); }
   .metric-card { min-height: 110px; }
   .filters { grid-template-columns: repeat(2, 1fr); }
   .rising-filters { grid-template-columns: repeat(2, 1fr); }
@@ -367,6 +368,6 @@ tbody tr:hover { background: rgba(255,255,255,.018); }
   .idea-controls .input { grid-column: 1 / -1; grid-row: 2; }
   .breakdown-row { grid-template-columns: 1fr auto; }
   .breakdown-row .bar { grid-column: 1 / -1; grid-row: 2; }
-  .metadata { grid-template-columns: 1fr; }
+  .metadata { grid-template-columns: minmax(0, 1fr); }
   .settings-fields { grid-template-columns: 1fr; }
 }
