@@ -68,7 +68,7 @@ Users: `radar` (application, PostgreSQL role `radar` by peer authentication), `a
 
 ### Timer schedule (UTC)
 
-Jobs sharing Roblox hosts never start in the same minute (HTTP spacing is per process). Every start sits at least 20 s inside its slot.
+Jobs sharing Roblox hosts never start in the same minute (HTTP spacing is per process). Every start sits at least 20 s inside its slot. `explore` then runs for about 45 minutes beside the others: after its country sorts, in its first minute, it calls only recommendations and search, which no other job uses.
 
 | Unit | OnCalendar | Slot offset |
 | --- | --- | --- |
@@ -280,7 +280,7 @@ Pause the `radar-deploy` check in Healthchecks while the timer is stopped. Migra
 
 ### Migration compatibility
 
-A migration must stay compatible with the previous release, which may still be running a job (up to 30 minutes, or the legacy import) and which a rollback brings back:
+A migration must stay compatible with the previous release, which may still be running a job (up to 55 minutes for `explore`, or the legacy import) and which a rollback brings back:
 
 - Add before you remove: new columns are nullable or have a default, and the code that needs them ships with or after them.
 - Drop a column or a table one release after the code stopped using it; rename in two releases (add and copy, then drop).
@@ -384,7 +384,7 @@ A policy left paused (by an import, for example) resumes with `runuser -u postgr
 
 ### Games API limit
 
-The game details endpoint, `GET games.roblox.com/v1/games?universeIds=…`, has a hidden per-IP limit that counts universe ids: about 500 per minute, measured on 2026-10-21 (README, verified API behavior). Its `x-ratelimit-*` headers do not show it, and the votes endpoint on the same host does not share it. `poll` reads it every 10 minutes with one request of 50 ids every 7 s: each run requests the hot set, the 2,000 highest-priority active games, then the 1,150 other active games whose details are the oldest, 63 requests in about 441 s. This tail rotates, each of its games refreshed every 20–30 minutes, while `census` still counts its CCU every 10 minutes. A game Roblox does not answer (moderated or deleted, for example) moves behind the other tail games like a polled one, so it is retried once per tail cycle; `missing` counts the requested games Roblox did not answer, and `missingSample` in `job_runs.stats` lists up to 10 of their universe ids. The promotions of `census`, `charts` and `explore` call it too, from their own processes, and spend the same budget. Each 429 multiplies the endpoint's spacing by 1.5 for the rest of the process, up to 30 s; the next run, a new process, starts again at 7 s.
+The game details endpoint, `GET games.roblox.com/v1/games?universeIds=…`, has a hidden per-IP limit that counts universe ids: about 500 per minute, measured on 2026-10-21 (README, verified API behavior). Its `x-ratelimit-*` headers do not show it, and the votes endpoint on the same host does not share it. `poll` reads it every 10 minutes with one request of 50 ids every 7 s: each run requests the hot set, the 2,000 highest-priority active games, then the 1,150 other active games whose details are the oldest, 63 requests in about 441 s. This tail rotates, each of its games refreshed every 20–30 minutes, while `census` still counts its CCU every 10 minutes. A game Roblox does not answer (moderated or deleted, for example) moves behind the other tail games like a polled one, so it is retried once per tail cycle; `missing` counts the requested games Roblox did not answer, and `missingSample` in `job_runs.stats` lists up to 10 of their universe ids. The promotions of `census` and `charts` call it too, from their own processes, and spend the same budget. `explore` finds far more games, so it does not call it: it queues them in `discovery_candidates`, and each `poll` run requests up to 100 of them, busiest first, in place of as many tail games (`candidates`, `newGames` and `candidatesUnanswered` in its stats). Each 429 multiplies the endpoint's spacing by 1.5 for the rest of the process, up to 30 s; the next run, a new process, starts again at 7 s.
 
 A 429 storm in `radar status`:
 
@@ -395,7 +395,11 @@ A 429 storm in `radar status`:
 
 The journal (`journalctl -u radar-job@poll -n 100 -o cat`) shows `External service throttled or unavailable; retrying` with a `retryDelayMs` of about 30–60 s (the limit's reset), and one `Slowed down a rate-limited endpoint for the rest of the process` line per new spacing.
 
-A 429 now and then needs nothing. When most runs slow down, check first whether another job's promotion ran during the poll run (census at +2:40 of each slot, charts at :16:30, explore at :26:30), then raise the 7 s of `EXTERNAL_REQUEST_CONFIG.minimumIntervalByEndpoint` in the repository and lower `JOB_CONFIG.poll.tailUniversesPerRun` (or `hotUniverses`) so the requested games still fit the deadline: `JOB_CONFIG.poll` holds the arithmetic.
+A 429 now and then needs nothing. When most runs slow down, check first whether another job's promotion ran during the poll run (census at +2:40 of each slot, charts at :16:30), then raise the 7 s of `EXTERNAL_REQUEST_CONFIG.minimumIntervalByEndpoint` in the repository and lower `JOB_CONFIG.poll.tailUniversesPerRun` (or `hotUniverses`) so the requested games still fit the deadline: `JOB_CONFIG.poll` holds the arithmetic.
+
+### Search limit
+
+From the production IP, `omni-search` answers one request per minute (`x-ratelimit-limit: 1, 1;w=60`, measured on 2026-10-22; a residential IP gets 4 per second). The client waits out the window that `x-ratelimit-remaining: 0` announces, so `explore` searches once a minute without a 429: about 44 pages a run, two per term, and the run's `terms` stat lists the words searched. A residential IP is not limited this way, so an `npm run collect` on the owner's machine searches the whole vocabulary in a few minutes.
 
 ## 8. Maintenance
 
