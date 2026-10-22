@@ -2,7 +2,8 @@
 -- analysis sessions and backtests share one definition. Every threshold is a parameter: src/lib/config.ts
 -- (RADAR_CONFIG) holds the values. Windows are whole UTC hours before as_of: the current window, the window before it
 -- (acceleration) and the current window one week earlier (weekday-safe growth). Every metric comes with its sample
--- size, in hourly buckets.
+-- size, in hourly buckets. Intervals are in hours, never days, so a session time zone with daylight saving cannot
+-- shift the windows.
 CREATE FUNCTION rising_games(
   as_of timestamptz,
   max_age_days int,
@@ -43,7 +44,7 @@ AS $$
 WITH candidates AS (
   SELECT g.universe_id, g.name, g.icon_url, g.roblox_created_at, g.first_observed_at
   FROM games g
-  WHERE g.roblox_created_at > rising_games.as_of - make_interval(days => rising_games.max_age_days)
+  WHERE g.roblox_created_at > rising_games.as_of - make_interval(hours => 24 * rising_games.max_age_days)
     AND g.roblox_created_at <= rising_games.as_of
 ),
 -- The candidates' hourly CCU in the three windows. The week-ago window sits seven days (one week) before the current
@@ -63,22 +64,22 @@ hourly AS (
     AND (
       h.bucket >= time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 2 * rising_games.window_hours)
       OR (
-        h.bucket >= time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(days => 7, hours => rising_games.window_hours)
-        AND h.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(days => 7)
+        h.bucket >= time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 7 * 24 + rising_games.window_hours)
+        AND h.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 7 * 24)
       )
     )
 ),
 -- Tracked CCU of every game, of any age, per hour of the current and week-ago windows: the denominator of the shares,
 -- which cancels the weekday and hour-of-day swings of the whole market.
 market AS (
-  SELECT h.bucket, sum(h.ccu_avg) AS total
+  SELECT h.bucket, sum(h.ccu_avg::double precision) AS total
   FROM game_hourly h
   WHERE (
       h.bucket >= time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => rising_games.window_hours)
       AND h.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of)
     ) OR (
-      h.bucket >= time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(days => 7, hours => rising_games.window_hours)
-      AND h.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(days => 7)
+      h.bucket >= time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 7 * 24 + rising_games.window_hours)
+      AND h.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 7 * 24)
     )
   GROUP BY h.bucket
 ),
@@ -118,14 +119,14 @@ series AS (
   FROM game_hourly h
   JOIN candidates c ON c.universe_id = h.universe_id
   WHERE h.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of)
-    AND h.bucket >= rising_games.as_of - make_interval(days => rising_games.max_age_days + 1)
+    AND h.bucket >= rising_games.as_of - make_interval(hours => 24 * (rising_games.max_age_days + 1))
   UNION ALL
   SELECT p.universe_id, ch.bucket, ch.ccu_max
   FROM census_hourly ch
   JOIN places p ON p.place_id = ch.place_id
   JOIN candidates c ON c.universe_id = p.universe_id
   WHERE ch.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of)
-    AND ch.bucket >= rising_games.as_of - make_interval(days => rising_games.max_age_days + 1)
+    AND ch.bucket >= rising_games.as_of - make_interval(hours => 24 * (rising_games.max_age_days + 1))
 ),
 crossings AS (
   SELECT s.universe_id,
@@ -143,7 +144,7 @@ legacy_peaks AS (
   SELECT l.universe_id, max(l.ccu_peak) AS peak
   FROM game_daily_legacy l
   JOIN candidates c ON c.universe_id = l.universe_id
-  WHERE l.day + INTERVAL '1 day' <= rising_games.as_of
+  WHERE l.day + INTERVAL '24 hours' <= rising_games.as_of
   GROUP BY l.universe_id
 )
 SELECT
@@ -164,7 +165,7 @@ SELECT
       ln((w.share * ms.total + rising_games.smoothing_ccu) / (w.week_share * ms.total + rising_games.smoothing_ccu))
     -- Created after the start of the week-ago window: the game had no players to compare with.
     WHEN c.roblox_created_at >= time_bucket(INTERVAL '1 hour', rising_games.as_of)
-      - make_interval(days => 7, hours => rising_games.window_hours) THEN
+      - make_interval(hours => 7 * 24 + rising_games.window_hours) THEN
       ln((w.share * ms.total + rising_games.smoothing_ccu) / rising_games.smoothing_ccu)
   END)::double precision,
   (w.ccu_avg / nullif(w.previous_avg, 0))::double precision,
