@@ -379,6 +379,16 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
     expect(await database.db.select().from(censusObservations)).toHaveLength(listed.length);
   });
 
+  it("recognizes a list served again after a different one", async () => {
+    const first = [place(1, 500), ...filler()];
+    expect(await executeJob(censusJob(first), database.db, now)).toBe("success");
+    expect(await executeJob(censusJob([place(1, 501), ...filler()]), database.db, minutesLater(10))).toBe("success");
+    // Two Rolimon's caches alternating: the first list comes back.
+    expect(await executeJob(censusJob(first), database.db, minutesLater(20))).toBe("degraded");
+    expect(await lastRunStats()).toMatchObject({ listQuality: "repeated" });
+    expect(await database.db.select().from(censusObservations)).toHaveLength(2 * first.length);
+  });
+
   it("compares with the latest list read, across a failed request", async () => {
     const listed = [place(1, 500), ...filler()];
     expect(await executeJob(censusJob(listed), database.db, now)).toBe("success");

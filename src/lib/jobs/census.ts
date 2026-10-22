@@ -109,14 +109,17 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
       const { games: listed, rejected } = list;
       // job_runs.started_at holds wall-clock time, so the windows start from Date.now(), not from the injectable `now`.
       const baselineSince = new Date(Date.now() - config.baselineMaxAgeHours * 60 * 60 * 1000);
-      // The same list as the latest one read in an earlier slot is Rolimon's serving it again: its CCU are not a new
-      // sample, so they are not stored and the run is degraded (a list frozen for an hour alerts through the quality
-      // check). A rerun within a slot is compared with the earlier slots, as the slot's first run was. A run that
-      // failed after writing keeps no stats, so a repeat right after it is compared with the run before. Promotion
-      // still uses the list: its places and their CCU are real.
+      // The same list as one read in an earlier slot of the last hours is Rolimon's serving it again (from any of its
+      // caches, so not only the latest list counts): its CCU are not a new sample, so they are not stored and the run
+      // is degraded (a list frozen for an hour alerts through the quality check). A rerun within a slot is compared
+      // with the earlier slots, as the slot's first run was. A run that failed after writing keeps no stats, so its
+      // list is not a reference. Promotion still uses the list: its places and their CCU are real.
       const listFingerprint = censusListFingerprint(listed);
-      const latestList = await latestRunWithStat(db, "census", baselineSince, "listFingerprint", { slotBefore: slot });
-      const repeated = latestList?.stats.listFingerprint === listFingerprint;
+      const earlierCopy = await latestRunWithStat(db, "census", baselineSince, "listFingerprint", {
+        value: listFingerprint,
+        slotBefore: slot,
+      });
+      const repeated = earlierCopy !== null;
       if (!repeated) {
         await writeCensusObservations(
           db,
