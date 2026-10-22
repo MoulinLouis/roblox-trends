@@ -109,11 +109,13 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
       const { games: listed, rejected } = list;
       // job_runs.started_at holds wall-clock time, so the windows start from Date.now(), not from the injectable `now`.
       const baselineSince = new Date(Date.now() - config.baselineMaxAgeHours * 60 * 60 * 1000);
-      // The same list as the latest one read is Rolimon's serving it again: its CCU are not a new sample, so they are
-      // not stored and the run is degraded (a list frozen for an hour alerts through the quality check). Promotion
-      // still uses it: its places and their CCU are real.
+      // The same list as the latest one read in an earlier slot is Rolimon's serving it again: its CCU are not a new
+      // sample, so they are not stored and the run is degraded (a list frozen for an hour alerts through the quality
+      // check). A rerun within a slot is compared with the earlier slots, as the slot's first run was. A run that
+      // failed after writing keeps no stats, so a repeat right after it is compared with the run before. Promotion
+      // still uses the list: its places and their CCU are real.
       const listFingerprint = censusListFingerprint(listed);
-      const latestList = await latestRunWithStat(db, "census", baselineSince, "listFingerprint");
+      const latestList = await latestRunWithStat(db, "census", baselineSince, "listFingerprint", { slotBefore: slot });
       const repeated = latestList?.stats.listFingerprint === listFingerprint;
       if (!repeated) {
         await writeCensusObservations(
@@ -123,7 +125,7 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
       }
       // Baseline: the latest list of the last hours that passed this check, even in a run degraded for another reason,
       // so one truncated list never becomes the reference.
-      const previous = await latestRunWithStat(db, "census", baselineSince, "listQuality", "success");
+      const previous = await latestRunWithStat(db, "census", baselineSince, "listQuality", { value: "success" });
       const previousListed = typeof previous?.stats.listed === "number" ? previous.stats.listed : null;
       const listQuality = repeated
         ? "repeated"
@@ -200,8 +202,8 @@ export function createCensusJob(dependencies: CensusDependencies): JobDefinition
           listed: listed.length,
           rejected,
           listFingerprint,
-          // The list check alone ("success", "degraded" or "repeated"): analysis keeps the census slots whose list passed
-          // it, and later runs compare with them.
+          // The list check alone ("success", "degraded" or "repeated"): analysis keeps the census slots whose list
+          // passed it, and later runs compare with them.
           listQuality,
           eligible: eligibleIds.length,
           resolved,

@@ -358,6 +358,19 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
     expect(await executeJob(censusJob([place(1, 501), ...filler()]), database.db, minutesLater(20))).toBe("success");
   });
 
+  it("compares a rerun with the earlier slots, not with the run of its own slot", async () => {
+    const listed = [place(1, 500), ...filler()];
+    expect(await executeJob(censusJob(listed), database.db, now)).toBe("success");
+    // A manual rerun in the same slot reads the same list: it rewrites the slot's rows with the same CCU.
+    expect(await executeJob(censusJob(listed), database.db, now)).toBe("success");
+    expect(await database.db.select().from(censusObservations)).toHaveLength(listed.length);
+    // A rerun of a slot whose list was repeated is repeated too, and still stores nothing.
+    expect(await executeJob(censusJob(listed), database.db, minutesLater(10))).toBe("degraded");
+    expect(await executeJob(censusJob(listed), database.db, minutesLater(10))).toBe("degraded");
+    expect(await lastRunStats()).toMatchObject({ listQuality: "repeated" });
+    expect(await database.db.select().from(censusObservations)).toHaveLength(listed.length);
+  });
+
   it("compares with the latest list read, across a failed request", async () => {
     const listed = [place(1, 500), ...filler()];
     expect(await executeJob(censusJob(listed), database.db, now)).toBe("success");

@@ -33,7 +33,7 @@ describe.skipIf(!hasTestDatabase)("job runs", () => {
     it("returns the most recently started successful or degraded run whose stat matches", async () => {
       await insertRun({ job: "census", status: "success", startedAt: "2026-10-20T10:00:00Z", stats: { listQuality: "success", listed: 1 } });
       await insertRun({ job: "census", status: "degraded", startedAt: "2026-10-20T11:00:00Z", stats: { listQuality: "success", listed: 2 } });
-      expect(await latestRunWithStat(database.db, "census", since, "listQuality", "success")).toEqual({
+      expect(await latestRunWithStat(database.db, "census", since, "listQuality", { value: "success" })).toEqual({
         slot: new Date("2026-10-20T11:00:00Z"),
         stats: { listQuality: "success", listed: 2 },
       });
@@ -47,7 +47,7 @@ describe.skipIf(!hasTestDatabase)("job runs", () => {
         await insertRun({ job: "census", status, startedAt: "2026-10-20T13:00:00Z", stats: { listQuality: "success", listed: 9 } });
       }
       await insertRun({ job: "poll", status: "success", startedAt: "2026-10-20T14:00:00Z", stats: { listQuality: "success" } });
-      expect(await latestRunWithStat(database.db, "census", since, "listQuality", "success")).toEqual({
+      expect(await latestRunWithStat(database.db, "census", since, "listQuality", { value: "success" })).toEqual({
         slot: new Date("2026-10-20T10:00:00Z"),
         stats: { listQuality: "success", listed: 1 },
       });
@@ -55,8 +55,18 @@ describe.skipIf(!hasTestDatabase)("job runs", () => {
 
     it("only considers runs started at or after the cutoff", async () => {
       await insertRun({ job: "census", status: "success", startedAt: "2026-10-20T10:00:00Z", stats: { listQuality: "success" } });
-      expect(await latestRunWithStat(database.db, "census", new Date("2026-10-20T10:00:00Z"), "listQuality", "success")).not.toBeNull();
-      expect(await latestRunWithStat(database.db, "census", new Date("2026-10-20T10:00:01Z"), "listQuality", "success")).toBeNull();
+      expect(await latestRunWithStat(database.db, "census", new Date("2026-10-20T10:00:00Z"), "listQuality", { value: "success" })).not.toBeNull();
+      expect(await latestRunWithStat(database.db, "census", new Date("2026-10-20T10:00:01Z"), "listQuality", { value: "success" })).toBeNull();
+    });
+
+    it("only considers runs of slots before the bound", async () => {
+      await insertRun({ job: "census", status: "success", startedAt: "2026-10-20T10:00:00Z", stats: { listQuality: "success", listed: 1 } });
+      await insertRun({ job: "census", status: "success", startedAt: "2026-10-20T10:10:00Z", stats: { listQuality: "success", listed: 2 } });
+      const slotBefore = new Date("2026-10-20T10:10:00Z");
+      expect(await latestRunWithStat(database.db, "census", since, "listQuality", { value: "success", slotBefore })).toEqual({
+        slot: new Date("2026-10-20T10:00:00Z"),
+        stats: { listQuality: "success", listed: 1 },
+      });
     });
   });
 

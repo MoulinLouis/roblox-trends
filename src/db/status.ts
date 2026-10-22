@@ -147,7 +147,7 @@ export async function censusCoverage(
   const { minimumCcu, withinMinutes } = criteria;
   // job_runs.started_at holds wall-clock time, like `now` here.
   const since = new Date(now.getTime() - criteria.listWithinHours * hourMs);
-  const list = await latestRunWithStat(db, "census", since, "listQuality", "success");
+  const list = await latestRunWithStat(db, "census", since, "listQuality", { value: "success" });
   if (!list) return { slot: null, listed: 0, tracked: 0, minimumCcu, withinMinutes };
   const at = now.toISOString();
   const result = await db.execute<{ listed: number; tracked: number }>(sql`
