@@ -156,7 +156,20 @@ export const JOB_CONFIG = {
     // The global sorts list a game only once it leads worldwide; a game rising in one market enters that country's
     // sorts first (on 2026-10-22, Steal the Moon was in Up-and-Coming for the US and Great Britain only).
     countrySortIds: ["up-and-coming", "top-trending"],
-    countries: ["us", "br", "ph", "id", "mx", "gb", "de", "fr", "ca", "au", "th", "sa", "vn", "tr"],
+    // Every country answers its own lists. On 2026-10-22, right after a run had queued what the first 14 listed, the
+    // others listed 114 more untracked games at 50+ CCU, 28 of them above 1,000; +1 Paper Plane (3.3k) was in
+    // Up-and-Coming for Egypt, Lebanon, Palestine, Uzbekistan and Armenia only. The sort endpoint allows 50 requests a
+    // minute from the production IP (x-ratelimit-limit "50;w=60", measured the same day) and apis.roblox.com's 1.3 s
+    // spacing keeps a run under 47: the 218 sorts take about 5 minutes, beside the recommendations, before the search.
+    countries: [
+      "us", "br", "ph", "id", "mx", "gb", "de", "fr", "ca", "au", "th", "sa", "vn", "tr",
+      "ae", "al", "am", "ar", "at", "az", "ba", "bd", "be", "bg", "bh", "bo", "by", "ch", "cl", "co", "cr", "cy",
+      "cz", "dk", "do", "dz", "ec", "ee", "eg", "es", "fi", "ge", "gh", "gr", "gt", "hk", "hn", "hr", "hu", "ie",
+      "il", "in", "iq", "is", "it", "jm", "jo", "jp", "ke", "kh", "kr", "kw", "kz", "la", "lb", "lk", "lt", "lu",
+      "lv", "ly", "ma", "md", "mk", "mm", "mn", "mt", "my", "ng", "ni", "nl", "no", "np", "nz", "om", "pa", "pe",
+      "pk", "pl", "pr", "ps", "pt", "py", "qa", "ro", "rs", "ru", "se", "sg", "si", "sk", "sv", "tn", "tt", "tw",
+      "ua", "uy", "uz", "ve", "za",
+    ],
     minimumDiscoveryCcu: 50,
   },
   thumbnails: {

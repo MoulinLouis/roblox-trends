@@ -68,7 +68,7 @@ Users: `radar` (application, PostgreSQL role `radar` by peer authentication), `a
 
 ### Timer schedule (UTC)
 
-Jobs sharing Roblox hosts never start in the same minute (HTTP spacing is per process). Every start sits at least 20 s inside its slot. `explore` then runs for about 45 minutes beside the others: after its country sorts, in its first minute, it calls only recommendations and search, which no other job uses.
+Jobs sharing Roblox hosts never start in the same minute (HTTP spacing is per process). Every start sits at least 20 s inside its slot. `explore` then runs for about 45 minutes beside the others. Its country sorts take its first 5 minutes, at :26:30–:32, clear of `charts`, the only other job that reads sorts, at :16:30; it then calls only recommendations and search, which no other job uses.
 
 | Unit | OnCalendar | Slot offset |
 | --- | --- | --- |
@@ -399,7 +399,9 @@ A 429 now and then needs nothing. When most runs slow down, check first whether 
 
 ### Search limit
 
-From the production IP, `omni-search` answers one request per minute (`x-ratelimit-limit: 1, 1;w=60`, measured on 2026-10-22; a residential IP gets 4 per second). The client waits out the window that `x-ratelimit-remaining: 0` announces, so `explore` searches once a minute without a 429: about 44 pages a run, two per term, and the run's `terms` stat lists the words searched. A residential IP is not limited this way, so an `npm run collect` on the owner's machine searches the whole vocabulary in a few minutes.
+From the production IP, `omni-search` answers one request per minute (`x-ratelimit-limit: 1, 1;w=60`, measured on 2026-10-22; a residential IP gets 4 per second). The client waits out the window that `x-ratelimit-remaining: 0` announces, so `explore` searches once a minute without a 429: about 40 pages a run, two per term, once its country sorts are read, and the run's `terms` stat lists the words searched. A residential IP is not limited this way, so an `npm run collect` on the owner's machine searches the whole vocabulary in a few minutes.
+
+The country sorts (`get-sort-content`) allow 50 requests a minute from the same IP (`x-ratelimit-limit: 50, 50;w=60`, measured on 2026-10-22). apis.roblox.com's 1.3 s spacing keeps `explore`'s 218 sorts under it; a run whose sorts get a 429 that outlasts the retries stops reading sorts, is `degraded`, and keeps its recommendations and search.
 
 ## 8. Maintenance
 
