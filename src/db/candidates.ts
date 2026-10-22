@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 import { chunk, compareText } from "@/lib/arrays";
 import type { DiscoverySource } from "@/lib/jobs/types";
 import type { Database } from "./client";
-import { discoveryCandidates } from "./schema";
+import { discoveryCandidates, discoverySources } from "./schema";
 
 export interface CandidateSighting {
   universeId: number;
@@ -67,59 +67,110 @@ export async function selectPromotionCandidates(
 
 // After a poll run: the sightings of every game the games table now holds (promoted by this run or by another job)
 // become its discovery rows, and the earliest of them its first observation, so its discovery path still starts when
-// the radar first saw it. The requested candidates still untracked were not answered: they wait retryHours. Candidates
-// no discovery listed for maximumAgeHours are dropped. Returns the number of games whose sightings moved.
+// the radar first saw it. The candidates Roblox did not answer wait retryHours; those no discovery listed for
+// maximumAgeHours are dropped. Every statement locks its rows in key order, like the other writers of these tables, so
+// it cannot deadlock with them. Returns the number of games whose sightings moved.
 export async function settleCandidates(
   db: Database,
   now: Date,
-  requested: number[],
+  unanswered: number[],
   options: { maximumAgeHours: number },
 ): Promise<number> {
   const at = now.toISOString();
-  const moved = await db.execute<{ universe_id: string }>(sql`
-    with tracked as (
-      -- Locked in key order, like enqueueCandidates, so a concurrent explore run cannot deadlock with this one.
-      select c.universe_id, c.source, c.detail
-      from discovery_candidates c
-      where exists (select 1 from games g where g.universe_id = c.universe_id)
-      order by c.universe_id, c.source, c.detail
-      for update of c
-    ),
-    moved as (
+  // One transaction: a sighting is deleted from the queue only together with the discovery row it becomes.
+  const moved = await db.transaction(async (transaction) => {
+    const deleted = await transaction.execute<{
+      universe_id: string;
+      source: DiscoverySource;
+      detail: string;
+      first_seen_at: Date | string;
+      last_seen_at: Date | string;
+    }>(sql`
+      with tracked as materialized (
+        select c.universe_id, c.source, c.detail
+        from discovery_candidates c
+        where exists (select 1 from games g where g.universe_id = c.universe_id)
+        order by c.universe_id, c.source, c.detail
+        for update of c
+      )
       delete from discovery_candidates c
       using tracked t
       where c.universe_id = t.universe_id and c.source = t.source and c.detail = t.detail
       returning c.universe_id, c.source, c.detail, c.first_seen_at, c.last_seen_at
-    ),
-    recorded as (
-      insert into discovery_sources (universe_id, source, detail, first_seen_at, last_seen_at)
-      select universe_id, source, detail, first_seen_at, last_seen_at from moved
-      on conflict (universe_id, source, detail) do update set
-        first_seen_at = least(discovery_sources.first_seen_at, excluded.first_seen_at),
-        last_seen_at = greatest(discovery_sources.last_seen_at, excluded.last_seen_at)
-    ),
-    earliest as (
-      select universe_id, min(first_seen_at) as first_seen_at from moved group by universe_id
-    ),
-    observed as (
-      update games g set first_observed_at = e.first_seen_at
-      from earliest e
-      where g.universe_id = e.universe_id and g.first_observed_at > e.first_seen_at
-    )
-    select universe_id from earliest
-  `);
-  if (requested.length) {
-    const ids = sql.join(
-      requested.map((universeId) => sql`${universeId}::bigint`),
-      sql`, `,
-    );
-    await db.execute(sql`update discovery_candidates set attempted_at = ${at}::timestamptz where universe_id in (${ids})`);
+    `);
+    const rows = deleted.rows
+      .map((row) => ({
+        universeId: Number(row.universe_id),
+        source: row.source,
+        detail: row.detail,
+        firstSeenAt: new Date(row.first_seen_at),
+        lastSeenAt: new Date(row.last_seen_at),
+      }))
+      .sort(compareKeys);
+    for (const part of chunk(rows, 1_000)) {
+      await transaction
+        .insert(discoverySources)
+        .values(part)
+        .onConflictDoUpdate({
+          target: [discoverySources.universeId, discoverySources.source, discoverySources.detail],
+          set: {
+            firstSeenAt: sql`least(${discoverySources.firstSeenAt}, excluded.first_seen_at)`,
+            lastSeenAt: sql`greatest(${discoverySources.lastSeenAt}, excluded.last_seen_at)`,
+          },
+        });
+    }
+    const earliest = new Map<number, Date>();
+    for (const row of rows) {
+      const seen = earliest.get(row.universeId);
+      if (!seen || row.firstSeenAt < seen) earliest.set(row.universeId, row.firstSeenAt);
+    }
+    if (earliest.size) {
+      const sightings = sql.join(
+        [...earliest].map(([universeId, firstSeenAt]) => sql`(${universeId}::bigint, ${firstSeenAt.toISOString()}::timestamptz)`),
+        sql`, `,
+      );
+      await transaction.execute(sql`
+        with earliest (universe_id, first_seen_at) as (values ${sightings}),
+        locked as materialized (
+          select g.universe_id, e.first_seen_at
+          from games g
+          join earliest e on e.universe_id = g.universe_id
+          where g.first_observed_at > e.first_seen_at
+          order by g.universe_id
+          for update of g
+        )
+        update games g set first_observed_at = l.first_seen_at
+        from locked l
+        where g.universe_id = l.universe_id
+      `);
+    }
+    return earliest.size;
+  });
+  if (unanswered.length) {
+    await db.execute(sql`
+      with locked as materialized (
+        select universe_id, source, detail from discovery_candidates
+        where universe_id = any(${sql.param(unanswered)}::bigint[])
+        order by universe_id, source, detail
+        for update
+      )
+      update discovery_candidates c set attempted_at = ${at}::timestamptz
+      from locked l
+      where c.universe_id = l.universe_id and c.source = l.source and c.detail = l.detail
+    `);
   }
   await db.execute(sql`
-    delete from discovery_candidates
-    where last_seen_at <= ${at}::timestamptz - make_interval(hours => ${options.maximumAgeHours}::int)
+    with stale as materialized (
+      select universe_id, source, detail from discovery_candidates
+      where last_seen_at <= ${at}::timestamptz - make_interval(hours => ${options.maximumAgeHours}::int)
+      order by universe_id, source, detail
+      for update
+    )
+    delete from discovery_candidates c
+    using stale s
+    where c.universe_id = s.universe_id and c.source = s.source and c.detail = s.detail
   `);
-  return moved.rows.length;
+  return moved;
 }
 
 interface CandidateRow {
@@ -152,6 +203,6 @@ function mergeByKey(sightings: CandidateSighting[]): CandidateRow[] {
   return [...merged.values()];
 }
 
-function compareKeys(left: CandidateRow, right: CandidateRow): number {
+function compareKeys(left: Omit<CandidateRow, "playerCount">, right: Omit<CandidateRow, "playerCount">): number {
   return left.universeId - right.universeId || compareText(left.source, right.source) || compareText(left.detail, right.detail);
 }
