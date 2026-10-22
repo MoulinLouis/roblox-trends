@@ -5,11 +5,12 @@ import type { Database } from "./client";
 export const RADAR_SORTS = ["growth", "acceleration", "ccu", "age"] as const;
 export type RadarSort = (typeof RADAR_SORTS)[number];
 
-// What the week-over-week growth compares with. "tracked": the radar read the game in some hour of the current window
-// and in the same hour one week earlier. "new": created after the start of the week-ago window. "untracked": not read
-// a week ago while the radar read some game in every hour of that window, so it had fewer players than the active-set
-// minimum. "unknown": the radar was not watching every hour then (v1 read 6–7 hours a day).
-export type WeekBaseline = "tracked" | "new" | "untracked" | "unknown";
+// What the week-over-week growth compares with. "tracked": poll read the game in some hour of the current window and
+// in the same hour one week earlier. "census": poll did not, but Rolimon's listed its places in both (usually a game
+// discovered since). "new": created after the start of the week-ago window. "unlisted": neither, while census stored a
+// list in every hour of that window, so the game had too few players for Rolimon's and counts from 0. "unknown": no
+// baseline (v1 hours, or a census outage then).
+export type WeekBaseline = "tracked" | "census" | "new" | "unlisted" | "unknown";
 
 // One row of rising_games (drizzle/0007_rising_games.sql). Sample counts are hourly buckets.
 export interface RisingGame {
@@ -33,7 +34,7 @@ export interface RisingGame {
   // Share of tracked CCU now against the same hours a week earlier, among the games read in both; null without such
   // hours, or when the game had 0 CCU a week ago.
   weekGrowth: number | null;
-  // The sort key of "growth": null when the week baseline is unknown. New and untracked games count from 0.
+  // The sort key of "growth": null when the week baseline is unknown. New and unlisted games count from 0.
   weekGrowthScore: number | null;
   // Average CCU of the window against the window before it.
   dayGrowth: number | null;

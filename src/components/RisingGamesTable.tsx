@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { RisingGame } from "@/db/radar";
-import { ACTIVE_SET_CONFIG, RADAR_CONFIG } from "@/lib/config";
+import { RADAR_CONFIG } from "@/lib/config";
 import { formatCompact, formatCount, formatDay, formatElapsed, formatHours, formatMultiplier } from "@/lib/format";
 import { GameIcon } from "./GameIcon";
 
@@ -68,25 +68,26 @@ export function RisingGamesTable({ games, asOf }: { games: RisingGame[]; asOf: D
   );
 }
 
-// "tracked": the game's share against the same hours a week earlier; "new": created since; "untracked": the radar read
-// some game in every hour a week earlier but not this one, so it had fewer players than the active-set minimum;
-// "unknown": no baseline (v1 hours).
+// The week baselines are described with WeekBaseline in src/db/radar.ts.
 function WeekGrowth({ game }: { game: RisingGame }) {
   switch (game.weekBaseline) {
     case "tracked":
+    case "census":
       return (
         <>
           {game.weekGrowth === null ? "from 0" : formatMultiplier(game.weekGrowth)}
-          <span className="table-subline">{game.weekSamples} h paired a week earlier</span>
+          <span className="table-subline">
+            {game.weekSamples} h paired a week earlier{game.weekBaseline === "census" ? ", from Rolimon's" : ""}
+          </span>
         </>
       );
     case "new":
       return <span className="badge new">New</span>;
-    case "untracked":
+    case "unlisted":
       return (
         <>
-          from under {formatCount(ACTIVE_SET_CONFIG.minimumCcu)}
-          <span className="table-subline">Below the tracking minimum a week earlier</span>
+          from 0
+          <span className="table-subline">Not on Rolimon&apos;s list a week earlier</span>
         </>
       );
     default:

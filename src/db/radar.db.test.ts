@@ -64,6 +64,20 @@ describe.skipIf(!hasTestDatabase)("rising_games", () => {
   const previous = (universeId: number, ccu: number) => hourly(universeId, 48, 24, ccu);
   const weekAgo = (universeId: number, ccu: number) => hourly(universeId, week + 24, week, ccu);
 
+  // One Rolimon's reading of a place 10 minutes into each hour, like `hourly`.
+  async function census(placeId: number, from: number, to: number, ccu: number): Promise<void> {
+    const rows = [];
+    for (let hour = from; hour > to; hour -= 1) rows.push({ placeId, observedAt: new Date(windowEnd - hour * hourMs + 10 * 60_000), ccu });
+    await writeCensusObservations(database.db, rows);
+  }
+
+  // A place of no tracked game, listed in every hour of the week-ago window: census was watching then.
+  const censusWatchedWeekAgo = () => census(999_999, week + 24, week, 100);
+
+  async function mapPlace(placeId: number, universeId: number): Promise<void> {
+    await savePlaceResolution(database.db, { placeId, universeId, resolvedAt: asOf, error: null });
+  }
+
   function query(sort: RadarSort, overrides: Partial<Parameters<typeof risingGames>[1]> = {}, db: Database = database.db) {
     return risingGames(db, {
       asOf,
@@ -100,8 +114,9 @@ describe.skipIf(!hasTestDatabase)("rising_games", () => {
   }
 
   // Every hour of both windows is read. 1 is an old game that dominates the market; 2 is flat; 3 quadrupled its CCU;
-  // 4 is new; 5 was not read a week ago, so it had fewer players than the active-set minimum.
+  // 4 is new; 5 was neither polled nor listed by Rolimon's a week ago, while census was watching.
   async function market(): Promise<void> {
+    await censusWatchedWeekAgo();
     await game(1, 200);
     await current(1, 10_000);
     await weekAgo(1, 10_000);
@@ -118,7 +133,7 @@ describe.skipIf(!hasTestDatabase)("rising_games", () => {
     await current(5, 800);
   }
 
-  it("ranks young games by weekday-safe growth, new and untracked games from zero", async () => {
+  it("ranks young games by weekday-safe growth, new and unlisted games from zero", async () => {
     await market();
     const rows = await query("growth");
     expect(rows.map((row) => row.universeId)).toEqual([4, 5, 3, 2]);
@@ -138,7 +153,7 @@ describe.skipIf(!hasTestDatabase)("rising_games", () => {
     expect(found.get(2)).toMatchObject({ dayGrowth: null, previousSamples: 0, weekBaseline: "tracked" });
     expect(found.get(4)).toMatchObject({ weekBaseline: "new", weekGrowth: null, weekSamples: 0 });
     expect(found.get(4)?.weekGrowthScore).toBeCloseTo(Math.log(1_600 / 100), 4);
-    expect(found.get(5)).toMatchObject({ weekBaseline: "untracked", weekGrowth: null, weekSamples: 0 });
+    expect(found.get(5)).toMatchObject({ weekBaseline: "unlisted", weekGrowth: null, weekSamples: 0 });
     expect(found.get(5)?.weekGrowthScore).toBeCloseTo(Math.log(900 / 100), 4);
     // The limit keeps the first rows of the same order.
     expect(await query("growth", { limit: 2 })).toEqual(rows.slice(0, 2));
@@ -170,6 +185,37 @@ describe.skipIf(!hasTestDatabase)("rising_games", () => {
     expect(found.get(3)).toMatchObject({ ccuAverage: 3_500, weekSamples: 6, weekBaseline: "tracked" });
     expect(found.get(3)?.weekGrowth).toBeCloseTo((2_000 / 13_000) / (500 / 11_500), 4);
     expect(found.get(5)).toMatchObject({ weekBaseline: "unknown", weekGrowth: null, weekGrowthScore: null, weekSamples: 0 });
+  });
+
+  it("compares a game poll did not read a week ago through the census of its places", async () => {
+    await market();
+    // Listed by Rolimon's in both windows: 200 CCU a week ago, 800 now on its place, 1,000 polled now.
+    await game(14, 20);
+    await mapPlace(140, 14);
+    await census(140, week + 24, week, 200);
+    await census(140, 24, 0, 800);
+    await current(14, 1_000);
+    // Listed a week ago only: the windows have no hour in common.
+    await game(15, 20);
+    await mapPlace(150, 15);
+    await census(150, week + 24, week, 200);
+    await current(15, 600);
+    const found = byId(await query("growth"));
+    // Shares against the market of the games polled in both windows: 13,000 CCU per hour now, 11,500 a week ago.
+    expect(found.get(14)).toMatchObject({ weekBaseline: "census", weekSamples: 24, ccuAverage: 1_000 });
+    expect(found.get(14)?.weekGrowth).toBeCloseTo((800 / 13_000) / (200 / 11_500), 4);
+    expect(found.get(14)?.weekGrowthScore).toBeCloseTo(Math.log(900 / ((200 * 13_000) / 11_500 + 100)), 4);
+    expect(found.get(15)).toMatchObject({ weekBaseline: "unknown", weekGrowth: null, weekGrowthScore: null, weekSamples: 0 });
+  });
+
+  it("knows no baseline for a game census did not list a week ago while census was not watching every hour", async () => {
+    await game(1, 200);
+    await current(1, 10_000);
+    await weekAgo(1, 10_000);
+    await census(999_999, week + 24, week + 1, 100);
+    await game(5, 20);
+    await current(5, 800);
+    expect(byId(await query("growth")).get(5)).toMatchObject({ weekBaseline: "unknown", weekGrowthScore: null });
   });
 
   it("scores a game tracked at 0 CCU a week ago from its smoothing", async () => {
@@ -276,7 +322,7 @@ describe.skipIf(!hasTestDatabase)("rising_games", () => {
   it("dates each threshold crossing only when the reading before it is recent, census included", async () => {
     // Read every hour from 50 CCU (census) up: 150 at hour 59, 1,200 at hour 51, 12,000 at hour 31.
     await game(9, 5);
-    await savePlaceResolution(database.db, { placeId: 90, universeId: 9, resolvedAt: asOf, error: null });
+    await mapPlace(90, 9);
     await writeCensusObservations(database.db, [
       { placeId: 90, observedAt: new Date(windowEnd - 60 * hourMs), ccu: 50 },
       { placeId: 90, observedAt: new Date(windowEnd - 59 * hourMs), ccu: 150 },

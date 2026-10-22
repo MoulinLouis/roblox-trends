@@ -125,13 +125,51 @@ week_shares AS (
   JOIN pair_totals t ON t.bucket = p.bucket
   GROUP BY p.universe_id
 ),
--- The hours of the week-ago window in which the radar read any game. All of them means it was watching then: a game
--- it did not read had fewer players than the active-set minimum, so its growth counts from 0.
-week_coverage AS (
-  SELECT count(DISTINCT h.bucket) AS hours
-  FROM game_hourly h
-  WHERE h.bucket >= time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 7 * 24 + rising_games.window_hours)
-    AND h.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 7 * 24)
+-- A game poll did not read a week earlier was usually not discovered yet, while Rolimon's already listed its places:
+-- its census, summed over the places listed in both hours, against the same market totals. A place counts its own
+-- players only, which the ratio of the two windows cancels.
+census_pairs AS (
+  SELECT p.universe_id, cur.bucket, sum(cur.ccu_avg)::double precision AS ccu, sum(week.ccu_avg)::double precision AS week_ccu
+  FROM selected s
+  JOIN places p ON p.universe_id = s.universe_id
+  JOIN census_hourly cur ON cur.place_id = p.place_id
+  JOIN census_hourly week ON week.place_id = p.place_id
+    AND week.bucket = cur.bucket - make_interval(hours => 7 * 24)
+  WHERE NOT EXISTS (SELECT 1 FROM week_shares ws WHERE ws.universe_id = s.universe_id)
+    AND cur.bucket >= time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => rising_games.window_hours)
+    AND cur.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of)
+    AND week.bucket >= time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 7 * 24 + rising_games.window_hours)
+    AND week.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 7 * 24)
+  GROUP BY p.universe_id, cur.bucket
+),
+census_shares AS (
+  SELECT cp.universe_id,
+    avg(cp.ccu / nullif(t.total, 0)) AS share,
+    avg(cp.week_ccu / nullif(t.week_total, 0)) AS week_share,
+    count(*) AS week_samples
+  FROM census_pairs cp
+  JOIN pair_totals t ON t.bucket = cp.bucket
+  GROUP BY cp.universe_id
+),
+-- The games whose places Rolimon's listed in any hour of the week-ago window.
+census_listed AS (
+  SELECT DISTINCT p.universe_id
+  FROM selected s
+  JOIN places p ON p.universe_id = s.universe_id
+  JOIN census_hourly week ON week.place_id = p.place_id
+  WHERE week.bucket >= time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 7 * 24 + rising_games.window_hours)
+    AND week.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 7 * 24)
+),
+-- The hours of the week-ago window with a stored Rolimon's list. All of them means census was watching: a game none of
+-- them listed had too few players for Rolimon's, so its growth counts from 0.
+census_coverage AS (
+  SELECT count(*) AS hours
+  FROM generate_series(
+    time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 7 * 24 + rising_games.window_hours),
+    time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 7 * 24 + 1),
+    INTERVAL '1 hour'
+  ) AS week_hours(bucket)
+  WHERE EXISTS (SELECT 1 FROM census_hourly ch WHERE ch.bucket = week_hours.bucket)
 ),
 baselines AS (
   SELECT s.*,
@@ -139,28 +177,31 @@ baselines AS (
     coalesce(pv.previous_samples, 0) AS previous_samples,
     (CASE
       WHEN ws.universe_id IS NOT NULL THEN 'tracked'
+      WHEN cs.universe_id IS NOT NULL THEN 'census'
       -- Created after the start of the week-ago window: the game had no players to compare with.
       WHEN s.roblox_created_at >= time_bucket(INTERVAL '1 hour', rising_games.as_of)
         - make_interval(hours => 7 * 24 + rising_games.window_hours) THEN 'new'
-      WHEN wc.hours >= rising_games.window_hours THEN 'untracked'
+      WHEN cl.universe_id IS NULL AND cc.hours >= rising_games.window_hours THEN 'unlisted'
       ELSE 'unknown'
     END) AS week_baseline,
-    ws.share,
-    ws.week_share,
-    coalesce(ws.week_samples, 0) AS week_samples
+    coalesce(ws.share, cs.share) AS share,
+    coalesce(ws.week_share, cs.week_share) AS week_share,
+    coalesce(ws.week_samples, cs.week_samples, 0) AS week_samples
   FROM selected s
-  CROSS JOIN week_coverage wc
+  CROSS JOIN census_coverage cc
   LEFT JOIN previous pv ON pv.universe_id = s.universe_id
   LEFT JOIN week_shares ws ON ws.universe_id = s.universe_id
+  LEFT JOIN census_shares cs ON cs.universe_id = s.universe_id
+  LEFT JOIN census_listed cl ON cl.universe_id = s.universe_id
 ),
 scored AS (
   SELECT b.*,
     b.share / nullif(b.week_share, 0) AS week_growth,
     (CASE
-      WHEN b.week_baseline = 'tracked' THEN
+      WHEN b.week_baseline IN ('tracked', 'census') THEN
         ln(nullif(b.share * pm.total + rising_games.smoothing_ccu, 0)
           / nullif(b.week_share * pm.total + rising_games.smoothing_ccu, 0))
-      WHEN b.week_baseline IN ('new', 'untracked') THEN
+      WHEN b.week_baseline IN ('new', 'unlisted') THEN
         ln(nullif(b.ccu_avg + rising_games.smoothing_ccu, 0) / nullif(rising_games.smoothing_ccu, 0))
     END) AS week_growth_score,
     b.ccu_avg / nullif(b.previous_avg, 0) AS day_growth

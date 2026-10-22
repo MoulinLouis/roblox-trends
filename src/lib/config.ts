@@ -213,9 +213,10 @@ export const RADAR_CONFIG = {
   // earlier, among the games read in both.
   windowHours: 24,
   // The growth score is ln((share now × market + k) / (share a week ago × market + k)), in CCU at the current market
-  // size: k keeps a game going from 5 to 50 CCU from outranking real risers. A game without a week-ago reading counts
-  // from 0, ln((CCU + k) / k), when it is new or when the radar read some game in every hour of the week-ago window (it
-  // then had fewer players than the active-set minimum); otherwise it has no score.
+  // size: k keeps a game going from 5 to 50 CCU from outranking real risers. A game poll did not read a week ago is
+  // compared through the census of its places when Rolimon's listed them in both windows. Otherwise it counts from 0,
+  // ln((CCU + k) / k), when it is new or when census stored a list in every hour of the week-ago window without it (too
+  // few players for Rolimon's); otherwise it has no score.
   smoothingCcu: 100,
   // A peak that reaches this multiple of the window's median hourly CCU, while the window's last hour is back under
   // it, is an event (admin abuse, a promotion) rather than organic growth. The median of the same window, not of seven
