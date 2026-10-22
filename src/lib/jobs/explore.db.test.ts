@@ -211,6 +211,13 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
       [60, "search", "egg", 900],
       [61, "search", "steal", 900],
     ]);
+    // Each sighting is dated when its answer came: egg's pages at 20 and 40 minutes into the run, steal's at 60.
+    const minutesIn = (minutes: number) => new Date(now.getTime() + minutes * 60_000);
+    const windows = await database.db.select().from(discoveryCandidates).orderBy(discoveryCandidates.universeId);
+    expect(windows.map((row) => [row.universeId, row.firstSeenAt, row.lastSeenAt])).toEqual([
+      [60, minutesIn(20), minutesIn(40)],
+      [61, minutesIn(60), minutesIn(60)],
+    ]);
     expect((await lastRun()).stats).toMatchObject({ terms: ["egg", "steal"], stoppedBy: "deadline", queued: 2 });
   });
 

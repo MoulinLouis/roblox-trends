@@ -199,17 +199,17 @@ class Endpoint {
 
 // Sightings of tracked games are recorded as discoveries: they show how games relate, not only how they were first
 // found. Untracked games join the promotion queue, which poll works through within the game details budget.
-async function recordSightings(db: Database, sightings: Sighting[], now: Date) {
+async function recordSightings(db: Database, sightings: Sighting[], seenAt: Date) {
   if (!sightings.length) return { discoveries: 0, queued: [] as number[] };
   const known = await knownUniverseIds(db, [...new Set(sightings.map((sighting) => sighting.universeId))]);
   const discoveries = await recordDiscoveries(
     db,
     sightings
       .filter((sighting) => known.has(sighting.universeId))
-      .map(({ universeId, source, detail }) => ({ universeId, source, detail, firstSeenAt: now, lastSeenAt: now })),
+      .map(({ universeId, source, detail }) => ({ universeId, source, detail, firstSeenAt: seenAt, lastSeenAt: seenAt })),
   );
   const unknown = sightings.filter((sighting) => !known.has(sighting.universeId));
-  await enqueueCandidates(db, unknown.map((sighting) => ({ ...sighting, seenAt: now })));
+  await enqueueCandidates(db, unknown.map((sighting) => ({ ...sighting, seenAt })));
   return { discoveries, queued: unknown.map((sighting) => sighting.universeId) };
 }
 
@@ -223,8 +223,12 @@ export function createExploreJob(dependencies: ExploreDependencies): JobDefiniti
     intervalMinutes: config.intervalMinutes,
     timeoutMs: config.timeoutMs,
     async run({ db, now }) {
-      const deadline = clock() + config.deadlineMs;
+      const startedMs = clock();
+      const deadline = startedMs + config.deadlineMs;
       const pastDeadline = () => clock() > deadline;
+      // When the run saw a game: `now` moved on by the time elapsed since the run started, so a sighting late in the
+      // run is not dated 45 minutes early, and a replay of an earlier hour stays in it.
+      const seenAt = () => new Date(now.getTime() + clock() - startedMs);
       const seeds = await selectExplorationSeeds(db, now, {
         count: config.seedCount,
         maximumAgeDays: config.seedMaximumAgeDays,
@@ -241,7 +245,7 @@ export function createExploreJob(dependencies: ExploreDependencies): JobDefiniti
       let discoveries = 0;
       const queued = new Set<number>();
       const record = async (sightings: Sighting[]) => {
-        const recorded = await recordSightings(db, sightings, now);
+        const recorded = await recordSightings(db, sightings, seenAt());
         discoveries += recorded.discoveries;
         for (const universeId of recorded.queued) queued.add(universeId);
       };
