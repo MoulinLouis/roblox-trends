@@ -101,14 +101,29 @@ export function hasStat(stats: Record<string, unknown>, path: string): boolean {
   return true;
 }
 
-// Failed runs keep no stats: the total is a lower bound of the requests on the IP.
-function rateLimitLine(jobs: readonly JobSummary[], windowHours: number): string {
+export interface RateLimitTotals {
+  responses: number;
+  attempts: number;
+  runs: number;
+  // False when no job of the window recorded its HTTP figures.
+  recorded: boolean;
+}
+
+// Failed runs keep no stats: the totals are a lower bound of the requests on the IP.
+export function rateLimitTotals(jobs: readonly JobSummary[]): RateLimitTotals {
   const http = jobs.flatMap((job) => (job.recent.http ? [job.recent.http] : []));
-  const responses = http.reduce((total, metrics) => total + metrics.rateLimitedResponses, 0);
-  const attempts = http.reduce((total, metrics) => total + metrics.attempts, 0);
-  const runs = jobs.reduce((total, job) => total + (job.recent.rateLimitedRuns ?? 0), 0);
+  return {
+    responses: http.reduce((total, metrics) => total + metrics.rateLimitedResponses, 0),
+    attempts: http.reduce((total, metrics) => total + metrics.attempts, 0),
+    runs: jobs.reduce((total, job) => total + (job.recent.rateLimitedRuns ?? 0), 0),
+    recorded: http.length > 0,
+  };
+}
+
+function rateLimitLine(jobs: readonly JobSummary[], windowHours: number): string {
+  const { responses, attempts, runs, recorded } = rateLimitTotals(jobs);
   const share = attempts ? `${Math.round((responses / attempts) * 10_000) / 100}%` : "n/a";
-  const requests = http.length ? `${counts.format(responses)}/${counts.format(attempts)} requests (${share})` : "no requests recorded";
+  const requests = recorded ? `${counts.format(responses)}/${counts.format(attempts)} requests (${share})` : "no requests recorded";
   return `429s over the last ${windowHours} h: ${requests}; ${counts.format(runs)} rate-limited run${runs === 1 ? "" : "s"}`;
 }
 
@@ -140,7 +155,7 @@ function alignColumns(rows: string[][], align: readonly ("left" | "right")[]): {
   return { lines, widths };
 }
 
-function statAt(stats: Record<string, unknown>, path: string): unknown {
+export function statAt(stats: Record<string, unknown>, path: string): unknown {
   let value: unknown = stats;
   for (const key of path.split(".")) {
     if (typeof value !== "object" || value === null) return undefined;
@@ -149,7 +164,7 @@ function statAt(stats: Record<string, unknown>, path: string): unknown {
   return value;
 }
 
-function formatStat(value: unknown): string {
+export function formatStat(value: unknown): string {
   if (value === null || value === undefined) return "-";
   return typeof value === "object" ? JSON.stringify(value) : String(value);
 }

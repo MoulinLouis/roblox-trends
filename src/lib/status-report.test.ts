@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { CensusCoverage, JobSummary } from "@/db/status";
 import type { JobName } from "@/lib/jobs/types";
 import { errorMessage } from "@/lib/logger";
-import { formatStatusReport, hasStat } from "./status-report";
+import { formatStatusReport, hasStat, rateLimitTotals } from "./status-report";
 
 const now = new Date("2026-10-20T14:12:00Z");
 const coverage: CensusCoverage = {
@@ -269,5 +269,17 @@ describe("hasStat", () => {
     expect(hasStat({ http: {} }, "http.rateLimitedResponses")).toBe(false);
     expect(hasStat({ http: null }, "http.rateLimitedResponses")).toBe(false);
     expect(hasStat({}, "stoppedBy")).toBe(false);
+  });
+});
+
+describe("rateLimitTotals", () => {
+  it("adds the 429s, requests and rate-limited runs of every job that records them", () => {
+    const jobs = [
+      summary("poll", { recent: { ...noRuns, runs: 6, rateLimitedRuns: 1, http: { rateLimitedResponses: 4, attempts: 100 } } }),
+      summary("charts", { recent: { ...noRuns, runs: 1, rateLimitedRuns: 0, http: { rateLimitedResponses: 0, attempts: 50 } } }),
+      summary("explore"),
+    ];
+    expect(rateLimitTotals(jobs)).toEqual({ responses: 4, attempts: 150, runs: 1, recorded: true });
+    expect(rateLimitTotals([])).toEqual({ responses: 0, attempts: 0, runs: 0, recorded: false });
   });
 });
