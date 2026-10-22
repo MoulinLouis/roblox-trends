@@ -156,7 +156,8 @@ export const JOB_CONFIG = {
   },
 } as const;
 
-// The database sessions of the scripts and how they end. A job's statement timeout is its own timeoutMs.
+// The database sessions of the scripts and the dashboard, and how they end. A job's statement timeout is its own
+// timeoutMs.
 export const DATABASE_SESSION_CONFIG = {
   // Jobs, `collect` and the legacy import: a blocked lock fails its statement instead of stalling the run.
   lockTimeoutMs: 30_000,
