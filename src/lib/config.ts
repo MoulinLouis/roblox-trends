@@ -46,6 +46,10 @@ export const EXTERNAL_REQUEST_CONFIG = {
     // x-ratelimit-* headers kept reporting "300;w=60" with 287–290 remaining, so they do not describe this limit, and
     // /v1/games/votes on the same host is not affected. 50 ids every 7 s is about 430 ids per minute.
     "games.roblox.com/v1/games": 7_000,
+    // Recommendations, one path per universe. They advertise 200 requests per minute (x-ratelimit-limit "200;w=60",
+    // also from production on 2026-10-22), but the game details endpoint on the same host proved to hide a stricter
+    // limit: explore spreads them over its hour at 24 per minute, beside its searches, which wait a minute each.
+    "games.roblox.com/v1/games/recommendations/game/*": 2_500,
   } satisfies Record<string, number>,
   // A 429 from an endpoint above multiplies its spacing by this for the rest of the process, up to the maximum.
   rateLimitSlowdownFactor: 1.5,

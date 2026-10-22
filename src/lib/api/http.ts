@@ -130,10 +130,12 @@ function minimumIntervalForHost(host: string): number {
 const configuredEndpointIntervals: Record<string, number> = EXTERNAL_REQUEST_CONFIG.minimumIntervalByEndpoint;
 
 // The key of the paced endpoint a URL belongs to: its host and exact path, the query string aside. A longer path is
-// another endpoint: games.roblox.com/v1/games paces /v1/games?universeIds=… but not /v1/games/votes.
+// another endpoint: games.roblox.com/v1/games paces /v1/games?universeIds=… but not /v1/games/votes. A key ending in
+// "/*" paces every path under it as one endpoint, for paths that hold an id.
 export function pacedEndpoint(url: URL): string | undefined {
   const key = `${url.hostname}${url.pathname}`;
-  return Object.hasOwn(configuredEndpointIntervals, key) ? key : undefined;
+  if (Object.hasOwn(configuredEndpointIntervals, key)) return key;
+  return Object.keys(configuredEndpointIntervals).find((pattern) => pattern.endsWith("/*") && key.startsWith(pattern.slice(0, -1)));
 }
 
 function endpointInterval(endpoint: string): number {
