@@ -1,4 +1,5 @@
 import type { CensusCoverage, DataTotals, JobSummary } from "@/db/status";
+import { formatElapsed, formatUtc } from "@/lib/format";
 import type { JobName } from "@/lib/jobs/types";
 
 export interface StatusSnapshot {
@@ -54,8 +55,8 @@ export function formatStatusReport({ now, windowHours, jobs, coverage, totals }:
   const header = ["job", "latest run", "last completed", "runs", "degraded", "failed", "rate-limited", "429s/requests"];
   const rows = jobs.map((job) => [
     job.job,
-    job.latest ? `${job.latest.status} ${elapsed(now, job.latest.startedAt)} ago` : "never",
-    job.lastCompleted ? `${job.lastCompleted.status} ${elapsed(now, job.lastCompleted.finishedAt)} ago` : "never",
+    job.latest ? `${job.latest.status} ${formatElapsed(job.latest.startedAt, now)} ago` : "never",
+    job.lastCompleted ? `${job.lastCompleted.status} ${formatElapsed(job.lastCompleted.finishedAt, now)} ago` : "never",
     counts.format(job.recent.runs),
     counts.format(job.recent.degraded),
     counts.format(job.recent.failed),
@@ -76,11 +77,11 @@ export function formatStatusReport({ now, windowHours, jobs, coverage, totals }:
       }
     }
     if (job.lastError) {
-      table.push(messageLine(`${indent}error ${elapsed(now, job.lastError.startedAt)} ago: `, job.lastError.message));
+      table.push(messageLine(`${indent}error ${formatElapsed(job.lastError.startedAt, now)} ago: `, job.lastError.message));
     }
   });
   return [
-    `Radar status at ${formatTime(now)}`,
+    `Radar status at ${formatUtc(now)}`,
     "",
     ...table,
     "",
@@ -117,7 +118,7 @@ function coverageLine(now: Date, coverage: CensusCoverage, windowHours: number):
   return (
     `Coverage: ${counts.format(coverage.tracked)}/${counts.format(coverage.listed)} (${share}) Rolimon's places at or ` +
     `above ${coverage.minimumCcu} CCU polled within ${coverage.withinMinutes} min; ` +
-    `complete list ${elapsed(now, coverage.slot)} old`
+    `complete list ${formatElapsed(coverage.slot, now)} old`
   );
 }
 
@@ -180,16 +181,4 @@ function preview(message: string, width: number): string {
   const headLength = Math.min(messageHeadLength, Math.floor((width - messageSeparator.length) / 2));
   const tailLength = Math.max(0, width - headLength - messageSeparator.length);
   return `${line.slice(0, headLength).trimEnd()}${messageSeparator}${line.slice(line.length - tailLength).trimStart()}`;
-}
-
-// A clock skew between the job host and this one must not print a negative age.
-function elapsed(now: Date, at: Date): string {
-  const minutes = Math.max(0, Math.floor((now.getTime() - at.getTime()) / 60_000));
-  if (minutes < 120) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  return hours < 48 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
-}
-
-function formatTime(date: Date): string {
-  return `${date.toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
