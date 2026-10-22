@@ -17,19 +17,19 @@ import { formatCount, formatDay, formatElapsed, formatHours, formatPercent, form
 export const metadata: Metadata = { title: "Game" };
 
 // Canonical universe ids only, small enough to stay exact as numbers.
-const universeIdPattern = /^[1-9]\d{0,15}$/;
+const universeIdPattern = /^[1-9]\d*$/;
 
 export default async function GamePage({ params }: { params: Promise<{ universeId: string }> }) {
   await connection();
   const { universeId } = await params;
-  if (!universeIdPattern.test(universeId)) notFound();
+  if (!universeIdPattern.test(universeId) || !Number.isSafeInteger(Number(universeId))) notFound();
   const now = new Date();
   const view = await readGameView(dashboardDatabase(), Number(universeId), now);
   if (!view) notFound();
   const { game, discovery } = view;
   const signals = engagementSignals(view.engagement, view.votes, view.charts);
   const timeline = buildTimeline(view.versions, view.charts).slice(0, GAME_VIEW_CONFIG.timelineEntries);
-  const peak = view.daily.reduce((best, day) => Math.max(best, day.peak), 0);
+  const peak = view.daily.length ? Math.max(...view.daily.map((day) => day.peak)) : null;
   return (
     <div className="content">
       <div className="detail-hero">
