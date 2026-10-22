@@ -108,6 +108,25 @@ export const discoverySources = pgTable(
   ],
 );
 
+// Universes explore found that the games table did not hold yet, one row per universe, source and detail like
+// discovery_sources. Poll promotes the busiest within its game details budget, then moves the rows of every tracked game
+// into discovery_sources (src/db/candidates.ts). No foreign key: the games do not exist yet.
+export const discoveryCandidates = pgTable(
+  "discovery_candidates",
+  {
+    universeId: id64("universe_id").notNull(),
+    source: text("source").$type<DiscoverySource>().notNull(),
+    detail: text("detail").notNull().default(""),
+    // The CCU the source listed the game with, at its latest sighting.
+    playerCount: integer("player_count").notNull(),
+    firstSeenAt: timestamptz("first_seen_at").notNull(),
+    lastSeenAt: timestamptz("last_seen_at").notNull(),
+    // The latest poll request for the universe's details: set only when Roblox did not answer it.
+    attemptedAt: timestamptz("attempted_at"),
+  },
+  (table) => [primaryKey({ columns: [table.universeId, table.source, table.detail] })],
+);
+
 // Hypertables (converted in drizzle/0001_timescale.sql). No foreign keys, for write volume and compression.
 export const gameObservations = pgTable(
   "game_observations",
