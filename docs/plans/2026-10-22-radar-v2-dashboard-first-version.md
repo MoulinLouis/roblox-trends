@@ -2379,7 +2379,7 @@ git commit -m "feat(dashboard): add the health page"
 ```tsx
 import Link from "next/link";
 import type { RisingGame } from "@/db/radar";
-import { RADAR_CONFIG } from "@/lib/config";
+import { ACTIVE_SET_CONFIG, RADAR_CONFIG } from "@/lib/config";
 import { formatCompact, formatCount, formatDay, formatElapsed, formatHours, formatMultiplier } from "@/lib/format";
 import { GameIcon } from "./GameIcon";
 
@@ -2415,7 +2415,10 @@ export function RisingGamesTable({ games, asOf }: { games: RisingGame[]; asOf: D
               </td>
               <td>
                 <strong>{formatCount(game.ccuLast ?? game.ccuAverage)}</strong>
-                <span className="table-subline">{formatCount(game.ccuAverage)} on average over {game.samples} h</span>
+                <span className="table-subline">
+                  {formatCount(game.ccuAverage)} on average over {game.samples} h
+                  {game.ccuLastAt ? ` · read ${formatElapsed(game.ccuLastAt, asOf)} ago` : ""}
+                </span>
               </td>
               <td>{formatCount(game.ccuPeak)}</td>
               <td><WeekGrowth game={game} /></td>
@@ -2439,13 +2442,30 @@ export function RisingGamesTable({ games, asOf }: { games: RisingGame[]; asOf: D
   );
 }
 
-// A game created since the week-ago window is new; one that existed then but was not tracked has no baseline.
+// "tracked": the game's share against the same hours a week earlier; "new": created since; "untracked": the radar read
+// some game in every hour a week earlier but not this one, so it had fewer players than the active-set minimum;
+// "unknown": no baseline (v1 hours).
 function WeekGrowth({ game }: { game: RisingGame }) {
-  if (game.weekGrowth !== null) {
-    return <>{formatMultiplier(game.weekGrowth)}<span className="table-subline">{game.weekSamples} h a week earlier</span></>;
+  switch (game.weekBaseline) {
+    case "tracked":
+      return (
+        <>
+          {game.weekGrowth === null ? "from 0" : formatMultiplier(game.weekGrowth)}
+          <span className="table-subline">{game.weekSamples} h paired a week earlier</span>
+        </>
+      );
+    case "new":
+      return <span className="badge new">New</span>;
+    case "untracked":
+      return (
+        <>
+          from under {formatCount(ACTIVE_SET_CONFIG.minimumCcu)}
+          <span className="table-subline">Below the tracking minimum a week earlier</span>
+        </>
+      );
+    default:
+      return <>—<span className="table-subline">No reading a week earlier</span></>;
   }
-  if (game.weekGrowthScore !== null) return <span className="badge new">New</span>;
-  return <>—<span className="table-subline">Not tracked a week earlier</span></>;
 }
 ```
 
@@ -2714,7 +2734,7 @@ git commit -m "feat(dashboard): add the game page"
 
 - Header line: add `Updated on 2026-10-22 for the first dashboard (sections 3, 5A, 6 and 7).`
 - Section 3, the quality gates bullet: add `or the same list as the latest one read (Rolimon's serving the previous slot again, which happened in 2 of the first 44 runs; such a list is not stored)`.
-- Section 5A: replace the four bullets with the implemented definitions: `rising_games(as_of, …)` in `drizzle/0007_rising_games.sql`; windows of whole UTC hours (24 by default); weekday-safe growth as the share of tracked CCU over the current window against the same window one week earlier, sorted by a smoothed log score, with new games counted from 0 and untracked ones left without a score; acceleration as the window's average against the window before it; velocity from poll and census hourly readings, measured only from a reading below the starting threshold; the event flag against the median hourly CCU of the same window (a seven-day median would flag every hour of a fast organic rise), with at least 12 hourly samples; sample sizes returned for every metric.
+- Section 5A: replace the four bullets with the implemented definitions: `rising_games(as_of, …)` in `drizzle/0007_rising_games.sql`; windows of whole UTC hours (24 by default), every interval in hours so a session time zone cannot shift them; weekday-safe growth as the game's share against the same hour one week earlier, over the hours where both readings exist and among the games read in both (which cancels a game's own daily cycle on sparse v1 hours and the v1-to-v2 change of tracked games), sorted by a smoothed log score; `week_baseline` `tracked`, `new` (created since), `untracked` (the radar read some game in every hour a week earlier, so this one was below the active-set minimum; counted from 0) or `unknown` (no score); acceleration as the window's average against the window before it; velocity from one hourly reading per game (poll, or census of its places), measured only when the reading before each crossing is at most `velocityMaximumGapHours` older; the event flag against the median hourly CCU of the same window (a seven-day median would flag every hour of a fast organic rise), with at least 12 hourly samples; sample sizes returned for every metric; game metadata is today's, not as_of's.
 - Section 6: add a `First version (2026-10-22)` paragraph: Radar without the cluster column and filter or the watchlist filter; Game page with the curves, timeline (title, description and thumbnail changes and chart entries as a list rather than chart annotations), engagement, monetization and retention signals, without the classification card or similar games; Health page without backup and restore-test status (Healthchecks only); `asOf` on the Radar page instead of the global date selector.
 - Section 7, delivery phases: note that the first dashboard pages ship between phases 1 and 2, and that phase 4 completes them.
 
@@ -2723,9 +2743,10 @@ git commit -m "feat(dashboard): add the game page"
 - Dashboard section: list the pages (`/` Radar, `/games/<universe id>`, `/health`), the read-only session (`radar-web` in `pg_stat_activity`, `default_transaction_read_only`, 15 s statement timeout), and how to view it locally against production without writing anything: open the analysis tunnel (`ssh -N -L 15432:/var/run/postgresql/.s.PGSQL.5432 radar-analysis`) and run `DATABASE_URL=postgresql://radar_analysis@localhost:15432/radar npm run dev`.
 - Analysis sessions: add an example call with the configured values:
   ```sql
-  select universe_id, name, ccu_avg, week_growth, week_growth_score, day_growth, is_event, samples, week_samples
+  select universe_id, name, ccu_avg, week_baseline, week_growth, week_growth_score, day_growth, is_event, samples, week_samples
   from rising_games(as_of => now(), max_age_days => 30, min_ccu => 100, window_hours => 24, smoothing_ccu => 100,
-    event_peak_ratio => 3, event_min_samples => 12, velocity_start => 100, velocity_middle => 1000, velocity_end => 10000)
+    event_peak_ratio => 3, event_min_samples => 12, velocity_start => 100, velocity_middle => 1000, velocity_end => 10000,
+    velocity_max_gap_hours => 2)
   order by week_growth_score desc nulls last, ccu_avg desc limit 25;
   ```
   with the note that the values come from `RADAR_CONFIG` in `src/lib/config.ts`.
