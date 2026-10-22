@@ -103,6 +103,14 @@ export const JOB_CONFIG = {
     maximumConsecutiveFailedBatches: 3,
     // Universe ids of the requested games Roblox did not answer, kept in the run's stats (missingSample).
     missingSampleSize: 10,
+    // Universes that explore found and the games table does not hold (discovery_candidates). Each run requests the
+    // busiest of them after the hot set, in place of as many tail games: promotion then stays within the game details
+    // budget instead of adding requests beside poll's. 100 per run promotes up to 600 games an hour.
+    candidatesPerRun: 100,
+    // A candidate no discovery listed again for this long is dropped: it lost its players or left the results.
+    candidateMaximumAgeHours: 24,
+    // A candidate Roblox did not answer (moderated or deleted) waits this long before it is requested again.
+    candidateRetryHours: 6,
   },
   votes: {
     intervalMinutes: 60,

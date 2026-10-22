@@ -1,7 +1,8 @@
 import { desc, eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { enqueueCandidates } from "@/db/candidates";
 import { upsertGameDetails } from "@/db/games";
-import { gameObservations, games, jobRuns } from "@/db/schema";
+import { discoveryCandidates, discoverySources, gameObservations, games, jobRuns } from "@/db/schema";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/test-database";
 import { HttpError } from "@/lib/api/http";
 import { RobloxClient } from "@/lib/api/roblox";
@@ -82,6 +83,9 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
       expect(Object.keys(run.stats).sort()).toEqual([
         "active",
         "attempted",
+        "candidates",
+        "candidatesSettled",
+        "candidatesUnanswered",
         "failedBatches",
         "hot",
         "http",
@@ -437,6 +441,80 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
       expect(requests.map((ids) => ids.includes(204))).toEqual([true, true]);
       expect(await storedTimes(204)).toEqual({ lastCcuAt: minutesBefore(50), detailsAttemptedAt: later });
       expect(await storedTimes(205)).toMatchObject({ detailsAttemptedAt: later });
+    });
+  });
+
+  describe("with promotion candidates", () => {
+    const hoursBefore = (hours: number) => new Date(now.getTime() - hours * 3_600_000);
+    let requests: number[][];
+
+    // Roblox answers for every requested universe except 52, moderated since explore listed it.
+    function candidateJob(candidatesPerRun = 2) {
+      return createPollJob({
+        roblox: {
+          getGameDetails: async (ids) => {
+            requests.push(ids.map(Number));
+            return ids
+              .map(Number)
+              .filter((id) => id !== 52)
+              .map((id) => gameDetail(id, { playing: 900 }));
+          },
+        },
+        candidatesPerRun,
+      });
+    }
+
+    beforeEach(async () => {
+      requests = [];
+      await database.db.delete(gameObservations);
+      await database.db.delete(jobRuns);
+      await database.db.delete(discoveryCandidates);
+      await database.db.delete(games);
+      await upsertGameDetails(database.db, [gameDetail(1, { playing: 500 }), gameDetail(2, { playing: 400 })], now);
+      await enqueueCandidates(database.db, [
+        { universeId: 52, source: "search", detail: "+1", playerCount: 9_000, seenAt: hoursBefore(1) },
+        { universeId: 50, source: "search", detail: "+1", playerCount: 8_000, seenAt: hoursBefore(2) },
+        { universeId: 50, source: "chart", detail: "up-and-coming:us", playerCount: 7_000, seenAt: hoursBefore(1) },
+        { universeId: 51, source: "recommendation", detail: "1", playerCount: 600, seenAt: hoursBefore(1) },
+      ]);
+    });
+
+    it("promotes the busiest candidates after the hot set, dated and sourced from their sightings", async () => {
+      expect(await executeJob(candidateJob(), database.db, now)).toBe("success");
+      expect(requests).toEqual([[1, 2, 52, 50]]);
+      expect((await database.db.select({ universeId: games.universeId }).from(games)).map((game) => game.universeId).sort()).toEqual([1, 2, 50]);
+      expect(await observedUniverses()).toEqual([1, 2, 50]);
+      const [promoted] = await database.db.select().from(games).where(eq(games.universeId, 50));
+      expect(promoted.firstObservedAt).toEqual(hoursBefore(2));
+      const sources = await database.db.select().from(discoverySources).orderBy(discoverySources.source);
+      expect(sources.map((row) => [row.universeId, row.source, row.detail, row.firstSeenAt])).toEqual([
+        [50, "chart", "up-and-coming:us", hoursBefore(1)],
+        [50, "search", "+1", hoursBefore(2)],
+      ]);
+      const [run] = await database.db.select().from(jobRuns);
+      // The unanswered candidate does not degrade the run: the tracked games measure the collection.
+      expect(run.stats).toMatchObject({
+        active: 2,
+        candidates: 2,
+        requested: 4,
+        returned: 3,
+        missing: 0,
+        newGames: 1,
+        candidatesUnanswered: 1,
+        candidatesSettled: 1,
+      });
+    });
+
+    it("retries an unanswered candidate only after a wait, and requests the next ones meanwhile", async () => {
+      expect(await executeJob(candidateJob(), database.db, now)).toBe("success");
+      expect(await executeJob(candidateJob(), database.db, new Date(now.getTime() + 10 * 60_000))).toBe("success");
+      // Game 50 is tracked now: the second run polls it with the active set.
+      expect(requests).toEqual([
+        [1, 2, 52, 50],
+        [1, 2, 50, 51],
+      ]);
+      const queued = await database.db.select().from(discoveryCandidates);
+      expect(queued.map((row) => [row.universeId, row.attemptedAt])).toEqual([[52, now]]);
     });
   });
 

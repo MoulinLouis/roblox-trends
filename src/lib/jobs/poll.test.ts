@@ -84,7 +84,25 @@ describe("planPollRun", () => {
 
   it("plans nothing for an empty active set", () => {
     const plan = planPollRun([], { hotUniverses: 2, tailUniversesPerRun: 2 });
-    expect(plan).toEqual({ hot: [], tail: [], tailRequested: [], requested: [] });
+    expect(plan).toEqual({ hot: [], candidates: [], tail: [], tailRequested: [], requested: [] });
+  });
+
+  it("requests the promotion candidates after the hot set, in place of as many tail games", () => {
+    const candidates = [
+      { universeId: 50, playerCount: 8_000 },
+      { universeId: 51, playerCount: 600 },
+    ];
+    const plan = planPollRun(active, { hotUniverses: 2, tailUniversesPerRun: 3 }, candidates);
+    expect(plan.candidates).toEqual([game(50, 8_000, null), game(51, 600, null)]);
+    expect(ids(plan.tailRequested)).toEqual([5]);
+    expect(ids(plan.requested)).toEqual([1, 2, 50, 51, 5]);
+  });
+
+  it("requests no more candidates than the tail slice holds", () => {
+    const candidates = [50, 51, 52].map((universeId) => ({ universeId, playerCount: 100 }));
+    const plan = planPollRun(active, { hotUniverses: 2, tailUniversesPerRun: 2 }, candidates);
+    expect(ids(plan.requested)).toEqual([1, 2, 50, 51]);
+    expect(plan.tailRequested).toEqual([]);
   });
 });
 

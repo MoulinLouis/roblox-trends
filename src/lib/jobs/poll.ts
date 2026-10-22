@@ -1,4 +1,5 @@
 import { type ActiveUniverse, selectActiveUniverses } from "@/db/active-set";
+import { type PromotionCandidate, selectPromotionCandidates, settleCandidates } from "@/db/candidates";
 import { markGameDetailsAttempted, upsertGameDetails } from "@/db/games";
 import { writeGameObservations } from "@/db/observations";
 import { getHttpRequestMetrics } from "@/lib/api/http";
@@ -15,30 +16,41 @@ export interface PollDependencies {
   // Tests plan smaller runs; production takes JOB_CONFIG.poll.
   hotUniverses?: number;
   tailUniversesPerRun?: number;
+  candidatesPerRun?: number;
 }
 
 export interface PollPlan {
   // The first games of the active set, in priority order: requested on every run.
   hot: ActiveUniverse[];
+  // Untracked universes from the promotion queue, busiest first, with the CCU their discovery listed as priority.
+  candidates: ActiveUniverse[];
   // Every other active game.
   tail: ActiveUniverse[];
   // The tail games requested this run, longest since their latest details request first.
   tailRequested: ActiveUniverse[];
-  // The hot set, then the tail slice: the deadline sheds the end of this order first.
+  // The hot set, the candidates, then the tail slice: the deadline sheds the end of this order first.
   requested: ActiveUniverse[];
 }
 
 // The active set holds more games than one run can request within the game details limit. The hot set is requested
 // on every run; the tail rotates, since every game requested moves behind the others: a game polled gets fresh
-// details, and a game Roblox does not answer gets a new request time, so it is retried once per tail cycle.
+// details, and a game Roblox does not answer gets a new request time, so it is retried once per tail cycle. Candidates
+// take the place of as many tail games, so promoting them adds no request to the run.
 export function planPollRun(
   active: readonly ActiveUniverse[],
   limits: { hotUniverses: number; tailUniversesPerRun: number },
+  promotionCandidates: readonly PromotionCandidate[] = [],
 ): PollPlan {
   const hot = active.slice(0, limits.hotUniverses);
   const tail = active.slice(limits.hotUniverses);
-  const tailRequested = [...tail].sort(byOldestRequest).slice(0, limits.tailUniversesPerRun);
-  return { hot, tail, tailRequested, requested: [...hot, ...tailRequested] };
+  const candidates = promotionCandidates.slice(0, limits.tailUniversesPerRun).map((candidate) => ({
+    universeId: candidate.universeId,
+    priority: candidate.playerCount,
+    lastDetailsAt: null,
+    lastDetailsRequestAt: null,
+  }));
+  const tailRequested = [...tail].sort(byOldestRequest).slice(0, limits.tailUniversesPerRun - candidates.length);
+  return { hot, candidates, tail, tailRequested, requested: [...hot, ...candidates, ...tailRequested] };
 }
 
 // Never-requested games first, then the oldest request, then the lowest universe id.
@@ -75,13 +87,19 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
     hotUniverses: dependencies.hotUniverses ?? config.hotUniverses,
     tailUniversesPerRun: dependencies.tailUniversesPerRun ?? config.tailUniversesPerRun,
   };
+  const candidatesPerRun = dependencies.candidatesPerRun ?? config.candidatesPerRun;
   return {
     name: "poll",
     intervalMinutes: config.intervalMinutes,
     timeoutMs: config.timeoutMs,
     async run({ db, now, slot }) {
       const active = await selectActiveUniverses(db, now);
-      const plan = planPollRun(active, limits);
+      const promotionCandidates = await selectPromotionCandidates(db, now, {
+        limit: candidatesPerRun,
+        maximumAgeHours: config.candidateMaximumAgeHours,
+        retryHours: config.candidateRetryHours,
+      });
+      const plan = planPollRun(active, limits, promotionCandidates);
       const { requested } = plan;
       const httpBefore = getHttpRequestMetrics();
       // The deadline stops new batches, but a batch already in its retries can outlast the timeout. Its observations
@@ -125,15 +143,23 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
       const attempted = requested.slice(0, outcome.attempted).map((game) => game.universeId);
       await markGameDetailsAttempted(db, attempted, now);
       const answered = new Set(details.map((detail) => detail.id));
-      const missing = attempted.filter((universeId) => !answered.has(universeId)).sort((left, right) => left - right);
+      // The candidates are judged apart: the tracked games measure the collection, and a candidate Roblox does not
+      // answer (moderated or deleted since it was listed) waits in the queue instead of degrading the run.
+      const candidateIds = new Set(plan.candidates.map((candidate) => candidate.universeId));
+      const attemptedCandidates = attempted.filter((universeId) => candidateIds.has(universeId));
+      const unansweredCandidates = attemptedCandidates.filter((universeId) => !answered.has(universeId));
+      const settled = await settleCandidates(db, now, unansweredCandidates, { maximumAgeHours: config.candidateMaximumAgeHours });
+      const missing = attempted
+        .filter((universeId) => !answered.has(universeId) && !candidateIds.has(universeId))
+        .sort((left, right) => left - right);
       // Census promotes every busy game, so an empty active set means collection upstream is broken, not a quiet hour.
       // Otherwise the run is judged on the games it planned: the unrequested tail waits for its turn by design.
       const status =
         active.length === 0
           ? "degraded"
           : evaluateCollectionQuality({
-              requested: requested.length,
-              returned: details.length,
+              requested: requested.length - plan.candidates.length,
+              returned: details.filter((detail) => !candidateIds.has(detail.id)).length,
               minimumReturnedShare: config.minimumReturnedShare,
             });
       return {
@@ -141,6 +167,7 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
         stats: {
           active: active.length,
           hot: plan.hot.length,
+          candidates: plan.candidates.length,
           tail: plan.tail.length,
           tailRequested: plan.tailRequested.length,
           requested: requested.length,
@@ -160,6 +187,9 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
           http: httpMetricsSince(httpBefore),
           newGames: upsert.inserted.length,
           metadataChanges: upsert.metadataChanged.length,
+          // Requested candidates Roblox did not answer, and games whose discovery sightings moved to discovery_sources.
+          candidatesUnanswered: unansweredCandidates.length,
+          candidatesSettled: settled,
         },
       };
     },
