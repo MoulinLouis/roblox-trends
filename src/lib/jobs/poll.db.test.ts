@@ -505,6 +505,25 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
       });
     });
 
+    it("requests the candidates of a failed request again on the next run", async () => {
+      const job = createPollJob({
+        roblox: {
+          getGameDetails: async () => {
+            throw new HttpError(503, "Service Unavailable", "https://games.roblox.com/v1/games");
+          },
+        },
+        candidatesPerRun: 2,
+      });
+      expect(await executeJob(job, database.db, now)).toBe("degraded");
+      const queued = await database.db.select().from(discoveryCandidates);
+      // Roblox said nothing about them: no wait, unlike the candidates it left out of an answer.
+      expect(queued.every((row) => row.attemptedAt === null)).toBe(true);
+      const [run] = await database.db.select().from(jobRuns);
+      expect(run.stats).toMatchObject({ candidates: 2, failedBatches: 1, candidatesUnanswered: 0 });
+      expect(await executeJob(candidateJob(), database.db, new Date(now.getTime() + 10 * 60_000))).toBe("success");
+      expect(requests).toEqual([[1, 2, 52, 50]]);
+    });
+
     it("retries an unanswered candidate only after a wait, and requests the next ones meanwhile", async () => {
       expect(await executeJob(candidateJob(), database.db, now)).toBe("success");
       expect(await executeJob(candidateJob(), database.db, new Date(now.getTime() + 10 * 60_000))).toBe("success");

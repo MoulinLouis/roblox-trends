@@ -102,6 +102,8 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
       const plan = planPollRun(active, limits, promotionCandidates);
       const { requested } = plan;
       const httpBefore = getHttpRequestMetrics();
+      // The universes of the batches whose request failed: Roblox did not answer for them, but it said nothing of them.
+      const failedRequests = new Set<number>();
       // The deadline stops new batches, but a batch already in its retries can outlast the timeout. Its observations
       // are therefore written batch by batch, so a run that times out keeps the CCU of every batch it finished.
       const outcome = await runBatchesWithDeadline(
@@ -111,8 +113,10 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
           deadline: clock() + config.deadlineMs,
           clock,
           work: (batch) => dependencies.roblox.getGameDetails(batch),
-          onError: (error, batch) =>
-            logger.warn("Poll batch failed", { universes: batch.length, firstUniverseId: batch[0], error: errorMessage(error) }),
+          onError: (error, batch) => {
+            for (const universeId of batch) failedRequests.add(Number(universeId));
+            logger.warn("Poll batch failed", { universes: batch.length, firstUniverseId: batch[0], error: errorMessage(error) });
+          },
           // The client already retried with backoff: the next batches would hit the same limit, so the remaining
           // games, last in the request order, wait for the next run.
           stopOn: isRateLimited,
@@ -143,11 +147,13 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
       const attempted = requested.slice(0, outcome.attempted).map((game) => game.universeId);
       await markGameDetailsAttempted(db, attempted, now);
       const answered = new Set(details.map((detail) => detail.id));
-      // The candidates are judged apart: the tracked games measure the collection, and a candidate Roblox does not
-      // answer (moderated or deleted since it was listed) waits in the queue instead of degrading the run.
+      // The candidates are judged apart: the tracked games measure the collection, and a candidate Roblox left out of
+      // its answer (moderated or deleted since it was listed) waits in the queue instead of degrading the run. One whose
+      // request failed (an outage, a rate limit) is requested again on the next run, busiest first as before.
       const candidateIds = new Set(plan.candidates.map((candidate) => candidate.universeId));
-      const attemptedCandidates = attempted.filter((universeId) => candidateIds.has(universeId));
-      const unansweredCandidates = attemptedCandidates.filter((universeId) => !answered.has(universeId));
+      const unansweredCandidates = attempted.filter(
+        (universeId) => candidateIds.has(universeId) && !answered.has(universeId) && !failedRequests.has(universeId),
+      );
       const settled = await settleCandidates(db, now, unansweredCandidates, { maximumAgeHours: config.candidateMaximumAgeHours });
       const missing = attempted
         .filter((universeId) => !answered.has(universeId) && !candidateIds.has(universeId))
@@ -187,7 +193,8 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
           http: httpMetricsSince(httpBefore),
           newGames: upsert.inserted.length,
           metadataChanges: upsert.metadataChanged.length,
-          // Requested candidates Roblox did not answer, and games whose discovery sightings moved to discovery_sources.
+          // requested and returned include the candidates, which the quality gate leaves out. Requested candidates
+          // Roblox left out of its answer, and games whose discovery sightings moved to discovery_sources.
           candidatesUnanswered: unansweredCandidates.length,
           candidatesSettled: settled,
         },
