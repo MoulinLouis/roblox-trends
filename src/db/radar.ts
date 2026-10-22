@@ -52,16 +52,9 @@ export interface RisingGamesQuery {
   limit: number;
 }
 
-// Every sort ends with the window's average CCU, then the universe id, so the order is stable.
-const orderBy: Record<RadarSort, string> = {
-  growth: "week_growth_score desc nulls last, ccu_avg desc, universe_id",
-  acceleration: "day_growth desc nulls last, ccu_avg desc, universe_id",
-  ccu: "ccu_avg desc, universe_id",
-  age: "roblox_created_at desc, ccu_avg desc, universe_id",
-};
-
 // A type, not an interface: db.execute requires rows assignable to Record<string, unknown>.
 type RisingGameRow = {
+  sort_rank: number;
   universe_id: string;
   name: string;
   icon_url: string | null;
@@ -86,6 +79,7 @@ type RisingGameRow = {
   week_samples: number;
 };
 
+// The function sorts and limits the rows itself, so it reads the history behind velocity for the page's rows only.
 export async function risingGames(db: Database, query: RisingGamesQuery, config = RADAR_CONFIG): Promise<RisingGame[]> {
   const result = await db.execute<RisingGameRow>(sql`
     select * from rising_games(
@@ -99,10 +93,11 @@ export async function risingGames(db: Database, query: RisingGamesQuery, config 
       velocity_start => ${config.velocityThresholds.start}::int,
       velocity_middle => ${config.velocityThresholds.middle}::int,
       velocity_end => ${config.velocityThresholds.end}::int,
-      velocity_max_gap_hours => ${config.velocityMaximumGapHours}::int
+      velocity_max_gap_hours => ${config.velocityMaximumGapHours}::int,
+      sort_by => ${query.sort}::text,
+      row_limit => ${query.limit}::int
     )
-    order by ${sql.raw(orderBy[query.sort])}
-    limit ${query.limit}::int
+    order by sort_rank
   `);
   return result.rows.map((row) => ({
     universeId: Number(row.universe_id),

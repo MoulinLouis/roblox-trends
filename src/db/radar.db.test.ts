@@ -140,6 +140,8 @@ describe.skipIf(!hasTestDatabase)("rising_games", () => {
     expect(found.get(4)?.weekGrowthScore).toBeCloseTo(Math.log(1_600 / 100), 4);
     expect(found.get(5)).toMatchObject({ weekBaseline: "untracked", weekGrowth: null, weekSamples: 0 });
     expect(found.get(5)?.weekGrowthScore).toBeCloseTo(Math.log(900 / 100), 4);
+    // The limit keeps the first rows of the same order.
+    expect(await query("growth", { limit: 2 })).toEqual(rows.slice(0, 2));
 
     // Production reads mostly materialized buckets: the rows do not change once the fixtures are.
     await refreshAggregates();
