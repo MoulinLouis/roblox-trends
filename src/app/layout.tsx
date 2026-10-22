@@ -16,7 +16,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
           <main className="main">
             <header className="topbar">
               <span className="topbar-label">Market intelligence / Radar v2</span>
-              <span className="status-chip">Data core in progress</span>
+              <span className="status-chip">Times in UTC</span>
             </header>
             {children}
           </main>
