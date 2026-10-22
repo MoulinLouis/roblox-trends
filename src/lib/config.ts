@@ -217,9 +217,10 @@ export const RADAR_CONFIG = {
   // from 0, ln((CCU + k) / k), when it is new or when the radar read some game in every hour of the week-ago window (it
   // then had fewer players than the active-set minimum); otherwise it has no score.
   smoothingCcu: 100,
-  // An hour whose peak reaches this multiple of the window's median hourly CCU is an event (admin abuse, a promotion)
-  // rather than organic growth. The median of the same window, not of seven days: a game rising tenfold in a week
-  // would otherwise flag every hour of its rise.
+  // A peak that reaches this multiple of the window's median hourly CCU, while the window's last hour is back under
+  // it, is an event (admin abuse, a promotion) rather than organic growth. The median of the same window, not of seven
+  // days: a game rising tenfold in a week would otherwise flag every hour of its rise; and a breakout still rising at
+  // the end of the window is no event.
   eventPeakToMedianRatio: 3,
   eventMinimumSamples: 12,
   // Velocity: hours from the start to the middle threshold and from the middle to the end one, measured only when

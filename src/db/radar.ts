@@ -26,6 +26,8 @@ export interface RisingGame {
   ccuPeak: number;
   windowPeak: number;
   windowMedian: number;
+  // The average CCU of the window's last hour: an event is a peak the game has come back down from.
+  windowLast: number;
   isEvent: boolean;
   weekBaseline: WeekBaseline;
   // Share of tracked CCU now against the same hours a week earlier, among the games read in both; null without such
@@ -66,6 +68,7 @@ type RisingGameRow = {
   ccu_peak: number | null;
   window_peak: number;
   window_median: number;
+  window_last: number;
   is_event: boolean;
   week_baseline: WeekBaseline;
   week_growth: number | null;
@@ -111,6 +114,7 @@ export async function risingGames(db: Database, query: RisingGamesQuery, config 
     ccuPeak: row.ccu_peak ?? 0,
     windowPeak: row.window_peak,
     windowMedian: row.window_median,
+    windowLast: row.window_last,
     isEvent: row.is_event,
     weekBaseline: row.week_baseline,
     weekGrowth: row.week_growth,

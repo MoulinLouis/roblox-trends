@@ -246,7 +246,7 @@ describe.skipIf(!hasTestDatabase)("rising_games", () => {
     expect(byId(await query("growth")).get(2)?.ccuPeak).toBe(50_000);
   });
 
-  it("flags an hourly peak far above the window's median as an event", async () => {
+  it("flags a peak far above the window's median that the game came back down from as an event", async () => {
     await game(6, 10);
     await current(6, (hour) => (hour === 5 ? 4_000 : 1_000));
     await game(7, 10);
@@ -254,10 +254,23 @@ describe.skipIf(!hasTestDatabase)("rising_games", () => {
     // Too few hours to tell an event from noise.
     await game(8, 10);
     await hourly(8, 6, 0, (hour) => (hour === 3 ? 9_000 : 1_000));
+    // Flat at 200, then a breakout over the last 8 hours up to 2,000: the median stays at 200.
+    await game(16, 10);
+    await current(16, (hour) => (hour > 8 ? 200 : 200 + (9 - hour) * 225));
+    // Ten times its CCU over the day: the peak is three times the median, and so is the last hour.
+    await game(17, 10);
+    await current(17, (hour) => Math.round(200 * 10 ** ((24 - hour) / 23)));
+    // A spike in the window's last hour may be a breakout starting: it is not flagged before the game comes back down.
+    await game(18, 10);
+    await current(18, (hour) => (hour === 1 ? 4_000 : 1_000));
     const rows = byId(await query("ccu"));
-    expect(rows.get(6)).toMatchObject({ isEvent: true, windowPeak: 4_000, windowMedian: 1_000 });
+    expect(rows.get(6)).toMatchObject({ isEvent: true, windowPeak: 4_000, windowMedian: 1_000, windowLast: 1_000 });
     expect(rows.get(7)?.isEvent).toBe(false);
     expect(rows.get(8)?.isEvent).toBe(false);
+    expect(rows.get(16)).toMatchObject({ isEvent: false, windowPeak: 2_000, windowMedian: 200, windowLast: 2_000 });
+    expect(rows.get(17)?.windowPeak).toBeGreaterThanOrEqual(3 * (rows.get(17)?.windowMedian ?? Infinity));
+    expect(rows.get(17)?.isEvent).toBe(false);
+    expect(rows.get(18)).toMatchObject({ isEvent: false, windowPeak: 4_000, windowLast: 4_000 });
   });
 
   it("dates each threshold crossing only when the reading before it is recent, census included", async () => {

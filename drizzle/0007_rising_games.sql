@@ -37,6 +37,7 @@ RETURNS TABLE (
   ccu_peak int,
   window_peak int,
   window_median double precision,
+  window_last double precision,
   is_event boolean,
   week_baseline text,
   week_growth double precision,
@@ -71,6 +72,7 @@ windows AS (
     avg(cur.ccu_avg) AS ccu_avg,
     max(cur.ccu_max) AS window_peak,
     percentile_cont(0.5) WITHIN GROUP (ORDER BY cur.ccu_avg) AS window_median,
+    (array_agg(cur.ccu_avg ORDER BY cur.bucket DESC))[1] AS window_last,
     count(*) AS samples
   FROM current_hours cur
   GROUP BY cur.universe_id
@@ -78,7 +80,7 @@ windows AS (
 -- The games that pass the filters.
 selected AS (
   SELECT c.universe_id, c.name, c.icon_url, c.roblox_created_at, c.first_observed_at,
-    w.ccu_avg, w.window_peak, w.window_median, w.samples
+    w.ccu_avg, w.window_peak, w.window_median, w.window_last, w.samples
   FROM candidates c
   JOIN windows w ON w.universe_id = c.universe_id
   WHERE w.ccu_avg >= rising_games.min_ccu
@@ -250,7 +252,11 @@ SELECT
   greatest(x.peak, l.ccu, lp.peak)::int,
   r.window_peak::int,
   r.window_median::double precision,
-  (r.samples >= rising_games.event_min_samples AND r.window_peak >= rising_games.event_peak_ratio * r.window_median),
+  r.window_last::double precision,
+  -- A spike that has come back down: a breakout still rising at the end of the window is not an event.
+  (r.samples >= rising_games.event_min_samples
+    AND r.window_peak >= rising_games.event_peak_ratio * r.window_median
+    AND r.window_last < rising_games.event_peak_ratio * r.window_median),
   r.week_baseline::text,
   r.week_growth::double precision,
   r.week_growth_score::double precision,

@@ -51,7 +51,12 @@ export function RisingGamesTable({ games, asOf }: { games: RisingGame[]; asOf: D
               <td>{formatHours(game.hoursToEnd)}</td>
               <td>
                 {game.isEvent ? (
-                  <span className="badge event" title={`Hourly peak ${formatCount(game.windowPeak)} against a median of ${formatCount(game.windowMedian)}`}>Event</span>
+                  <span
+                    className="badge event"
+                    title={`Peak ${formatCount(game.windowPeak)} against a median of ${formatCount(game.windowMedian)}, back to ${formatCount(game.windowLast)} in the last hour`}
+                  >
+                    Event
+                  </span>
                 ) : null}
                 <span className="table-subline">First seen at {formatCount(game.firstSeenCcu)} CCU</span>
               </td>
