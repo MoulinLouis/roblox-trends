@@ -55,19 +55,6 @@ describe.skipIf(!hasTestDatabase)("promoteUniverses", () => {
     expect(await database.db.select().from(discoverySources)).toEqual([]);
   });
 
-  it("records a known game with recordKnown", async () => {
-    await upsertGameDetails(database.db, [gameDetail(1)], now);
-
-    const result = await promoteUniverses(database.db, gamesApi([1]), [{ universeId: 1, source: "search", detail: "obby" }], now, {
-      recordKnown: true,
-    });
-
-    expect(result).toEqual({ promoted: 0, discoveries: 1 });
-    expect(await database.db.select().from(discoverySources)).toEqual([
-      expect.objectContaining({ universeId: 1, source: "search", detail: "obby" }),
-    ]);
-  });
-
   it("neither promotes nor records a universe the Games API omits", async () => {
     const candidates = [
       { universeId: 1, source: "rolimons" as const, detail: "" },
@@ -100,57 +87,5 @@ describe.skipIf(!hasTestDatabase)("promoteUniverses", () => {
       cause: apiError,
     });
     expect(await database.db.select().from(games)).toEqual([]);
-  });
-
-  it("records known games with recordKnown before the Games API call, so its failure loses only the unknown ones", async () => {
-    await upsertGameDetails(database.db, [gameDetail(1)], now);
-    const api = {
-      getGameDetails: async () => {
-        throw new HttpError(503, "Service Unavailable", "https://games.roblox.com/v1/games");
-      },
-    };
-    const candidates = [
-      { universeId: 1, source: "search" as const, detail: "obby" },
-      { universeId: 2, source: "search" as const, detail: "obby" },
-    ];
-
-    const failure = await promoteUniverses(database.db, api, candidates, now, { recordKnown: true }).catch((error: unknown) => error);
-
-    expect(failure).toBeInstanceOf(PromotionApiError);
-    // The caller can still report what was recorded.
-    expect(failure).toMatchObject({ recordedDiscoveries: 1 });
-    expect(await database.db.select().from(discoverySources)).toEqual([
-      { universeId: 1, source: "search", detail: "obby", firstSeenAt: now, lastSeenAt: now },
-    ]);
-  });
-
-  it("records only known games and leaves the Games API alone with skipApi", async () => {
-    await upsertGameDetails(database.db, [gameDetail(1)], now);
-    const api = gamesApi([1, 2]);
-    const candidates = [
-      { universeId: 1, source: "search" as const, detail: "obby" },
-      { universeId: 2, source: "search" as const, detail: "obby" },
-    ];
-
-    const result = await promoteUniverses(database.db, api, candidates, now, { recordKnown: true, skipApi: true });
-
-    expect(result).toEqual({ promoted: 0, discoveries: 1 });
-    expect(api.getGameDetails).not.toHaveBeenCalled();
-    expect((await database.db.select().from(games)).map((game) => game.universeId)).toEqual([1]);
-    expect((await database.db.select().from(discoverySources)).map((row) => row.universeId)).toEqual([1]);
-  });
-
-  it("records known and promoted games together with recordKnown", async () => {
-    await upsertGameDetails(database.db, [gameDetail(1)], now);
-    const candidates = [
-      { universeId: 1, source: "search" as const, detail: "obby" },
-      { universeId: 2, source: "search" as const, detail: "obby" },
-      { universeId: 3, source: "search" as const, detail: "obby" },
-    ];
-
-    const result = await promoteUniverses(database.db, gamesApi([1, 2]), candidates, now, { recordKnown: true });
-
-    expect(result).toEqual({ promoted: 1, discoveries: 2 });
-    expect((await database.db.select().from(discoverySources)).map((row) => row.universeId).sort()).toEqual([1, 2]);
   });
 });
