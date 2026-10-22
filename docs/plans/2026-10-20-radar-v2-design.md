@@ -119,7 +119,7 @@ To measure in the first week:
 
 - The CCU at which Rolimon's starts listing a new game.
 - How often Rolimon's refreshes its list.
-- The 429 rate on the dedicated IP address.
+- The 429 rate on the dedicated IP address. At the end of the phase 1b observation (2026-10-22): none since poll moved to 10 minutes, and none on the other endpoints.
 
 ## 4. Classification and clusters
 
