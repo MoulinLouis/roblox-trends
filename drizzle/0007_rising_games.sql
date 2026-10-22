@@ -127,20 +127,43 @@ week_shares AS (
 ),
 -- A game poll did not read a week earlier was usually not discovered yet, while Rolimon's already listed its places:
 -- its census, summed over the places listed in both hours, against the same market totals. A place counts its own
--- players only, which the ratio of the two windows cancels.
-census_pairs AS (
-  SELECT p.universe_id, cur.bucket, sum(cur.ccu_avg)::double precision AS ccu, sum(week.ccu_avg)::double precision AS week_ccu
+-- players only, which the ratio of the two windows cancels. Census history is read place by place through its index
+-- (OFFSET 0 keeps each lookup a per-place scan rather than a join over every listed place).
+unpaired_places AS MATERIALIZED (
+  SELECT p.universe_id, p.place_id
   FROM selected s
   JOIN places p ON p.universe_id = s.universe_id
-  JOIN census_hourly cur ON cur.place_id = p.place_id
-  JOIN census_hourly week ON week.place_id = p.place_id
-    AND week.bucket = cur.bucket - make_interval(hours => 7 * 24)
   WHERE NOT EXISTS (SELECT 1 FROM week_shares ws WHERE ws.universe_id = s.universe_id)
-    AND cur.bucket >= time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => rising_games.window_hours)
-    AND cur.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of)
-    AND week.bucket >= time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 7 * 24 + rising_games.window_hours)
-    AND week.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 7 * 24)
-  GROUP BY p.universe_id, cur.bucket
+),
+census_now AS (
+  SELECT up.universe_id, up.place_id, ch.bucket, ch.ccu_avg
+  FROM unpaired_places up
+  CROSS JOIN LATERAL (
+    SELECT c.bucket, c.ccu_avg
+    FROM census_hourly c
+    WHERE c.place_id = up.place_id
+      AND c.bucket >= time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => rising_games.window_hours)
+      AND c.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of)
+    OFFSET 0
+  ) ch
+),
+census_week AS (
+  SELECT up.universe_id, up.place_id, ch.bucket, ch.ccu_avg
+  FROM unpaired_places up
+  CROSS JOIN LATERAL (
+    SELECT c.bucket, c.ccu_avg
+    FROM census_hourly c
+    WHERE c.place_id = up.place_id
+      AND c.bucket >= time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 7 * 24 + rising_games.window_hours)
+      AND c.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 7 * 24)
+    OFFSET 0
+  ) ch
+),
+census_pairs AS (
+  SELECT cn.universe_id, cn.bucket, sum(cn.ccu_avg)::double precision AS ccu, sum(cw.ccu_avg)::double precision AS week_ccu
+  FROM census_now cn
+  JOIN census_week cw ON cw.place_id = cn.place_id AND cw.bucket = cn.bucket - make_interval(hours => 7 * 24)
+  GROUP BY cn.universe_id, cn.bucket
 ),
 census_shares AS (
   SELECT cp.universe_id,
@@ -151,14 +174,9 @@ census_shares AS (
   JOIN pair_totals t ON t.bucket = cp.bucket
   GROUP BY cp.universe_id
 ),
--- The games whose places Rolimon's listed in any hour of the week-ago window.
+-- The games poll did not read whose places Rolimon's listed in any hour of the week-ago window.
 census_listed AS (
-  SELECT DISTINCT p.universe_id
-  FROM selected s
-  JOIN places p ON p.universe_id = s.universe_id
-  JOIN census_hourly week ON week.place_id = p.place_id
-  WHERE week.bucket >= time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 7 * 24 + rising_games.window_hours)
-    AND week.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of) - make_interval(hours => 7 * 24)
+  SELECT DISTINCT cw.universe_id FROM census_week cw
 ),
 -- The hours of the week-ago window with a stored Rolimon's list. All of them means census was watching: a game none of
 -- them listed had too few players for Rolimon's, so its growth counts from 0.
@@ -234,21 +252,32 @@ latest AS (
 -- One hourly reading per game, from poll and from the census of its places: census lists a place long before its CCU
 -- earns it a poll, which dates the threshold crossings. A place counts its own players only, so a crossing dated from
 -- census can be late, never early.
+-- Read game by game and place by place through their indexes, like the census above.
 readings AS (
   SELECT x.universe_id, x.bucket, max(x.ccu_max) AS ccu_max
   FROM (
-    SELECT h.universe_id, h.bucket, h.ccu_max
-    FROM game_hourly h
-    JOIN ranked r ON r.universe_id = h.universe_id
-    WHERE h.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of)
-      AND h.bucket >= rising_games.as_of - make_interval(hours => 24 * (rising_games.max_age_days + 1))
+    SELECT r.universe_id, h.bucket, h.ccu_max
+    FROM ranked r
+    CROSS JOIN LATERAL (
+      SELECT g.bucket, g.ccu_max
+      FROM game_hourly g
+      WHERE g.universe_id = r.universe_id
+        AND g.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of)
+        AND g.bucket >= rising_games.as_of - make_interval(hours => 24 * (rising_games.max_age_days + 1))
+      OFFSET 0
+    ) h
     UNION ALL
-    SELECT p.universe_id, ch.bucket, ch.ccu_max
-    FROM census_hourly ch
-    JOIN places p ON p.place_id = ch.place_id
-    JOIN ranked r ON r.universe_id = p.universe_id
-    WHERE ch.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of)
-      AND ch.bucket >= rising_games.as_of - make_interval(hours => 24 * (rising_games.max_age_days + 1))
+    SELECT r.universe_id, ch.bucket, ch.ccu_max
+    FROM ranked r
+    JOIN places p ON p.universe_id = r.universe_id
+    CROSS JOIN LATERAL (
+      SELECT c.bucket, c.ccu_max
+      FROM census_hourly c
+      WHERE c.place_id = p.place_id
+        AND c.bucket < time_bucket(INTERVAL '1 hour', rising_games.as_of)
+        AND c.bucket >= rising_games.as_of - make_interval(hours => 24 * (rising_games.max_age_days + 1))
+      OFFSET 0
+    ) ch
   ) x
   GROUP BY x.universe_id, x.bucket
 ),
