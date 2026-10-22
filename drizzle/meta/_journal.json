@@ -50,6 +50,13 @@
       "when": 1792612386453,
       "tag": "0006_details_attempted_at",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792628440025,
+      "tag": "0007_rising_games",
+      "breakpoints": true
     }
   ]
 }

@@ -200,6 +200,32 @@ export const STATUS_CONFIG = {
   summaryWindowHours: 24,
 } as const;
 
+// The Radar page and rising_games (drizzle/0007_rising_games.sql, design section 5A). The SQL function takes every
+// value below as a parameter; docs/operations.md shows a call with them for analysis sessions.
+export const RADAR_CONFIG = {
+  // Filters on the real age, from the Roblox creation date.
+  ageOptionsDays: [14, 30, 90],
+  defaultAgeDays: 30,
+  minimumCcuOptions: [50, 100, 500, 1_000, 5_000],
+  defaultMinimumCcu: 100,
+  // The current window: the whole UTC hours before as_of. Acceleration compares its average CCU with the window
+  // before it; weekday-safe growth compares the game's share of tracked CCU with the same window one week earlier.
+  windowHours: 24,
+  // The growth score is ln((share now × market + k) / (share a week ago × market + k)), in CCU at the current market
+  // size: k keeps a game going from 5 to 50 CCU from outranking real risers. A game created after the start of the
+  // week-ago window counts from 0; one that existed but was not tracked then has no score.
+  smoothingCcu: 100,
+  // An hour whose peak reaches this multiple of the window's median hourly CCU is an event (admin abuse, a promotion)
+  // rather than organic growth. The median of the same window, not of seven days: a game rising tenfold in a week
+  // would otherwise flag every hour of its rise.
+  eventPeakToMedianRatio: 3,
+  eventMinimumSamples: 12,
+  // Velocity: hours from the start to the middle threshold and from the middle to the end one, measured only when
+  // the radar (poll or census) saw the game below the threshold it starts from.
+  velocityThresholds: { start: 100, middle: 1_000, end: 10_000 },
+  pageSize: 100,
+} as const;
+
 // The Healthchecks checks (npm run provision:healthchecks). Periods come from JOB_CONFIG; graces from here.
 export const HEALTHCHECKS_CONFIG = {
   // A run may use its whole timeoutMs before it pings, so a heartbeat is late only after that plus this margin.
