@@ -1,6 +1,6 @@
 # Roblox Trend Radar v2 design
 
-Validated with the repository owner on 2026-10-20. Updated on 2026-10-21 to match the phase 1a implementation (sections 2 and 3) and the phase 1b server (section 1).
+Validated with the repository owner on 2026-10-20. Updated on 2026-10-21 to match the phase 1a implementation (sections 2 and 3) and the phase 1b server (section 1). Updated on 2026-10-22 for the first dashboard (sections 3, 5A, 6 and 7).
 
 ## Why a v2
 
@@ -112,7 +112,7 @@ Reliability rules:
 
 - **Idempotency.** Every observation is keyed by its slot timestamp, so a retry within the same slot overwrites instead of duplicating.
 - **No overlap.** `poll` starts no batch after a 7.5-minute deadline (its timeout is 9 minutes), after a rate limit that outlasted the retries, or after 3 failed batches in a row. The hot set is requested before the tail, so the tail games are the ones left for the next run instead of running into the next slot.
-- **Quality gates.** A run is marked `degraded`, and excluded from analysis, when fewer than 95% of the requested games come back, or when the Rolimon's list has fewer than 1,000 places, more than 5% malformed entries, or a size more than 30% away from the latest list of the last 6 hours that passed this check.
+- **Quality gates.** A run is marked `degraded`, and excluded from analysis, when fewer than 95% of the requested games come back, or when the Rolimon's list has fewer than 1,000 places, more than 5% malformed entries, or a size more than 30% away from the latest list of the last 6 hours that passed this check, or the same list as the latest one read (Rolimon's serving the previous slot again, which happened in 2 of the first 44 runs; such a list is not stored).
 - **Rate limits.** The existing HTTP client is kept: per-host spacing, retries, `Retry-After` handling, jittered exponential backoff. Rate limiting did persist on the dedicated IP address: the game details endpoint has a hidden limit of about 500 ids per minute that its `x-ratelimit-*` headers do not show (measured on 2026-10-21), so `poll` moved to 10 minutes, and the client spaces that endpoint alone 7 seconds apart and slows it down by 1.5 times, up to 30 seconds, on each 429.
 
 To measure in the first week:
@@ -151,10 +151,13 @@ Every metric is a SQL view or function that shows its sample size. There is no c
 
 **A. What is breaking out: `rising_games(as_of)`.**
 
-- Weekday-safe growth: the game's share of total tracked CCU, compared with the same hour one week earlier.
-- Velocity: hours from 100 to 1,000 CCU and from 1,000 to 10,000 CCU.
-- Acceleration: the trailing 24-hour average against the previous 24 hours.
-- Event flag: an hourly peak far above the game's 7-day hourly median, such as an admin abuse, is labelled as an event rather than organic growth.
+`rising_games(as_of, …)` is defined in `drizzle/0007_rising_games.sql`; its parameters come from `RADAR_CONFIG` in `src/lib/config.ts`. Windows are whole UTC hours (24 by default), and every interval is counted in hours so a session time zone cannot shift them.
+
+- Weekday-safe growth: the game's share against the same hour one week earlier, over the hours where both readings exist and among the games read in both. Pairing the hours cancels a game's own daily cycle on the sparse v1 hours and the v1-to-v2 change of tracked games. Games are sorted by a smoothed log score. `week_baseline` says where the baseline comes from: `tracked`; `new` (created since); `untracked` (the radar read some game in every hour a week earlier, so this one was below the active-set minimum; counted from 0); or `unknown` (no score).
+- Acceleration: the window's average against the window before it.
+- Velocity: hours from 100 to 1,000 CCU and from 1,000 to 10,000 CCU, from one hourly reading per game (poll, or the census of its places). A crossing is measured only when the reading before it is at most `velocityMaximumGapHours` older.
+- Event flag: an hourly peak at least 3 times the median hourly CCU of the same window, with at least 12 hourly samples, such as an admin abuse, is labelled as an event rather than organic growth. A seven-day median would flag every hour of a fast organic rise.
+- Every metric returns its sample size. Game metadata (name, icon) is today's, not `as_of`'s.
 
 **B. Why it works: the game view.**
 
@@ -200,6 +203,14 @@ Next.js server components read the section 5 views directly. The existing chart 
 
 A global date selector recomputes every page as of a past date.
 
+**First version (2026-10-22).** The first pages ship before classification:
+
+- the Radar, without the cluster column, the cluster filter or the watchlist filter;
+- the Game page, with the curves, a timeline, and the engagement, monetization and retention signals, without the classification card or similar games. The timeline lists title, description and thumbnail changes and chart entries instead of annotating the charts;
+- the Health page, without backup and restore-test status, which report to Healthchecks only.
+
+An `asOf` field on the Radar page replaces the global date selector for backtests.
+
 The Ideas, Trends and Settings pages are removed.
 
 ## 7. Testing, migration and delivery
@@ -232,7 +243,7 @@ The Ideas, Trends and Settings pages are removed.
 1. **Data:** server provisioning, monitoring, backups, v2 schema, legacy import, and the `census`, `poll`, `votes`, `charts`, `explore` and `thumbnails` collectors. New data accumulates from this point.
 2. **Classification:** Opus 5.5 against Haiku 5.5 on 200 games (the owner chooses the model), initial classification, clusters.
 3. **Analysis:** SQL views and functions, then backtest validation.
-4. **Dashboard and cutover:** the new pages, then removal of v1 code (ideas, trends, agent brief, Discord reports, scheduler leases).
+4. **Dashboard and cutover:** the remaining pages and the full versions of the first ones (which ship between phases 1 and 2, see section 6), then removal of v1 code (ideas, trends, agent brief, Discord reports, scheduler leases).
    - A final incremental import from Aiven closes any gap.
    - The GitHub scheduled workflow is disabled.
    - Aiven stays read-only for 14 days, then is deleted.

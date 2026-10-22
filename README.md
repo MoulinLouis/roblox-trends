@@ -1,6 +1,6 @@
 # Roblox Trend Radar
 
-Roblox Trend Radar tracks Roblox games to answer three questions: which Roblox formats convert right now, what is breaking out early, and whether a concept still has room. The v1 radar answered them late: games that later passed 10,000 CCU were first seen at a median of 6,216 CCU, only 54% of the Rolimon's games above 100 CCU were tracked in detail, and irregular GitHub Actions runs captured 37–58% of the real weekend peaks of the owner's game. v2 rebuilds the data core on one server: every place listed by Rolimon's is counted every 10 minutes, the 2,000 highest-priority active games are polled every 10 minutes and the other active games every 20–30 minutes, and the history lives in PostgreSQL with TimescaleDB, so the database computes the aggregates. This branch implements phase 1a, the data core: schema, collectors, legacy history import and a status command. Phase 1b runs it on one production server (see Production). Classification, analysis and the dashboard follow in later phases.
+Roblox Trend Radar tracks Roblox games to answer three questions: which Roblox formats convert right now, what is breaking out early, and whether a concept still has room. The v1 radar answered them late: games that later passed 10,000 CCU were first seen at a median of 6,216 CCU, only 54% of the Rolimon's games above 100 CCU were tracked in detail, and irregular GitHub Actions runs captured 37–58% of the real weekend peaks of the owner's game. v2 rebuilds the data core on one server: every place listed by Rolimon's is counted every 10 minutes, the 2,000 highest-priority active games are polled every 10 minutes and the other active games every 20–30 minutes, and the history lives in PostgreSQL with TimescaleDB, so the database computes the aggregates. This branch implements phase 1a, the data core: schema, collectors, legacy history import and a status command. Phase 1b runs it on one production server (see Production). A first dashboard, the Radar, Game and Health pages, ships before classification (see Dashboard); classification, clusters and the rest of the analysis follow in later phases.
 
 ## Architecture
 
@@ -56,6 +56,8 @@ Continuous aggregates, kept permanently. They are real-time: buckets not yet mat
 
 The view `game_daily_all` merges `game_daily` (`origin = 'observed'`) with `game_daily_legacy` (`origin = 'legacy'`) for the days `game_daily` lacks.
 
+The function `rising_games(as_of, …)` (`drizzle/0007_rising_games.sql`) computes the Radar page from `game_hourly` and `census_hourly` for any past hour: weekday-safe growth against the same hours a week earlier, growth against the day before, velocity from 100 to 1,000 and from 1,000 to 10,000 CCU, and an event flag, each with its sample size. Its parameters come from `RADAR_CONFIG`.
+
 Regular tables (`src/db/schema.ts`):
 
 - `games`: one row per universe with Roblox metadata, the Roblox creation time (`roblox_created_at`) kept separate from the radar's first observation (`first_observed_at`), the latest CCU and the last time it had players (`last_active_at`), name and description fingerprints, and the current thumbnail, icon and check time, with the time of the last thumbnail request (`thumbnails_attempted_at`), answered or not. `thumbnail_key` is `media:<asset id>`, or `url:<sha1>` of the image URL when Roblox gives no asset id.
@@ -109,7 +111,7 @@ npm run collect
 npm run status
 ```
 
-`npm run collect` calls the live Roblox and Rolimon's APIs. A fresh database fills over many census runs: place resolution calls `apis.roblox.com`, spaced 1.3 s apart, within a 150-second budget per run, so at most about 115 places per run (150 / 1.3). The roughly 2,900 Rolimon's places at or above 100 CCU therefore take about 25 census runs, about 4 hours at one run every 10 minutes, and longer with retries or slow responses. In production, the legacy import first seeds `places` with the v1 games. `npm run dev` serves the application shell; the dashboard returns in phase 4.
+`npm run collect` calls the live Roblox and Rolimon's APIs. A fresh database fills over many census runs: place resolution calls `apis.roblox.com`, spaced 1.3 s apart, within a 150-second budget per run, so at most about 115 places per run (150 / 1.3). The roughly 2,900 Rolimon's places at or above 100 CCU therefore take about 25 census runs, about 4 hours at one run every 10 minutes, and longer with retries or slow responses. In production, the legacy import first seeds `places` with the v1 games. `npm run dev` serves the dashboard (see Dashboard).
 
 | Variable | Purpose |
 | --- | --- |
@@ -130,12 +132,24 @@ Every command that connects to the database refuses one that still holds v1 tabl
 | `npm run job <name>` | Runs one job once: `census`, `poll`, `votes`, `charts`, `explore` or `thumbnails`. Exits 1 when the run failed or could not start, and 2 for an unknown name. Sets `statement_timeout` to the job's timeout and `lock_timeout` to 30 s. |
 | `npm run collect` | Runs the six jobs once, in the order above, for local setup and manual catch-up. A failed job does not stop the others; the exit code is 1 when any failed. |
 | `npm run import:legacy [-- --since=<ISO date>]` | Copies the v1 history from `LEGACY_DATABASE_URL` into `DATABASE_URL`: games with their `places` mappings, metadata versions, discoveries, hourly observations within the raw retention, votes, chart placements before the first v2 `charts` run, and daily rows. It refreshes `game_hourly` and `game_daily` window by window, then fills `games.last_ccu` where `last_ccu_at` is null and moves `games.last_active_at` forward from the imported observations. The source is read in read-only transactions. Rows v2 already holds are kept: inserts skip conflicts, an existing game only widens `first_observed_at` and `last_observed_at` (least/greatest), and an existing discovery only widens its sighting window. A failed run resumes by running it again; `--since=<the failed window start, as logged>` only skips the raw windows already imported. It runs once on the first production deployment (phase 1b), after `npm run db:migrate` and before the timers are enabled, and warns if `poll` already ran. Phase 4 adds a final incremental import. |
-| `npm run status` | Prints, per job, the latest and last completed run, the runs, degraded and failed counts over the last 24 hours, rate-limited runs and 429s per request, the watched census and poll stats (for `poll`, also the games requested, those Roblox did not answer, the age of the oldest tail details requested and the game details spacing the run ended with) and the last error; then the coverage of Rolimon's places at or above 100 CCU polled within 60 minutes (a tail game is polled every 20–30 minutes), and data totals. |
+| `npm run status` | Prints, per job, the latest and last completed run, the runs, degraded and failed counts over the last 24 hours, rate-limited runs and 429s per request, the watched census and poll stats (for `poll`, also the games requested, those Roblox did not answer, the median age of the tail details requested and the game details spacing the run ended with) and the last error; then the coverage of Rolimon's places at or above 100 CCU polled within 60 minutes (a tail game is polled every 20–30 minutes), and data totals. |
 | `npm run db:generate` | Generates a migration from `src/db/schema.ts` into `drizzle/`. Schema changes go into new migrations. It reads only the schema and the snapshots: `drizzle.config.ts` holds no database credentials, so `drizzle-kit push` and `studio`, which would bypass the v1 guard, never pick up `DATABASE_URL`. |
 | `npm run db:migrate` | Applies the migrations in `drizzle/`. Sets `lock_timeout` to 10 s, so a migration blocked behind a running job fails instead of queueing every later query behind it. Exits 1 when it failed. |
 | `npm run provision:healthchecks` | Creates or updates, by slug, the 16 Healthchecks checks (a heartbeat and a quality check per job, plus `radar-deploy`, `radar-system`, `radar-backup` and `radar-restore-test`) with the periods of `JOB_CONFIG` and the graces of `HEALTHCHECKS_CONFIG`, and attaches every integration of the project. Needs `HEALTHCHECKS_API_KEY`; exits 2 without it and 1 when a check was not provisioned. Run it after any change of either configuration. |
 | `npm run system-check` | Checks disk usage (limit 70%), WAL archiving (a segment archived within the last 30 minutes) and the TimescaleDB policies (paused, or without success for 3 schedule intervals and at least 60 minutes), with the limits of `SYSTEM_CHECK_CONFIG`, and pings `radar-system`. Exits 1 on any problem. In production `radar-system-check.timer` runs it every 15 minutes. |
 | `npm run validate` | Runs lint, typecheck, tests and the production build. |
+
+## Dashboard
+
+Server components read PostgreSQL directly through a read-only session (`src/db/dashboard.ts`). All times are UTC.
+
+| Page | Content |
+| --- | --- |
+| `/` | The Radar: games created within 14, 30 or 90 days, above a minimum CCU, sorted by growth against last week, growth against the day before, CCU or age. `asOf` replays a past hour. |
+| `/games/<universe id>` | The game's last 14 days and daily peaks, its timeline (renames, description and thumbnail changes, chart entries), session length, favorites per 1,000 new visits, like ratio, Top Earning against Top Playing Now, and Top Revisited. |
+| `/health` | Job runs over the last 24 hours, coverage, 429s, and the system check (disk, WAL archiving, TimescaleDB policies). |
+
+To view it against production data without writing anything, open the analysis tunnel (`ssh -N -L 15432:/var/run/postgresql/.s.PGSQL.5432 radar-analysis`) and run `DATABASE_URL=postgresql://radar_analysis@localhost:15432/radar npm run dev` (see [`docs/operations.md`](docs/operations.md)).
 
 ## Tests
 

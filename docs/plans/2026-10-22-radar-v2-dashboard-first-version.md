@@ -2792,3 +2792,13 @@ git commit -m "docs: describe the first dashboard"
 ## Execution notes
 
 (Record decisions and surprises here as tasks complete; committed code is authoritative over the code blocks above.)
+
+- **Task 1** (`b8bced7`, `df9b8e8`, `cd9d67b`): a repeated list is compared only with the latest fingerprint of an *earlier* slot within 6 hours (a retry in the same slot must not see its own list as a repeat). `latestRunWithStat` takes `{ value?, slotBefore? }`; without `value` it matches any string stat. A repeated list is not stored, `listQuality` is `"repeated"`, and `listFingerprint` is null on an outage.
+- **Task 2** (`464bcbb`): as planned; the deadline test expects a median of 0.
+- **Task 5** (`5b4cfca`, `3097bc2`, `05f277b`): review changed the plan's function in two places. Every interval is in hours (a day interval follows the session time zone across a DST change; a Europe/Paris test covers it). The week-ago comparison pairs hours read in both windows, among the games read in both, and returns `week_baseline` (`tracked`, `new`, `untracked`, `unknown`); velocity needs the reading before a crossing within `velocityMaximumGapHours`. Validated read-only on production with the function body inlined: 0.38 s for 30 days, 0.53 s for 90 days.
+- **Task 7** (`c7f55a6`): `ChartPresence` gained `bestRankRecent` and `hoursRecent`, computed over hour-based windows.
+- **Task 9** (`e35a206`, `e14d1c2`): the disk share moved to `diskUsedShare()` in `src/lib/ops/system-check.ts`, shared with `scripts/system-check.ts`.
+- **Tasks 10–13** (`e1f4b09`, `f000bc4`, `da542eb`, `a1799e9`): written by the controller from the code blocks. Differences: the phone navigation uses as many columns as links instead of six; the Health page's card reads "Games known" (the total is every game in `games`, not the active set) and its coverage detail adds the list age, as `radar status` does.
+- **Task 14**: the README's `npm run status` row also moved to the median tail details age, which Task 2 had left.
+- CI runs the database suites only in CI; each task's suites were checked in the `npm run test` log. `npm run validate` locally: 320 tests passed, 193 database tests skipped.
+- **2026-10-22 13:30 UTC**: before Task 15, `radar-prod` was offline in Tailscale since 10:06 UTC (SSH over the tailnet timed out; public addresses do not answer by design). Tasks 15 and 16 wait for the server.
