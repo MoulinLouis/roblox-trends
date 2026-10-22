@@ -149,14 +149,14 @@ psql postgresql://radar_analysis@localhost:15432/radar
 
 The server sees a socket connection from the OS user `analysis`, so the same peer mapping applies and no password is asked.
 
-`rising_games` computes the Radar page's metrics for any `as_of`. A session calls it with the values of `RADAR_CONFIG` in `src/lib/config.ts`:
+`rising_games` computes the Radar page's metrics for any `as_of`. A session calls it with the values of `RADAR_CONFIG` in `src/lib/config.ts`; `sort_by` is `growth`, `acceleration`, `ccu` or `age`, and `row_limit` null returns every game (about 1 s for 90 days):
 
 ```sql
-select universe_id, name, ccu_avg, week_baseline, week_growth, week_growth_score, day_growth, is_event, samples, week_samples
+select sort_rank, universe_id, name, ccu_avg, week_baseline, week_growth, week_growth_score, day_growth, is_event, samples, week_samples
 from rising_games(as_of => now(), max_age_days => 30, min_ccu => 100, window_hours => 24, smoothing_ccu => 100,
   event_peak_ratio => 3, event_min_samples => 12, velocity_start => 100, velocity_middle => 1000, velocity_end => 10000,
-  velocity_max_gap_hours => 2)
-order by week_growth_score desc nulls last, ccu_avg desc limit 25;
+  velocity_max_gap_hours => 2, sort_by => 'growth', row_limit => 25)
+order by sort_rank;
 ```
 
 ### Dashboard
@@ -178,6 +178,8 @@ ssh -N -L 15432:/var/run/postgresql/.s.PGSQL.5432 radar-analysis
 # then, in another terminal:
 DATABASE_URL=postgresql://radar_analysis@localhost:15432/radar npm run dev
 ```
+
+The local Health page then reports the disk of the local machine, not the server's.
 
 ## 3. Secrets inventory
 
