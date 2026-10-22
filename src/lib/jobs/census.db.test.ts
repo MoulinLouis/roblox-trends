@@ -348,14 +348,22 @@ describe.skipIf(!hasTestDatabase)("census job", () => {
   it("does not store a list identical to the previous run's and degrades the run", async () => {
     const listed = [place(1, 500), ...filler()];
     expect(await executeJob(censusJob(listed), database.db, now)).toBe("success");
-    expect(await executeJob(censusJob(listed), database.db, minutesLater(10))).toBe("degraded");
-    expect(await lastRunStats()).toMatchObject({ listQuality: "repeated", listed: listed.length });
-    // Only the first slot holds rows: the repeated list is not a new sample.
+    // A frozen list stays repeated run after run.
+    for (const minutes of [10, 20]) {
+      expect(await executeJob(censusJob(listed), database.db, minutesLater(minutes))).toBe("degraded");
+      expect(await lastRunStats()).toMatchObject({ listQuality: "repeated", listed: listed.length });
+    }
+    // Only the first slot holds rows: the repeated list is not a new sample, and coverage keeps measuring that slot.
     const rows = await database.db.select({ observedAt: censusObservations.observedAt }).from(censusObservations);
     expect(rows).toHaveLength(listed.length);
     expect(new Set(rows.map((row) => row.observedAt.toISOString()))).toEqual(new Set(["2026-10-20T14:10:00.000Z"]));
+    const coverage = await censusCoverage(database.db, new Date(), { minimumCcu: 100, withinMinutes: 15, listWithinHours: 24 });
+    expect(coverage.slot).toEqual(new Date("2026-10-20T14:10:00.000Z"));
     // A list that changed is stored again.
-    expect(await executeJob(censusJob([place(1, 501), ...filler()]), database.db, minutesLater(20))).toBe("success");
+    expect(await executeJob(censusJob([place(1, 501), ...filler()]), database.db, minutesLater(30))).toBe("success");
+    const changedAt = new Date("2026-10-20T14:40:00.000Z");
+    const changed = await database.db.select().from(censusObservations).where(eq(censusObservations.observedAt, changedAt));
+    expect(changed).toHaveLength(listed.length);
   });
 
   it("compares a rerun with the earlier slots, not with the run of its own slot", async () => {

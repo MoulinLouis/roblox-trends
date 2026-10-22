@@ -53,6 +53,17 @@ describe.skipIf(!hasTestDatabase)("job runs", () => {
       });
     });
 
+    it("takes any string value of the stat without a value", async () => {
+      await insertRun({ job: "census", status: "success", startedAt: "2026-10-20T10:00:00Z", stats: { listFingerprint: "abc" } });
+      await insertRun({ job: "census", status: "degraded", startedAt: "2026-10-20T11:00:00Z", stats: { listFingerprint: null } });
+      await insertRun({ job: "census", status: "success", startedAt: "2026-10-20T12:00:00Z", stats: { listFingerprint: 7 } });
+      await insertRun({ job: "census", status: "success", startedAt: "2026-10-20T13:00:00Z", stats: { listed: 9 } });
+      expect(await latestRunWithStat(database.db, "census", since, "listFingerprint")).toEqual({
+        slot: new Date("2026-10-20T10:00:00Z"),
+        stats: { listFingerprint: "abc" },
+      });
+    });
+
     it("only considers runs started at or after the cutoff", async () => {
       await insertRun({ job: "census", status: "success", startedAt: "2026-10-20T10:00:00Z", stats: { listQuality: "success" } });
       expect(await latestRunWithStat(database.db, "census", new Date("2026-10-20T10:00:00Z"), "listQuality", { value: "success" })).not.toBeNull();
