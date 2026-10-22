@@ -197,15 +197,16 @@ function formatExactValue(value: number, rank: boolean): string {
   return new Intl.NumberFormat("en", { maximumFractionDigits: 2 }).format(value);
 }
 
+// In UTC, like every time the dashboard shows: the server and the browser then render the same labels.
 function formatAxisTime(value: Date, timeRange: number): string {
   if (timeRange <= 48 * 60 * 60 * 1_000) {
-    return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(value);
+    return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC" }).format(value);
   }
-  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(value);
+  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", timeZone: "UTC" }).format(value);
 }
 
 function formatExactTime(value: Date): string {
-  return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(value);
+  return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(value);
 }
 
 function clamp(value: number, min: number, max: number): number {
