@@ -231,6 +231,21 @@ export const RADAR_CONFIG = {
   pageSize: 100,
 } as const;
 
+// The game page (src/app/games/[universeId]).
+export const GAME_VIEW_CONFIG = {
+  // The detailed curve: every observation of these last days.
+  recentDays: 14,
+  // Session length and favorites per visit come from the visits, favorites and hourly CCU of this window, and only
+  // when its observations span the minimum: a few hours of a new game say little about its sessions.
+  engagementDays: 7,
+  engagementMinimumHours: 24,
+  // Chart presence: the best rank over the last hours (monetization: Top Earning against Top Playing Now), and the
+  // hours ranked over the last days (retention: Top Revisited).
+  chartBestRankHours: 24,
+  chartRecentDays: 7,
+  timelineEntries: 40,
+} as const;
+
 // The Healthchecks checks (npm run provision:healthchecks). Periods come from JOB_CONFIG; graces from here.
 export const HEALTHCHECKS_CONFIG = {
   // A run may use its whole timeoutMs before it pings, so a heartbeat is late only after that plus this margin.
