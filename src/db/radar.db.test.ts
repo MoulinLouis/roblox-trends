@@ -259,6 +259,35 @@ describe.skipIf(!hasTestDatabase)("rising_games", () => {
     }
   });
 
+  it("plans its query with the aggregates' watermark as a constant, so no scan evaluates it per row", async () => {
+    // TimescaleDB replaces cagg_watermark() by its value only in a query that names the aggregates. Inlined from a SQL
+    // function, the query reached the planner too late, and a sequential scan of a whole materialized chunk evaluated
+    // the watermark once per row (11 s on production on 2026-10-24). auto_explain also logs nested statements' plans.
+    await market();
+    await refreshAggregates();
+    const explained = createDatabase(database.url, {
+      maxConnections: 1,
+      applicationName: "radar-test",
+      settings: {
+        session_preload_libraries: "auto_explain",
+        "auto_explain.log_min_duration": "0",
+        "auto_explain.log_nested_statements": "on",
+        client_min_messages: "log",
+      },
+    });
+    const plans: string[] = [];
+    explained.pool.on("connect", (client) => client.on("notice", (notice) => {
+      if (notice.message?.includes("plan:")) plans.push(notice.message);
+    }));
+    try {
+      expect(await query("growth", {}, explained.db)).toEqual(await query("growth"));
+    } finally {
+      await explained.pool.end();
+    }
+    expect(plans.some((plan) => plan.includes(" on games "))).toBe(true);
+    expect(plans.filter((plan) => plan.includes("cagg_watermark"))).toEqual([]);
+  });
+
   it("takes the freshest observation as the current CCU and never reads past as_of", async () => {
     await market();
     await writeGameObservations(database.db, [
