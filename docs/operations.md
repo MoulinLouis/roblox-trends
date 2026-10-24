@@ -196,7 +196,7 @@ Rules:
 | `/etc/radar/pgbackrest-cipher` | `root 600` | The backup encryption passphrase | generated once by `configure-backups.sh`; restored by the owner on a rebuild |
 | `/etc/radar/legacy.env` | `root 600` | `LEGACY_DATABASE_URL` (quoted, read-only Aiven role, no password) and `PGPASSWORD`; only for the v1 imports | owner |
 | `/etc/radar/aiven-ca.pem` | `root 644` | The Aiven CA certificate (`sslmode=verify-full`); not a secret | owner |
-| `/etc/radar/deploy.env` | `root` | Optional `RADAR_DEPLOY_BRANCH` (default `radar-v2`); absent until the cutover; not a secret | owner |
+| `/etc/radar/deploy.env` | `root` | Optional `RADAR_DEPLOY_BRANCH` (default `main`), only to deploy another branch; absent; not a secret | owner |
 | `/etc/radar/public-ssh-closed` | `root` | Empty marker (section 2) | Task B2 |
 | `/etc/pgbackrest/pgbackrest.conf` | `postgres 640` | The R2 keys and the cipher passphrase, copied from the two files above | `configure-backups.sh` |
 
@@ -241,7 +241,7 @@ Stopping a timer is not enough: every deploy run (every 5 minutes) starts the jo
 
 `radar-deploy.timer` runs `deploy.sh` every 5 minutes (`*:1/5:30`). One run:
 
-1. Takes the lock `/run/radar-deploy.lock` (a second run exits at once), fetches root's mirror `/opt/radar/repo.git` and takes the head of the deploy branch: `radar-v2`, or `RADAR_DEPLOY_BRANCH` from `/etc/radar/deploy.env`. Only the head counts: intermediate commits are skipped.
+1. Takes the lock `/run/radar-deploy.lock` (a second run exits at once), fetches root's mirror `/opt/radar/repo.git` and takes the head of the deploy branch: `main`, or `RADAR_DEPLOY_BRANCH` from `/etc/radar/deploy.env`. Only the head counts: intermediate commits are skipped.
 2. Stops if the head is already live and marked `.deployed`, and fails if `/opt/radar/releases/<sha>.failed` exists.
 3. Deploys only when the GitHub check run `validate` of that commit is completed with success. While CI runs or after it failed, the run logs it, pings `radar-deploy` as a success and deploys nothing; a GitHub or network outage is handled the same way.
 4. Builds the release in `/opt/radar/releases/<sha>` at `nice 10`: `npm ci` and `npm run build` as `radar`. Root then takes the release back, replaces `ops/` with its own copy from the mirror and refuses a symbolic link at `.next` or `.next/cache`; only `.next/cache` is handed back to `radar`.
@@ -261,7 +261,7 @@ Prefer `systemctl start radar-deploy` to running `deploy.sh` by hand: only the u
 
 ### Rollback
 
-The simplest rollback is a revert commit on `radar-v2`: CI and the next deploy run ship it within about 10 minutes. To switch back at once:
+The simplest rollback is a revert commit on `main`: CI and the next deploy run ship it within about 10 minutes. To switch back at once:
 
 ```bash
 systemctl stop radar-deploy.timer            # first, or the next run redeploys the branch head within 5 minutes
@@ -335,7 +335,7 @@ Power the old server off first: two servers must never archive into the same sta
 1. **Owner**: in the Hetzner Console, create a CAX21 with Ubuntu 24.04, the owner's SSH key and backups, without the Cloud Firewall for now. In the Tailscale admin console, remove the old `radar-prod` machine so the new one can take the name.
 2. From the owner's machine, over the new public address (root by key):
    ```bash
-   ssh root@<public-ip> 'command -v git >/dev/null || apt-get install -y -q git; git clone --quiet --branch radar-v2 https://github.com/MoulinLouis/roblox-trends.git /root/radar-bootstrap'
+   ssh root@<public-ip> 'command -v git >/dev/null || apt-get install -y -q git; git clone --quiet --branch main https://github.com/MoulinLouis/roblox-trends.git /root/radar-bootstrap'
    ssh root@<public-ip> /root/radar-bootstrap/ops/bin/provision.sh
    ```
 3. Join the tailnet: `tailscale up --hostname=radar-prod` on the server prints a login URL; **Owner** approves the machine and disables its key expiry. Then `tailscale set --auto-update` and `tailscale ip -4`; point `HostName` of both SSH aliases at the new address and check `ssh radar-prod true` and `ssh radar-analysis true`. Close public SSH with `ufw delete allow 22/tcp && touch /etc/radar/public-ssh-closed`, and **Owner** applies the Cloud Firewall (inbound UDP 41641 only) to the new server.

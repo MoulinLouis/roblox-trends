@@ -5,7 +5,7 @@
 set -euo pipefail
 
 readonly repository=MoulinLouis/roblox-trends
-readonly branch="${RADAR_DEPLOY_BRANCH:-radar-v2}"
+readonly branch="${RADAR_DEPLOY_BRANCH:-main}"
 readonly root=/opt/radar
 # Root's own clone, outside the radar home: the radar user can change neither what is deployed nor what root runs.
 readonly mirror="${root}/repo.git"

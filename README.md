@@ -162,7 +162,7 @@ Put the variable in `.env.test.local`, because Vitest runs with `NODE_ENV=test` 
 TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5433/postgres
 ```
 
-Without it, the database suites are reported as skipped locally. In CI a missing value fails the run. CI (`.github/workflows/ci.yml`) runs on pushes to `main` and `radar-v2`, on pull requests and on manual dispatch (`workflow_dispatch`), with Node.js 24 and a `timescale/timescaledb:2.30.2-pg18` service, and runs lint, typecheck, tests and build.
+Without it, the database suites are reported as skipped locally. In CI a missing value fails the run. CI (`.github/workflows/ci.yml`) runs on pushes to `main`, on pull requests and on manual dispatch (`workflow_dispatch`), with Node.js 24 and a `timescale/timescaledb:2.30.2-pg18` service, and runs lint, typecheck, tests and build.
 
 ## Verified external API behavior
 
@@ -194,6 +194,6 @@ v2 runs on one server, `radar-prod`: a Hetzner Cloud CAX21 (4 arm64 vCPU, 8 GB R
 - Timers: one systemd timer per job, with the intervals of `JOB_CONFIG`, plus the deploy, the system check, the backups and the restore test (`ops/systemd`).
 - Backups: pgBackRest archives WAL continuously to Cloudflare R2 and takes a daily backup (full on Sundays), for 14 days of point-in-time recovery; a weekly job restores the latest backup into a scratch cluster and checks it.
 - Monitoring: 16 Healthchecks.io checks, provisioned by `npm run provision:healthchecks`.
-- Deploys: every 5 minutes, the server deploys the newest commit of `radar-v2` once its CI passed. Until the phase 4 cutover, v1 keeps running from `main` on GitHub Actions.
+- Deploys: every 5 minutes, the server deploys the newest commit of `main` once its CI passed. v1 stopped on 2026-10-25, when its Aiven database ran out of disk space and went read-only.
 
 The runbook, with the layout, access, secrets, deploys, recovery, alerts and maintenance, is [`docs/operations.md`](docs/operations.md); the phase 1b plan with its execution notes is [`docs/plans/2026-10-21-radar-v2-phase-1b-infrastructure.md`](docs/plans/2026-10-21-radar-v2-phase-1b-infrastructure.md).

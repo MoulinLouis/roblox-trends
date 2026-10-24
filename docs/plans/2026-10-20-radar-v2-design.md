@@ -1,6 +1,6 @@
 # Roblox Trend Radar v2 design
 
-Validated with the repository owner on 2026-10-20. Updated on 2026-10-21 to match the phase 1a implementation (sections 2 and 3) and the phase 1b server (section 1). Updated on 2026-10-22 for the first dashboard (sections 3, 5A, 6 and 7).
+Validated with the repository owner on 2026-10-20. Updated on 2026-10-21 to match the phase 1a implementation (sections 2 and 3) and the phase 1b server (section 1). Updated on 2026-10-22 for the first dashboard (sections 3, 5A, 6 and 7). Updated on 2026-10-25 for the early v1 shutdown (sections 1 and 7).
 
 ## Why a v2
 
@@ -45,7 +45,7 @@ Out of scope for now:
 - Monitoring: Healthchecks.io runs two checks per job with its real period (one for every completed run, one for fully successful runs only), plus checks for the deploy timer, the system (disk usage above 70%, WAL archiving, TimescaleDB policies), backup completion and the restore test. Notifications go to email or Telegram.
 - Deployment:
   - GitHub Actions keeps CI.
-  - Deployment is pull-based: a timer on the server deploys, every 5 minutes, the newest commit of the deploy branch (`radar-v2` until the phase 4 cutover, then `main`) whose CI passed, so the server accepts no inbound connection except over Tailscale and GitHub holds no credential for it. It builds the release beside the live one, migrates (pausing the job timers only for migrations), switches the live release and restarts the dashboard. GitHub's scheduled-workflow delays and the 60-day inactivity rule do not apply.
+  - Deployment is pull-based: a timer on the server deploys, every 5 minutes, the newest commit of the deploy branch (`radar-v2` until 2026-10-25, then `main`) whose CI passed, so the server accepts no inbound connection except over Tailscale and GitHub holds no credential for it. It builds the release beside the live one, migrates (pausing the job timers only for migrations), switches the live release and restarts the dashboard. GitHub's scheduled-workflow delays and the 60-day inactivity rule do not apply.
 - Reproducibility: a provisioning script (`ops/bin/provision.sh`) and an operations runbook (`docs/operations.md`) rebuild the server from scratch and restore the database from the backups.
 - Local development: PGlite cannot load TimescaleDB, so local development uses a Docker container running PostgreSQL with TimescaleDB.
 
@@ -239,7 +239,7 @@ The Ideas, Trends and Settings pages are removed.
 - A Claude API failure leaves games "unclassified" and retries on the next run.
 - Roblox 429 responses trigger backoff and priority shedding.
 
-**Delivery phases.** Each phase is usable on its own. The v1 collector keeps running on Aiven until cutover.
+**Delivery phases.** Each phase is usable on its own. The v1 collector was meant to keep running on Aiven until cutover. On 2026-10-25 its database ran out of disk space and went read-only, so that part of phase 4 came first: the GitHub scheduled workflow was disabled, `radar-v2` was fast-forwarded into `main`, and `main` became the deploy branch.
 
 1. **Data:** server provisioning, monitoring, backups, v2 schema, legacy import, and the `census`, `poll`, `votes`, `charts`, `explore` and `thumbnails` collectors. New data accumulates from this point.
 2. **Classification:** Opus 5.5 against Haiku 5.5 on 200 games (the owner chooses the model), initial classification, clusters.

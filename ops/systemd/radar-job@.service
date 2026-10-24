@@ -1,6 +1,6 @@
 [Unit]
 Description=Radar collection job %i
-Documentation=https://github.com/MoulinLouis/roblox-trends/blob/radar-v2/docs/operations.md
+Documentation=https://github.com/MoulinLouis/roblox-trends/blob/main/docs/operations.md
 Wants=network-online.target
 After=network-online.target postgresql.service
 # Reports deaths the job cannot report itself: killed at TimeoutStartSec, crashed, or unable to start.
