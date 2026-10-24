@@ -89,6 +89,7 @@ cat >/etc/apt/apt.conf.d/52radar-unattended-upgrades <<'EOF'
 Unattended-Upgrade::Automatic-Reboot "true";
 Unattended-Upgrade::Automatic-Reboot-Time "04:48";
 EOF
+install -m 644 "${ops}/needrestart/90-radar.conf" /etc/needrestart/conf.d/90-radar.conf
 
 # SSH: keys only, root by key (the image allows passwords for other users). sshd keeps the first value it reads and
 # includes the drop-ins in name order, so this one sorts before any cloud-init drop-in, such as 50-cloud-init.conf.

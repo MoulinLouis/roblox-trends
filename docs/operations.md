@@ -50,7 +50,7 @@ node --version; pgbackrest version; tailscale version | head -n 1
 | `/etc/systemd/system/radar-*` | `root` | Copied from `ops/systemd` of the live release by every deploy |
 | `/usr/local/bin/radar` | symlink | `ops/bin/radar.sh` of the live release: `radar status` |
 | `/etc/ssh/sshd_config.d/01-radar.conf` | `root` | Keys only, root by key (`provision.sh`) |
-| `/etc/sysctl.d/90-radar.conf`, `/etc/systemd/journald.conf.d/90-radar.conf`, `/etc/apt/apt.conf.d/20auto-upgrades`, `/etc/apt/apt.conf.d/52radar-unattended-upgrades` | `root` | Swappiness, a 2 GB journal, daily security updates with a reboot at 04:48 UTC (`provision.sh`) |
+| `/etc/sysctl.d/90-radar.conf`, `/etc/systemd/journald.conf.d/90-radar.conf`, `/etc/apt/apt.conf.d/20auto-upgrades`, `/etc/apt/apt.conf.d/52radar-unattended-upgrades`, `/etc/needrestart/conf.d/90-radar.conf` | `root` | Swappiness, a 2 GB journal, daily security updates with a reboot at 04:48 UTC, no PostgreSQL restart by needrestart (`provision.sh`; the last one from `ops/needrestart`) |
 | `/root/radar-bootstrap` | `root` | Clone used for the first provisioning and deployment only |
 
 Users: `radar` (application, PostgreSQL role `radar` by peer authentication), `analysis` (owner's SSH key, mapped by `pg_ident` to the read-only role `radar_analysis`), `postgres`. The owner and maintenance sessions log in as `root` with the owner's key, over Tailscale only.
@@ -424,6 +424,8 @@ systemctl start radar-deploy.timer radar-system-check.timer
 
 Unattended upgrades install Ubuntu security updates only, daily, and reboot automatically at 04:48 UTC when one needs it (between job starts: a reboot costs at most one poll slot). Every unit, the timers and `tailscale serve` come back by themselves. The log is `/var/log/unattended-upgrades/unattended-upgrades.log`; `/var/run/reboot-required` exists while a reboot is pending.
 
+needrestart restarts the services that use an updated library, except PostgreSQL (`ops/needrestart/90-radar.conf`): restarting it ends every running job, which happened on 2026-10-22 (libc6) and 2026-10-24 (zlib1g). PostgreSQL picks the library up at the next reboot. `needrestart -b` lists it as `NEEDRESTART-SVC: postgresql@18-main.service` meanwhile; to restart it sooner, `systemctl restart postgresql@18-main` costs the running jobs their run.
+
 ### PostgreSQL minor releases
 
 PGDG is not an unattended-upgrades origin, because a PostgreSQL minor release once broke the TimescaleDB extension ABI. Apply a minor release by hand, once CI passes on the same minor version. The version CI runs, on the owner's machine:
@@ -487,13 +489,13 @@ Expected: 16 `Check created` or `Check updated` lines.
 
 ### Provisioning changes
 
-Deploys do not apply `provision.sh`. Once a change to it is live, rerun `/opt/radar/current/ops/bin/provision.sh` with the job timers disabled: it restarts PostgreSQL when its configuration changed, and it upgrades PostgreSQL, Node.js, pgBackRest and Tailscale to their newest packages. Likewise rerun `configure-database.sh` after a change to `ops/postgresql/*.sql`, and `configure-backups.sh` after a change to the backup settings (it reloads PostgreSQL, or restarts it when archiving was off).
+Deploys do not apply `provision.sh`. Once a change to it is live, rerun `/opt/radar/current/ops/bin/provision.sh` with the job timers disabled: it restarts PostgreSQL when its configuration changed, and it upgrades PostgreSQL, Node.js, pgBackRest and Tailscale to their newest packages. A change to `ops/needrestart/90-radar.conf` alone needs no rerun: `install -m 644 /opt/radar/current/ops/needrestart/90-radar.conf /etc/needrestart/conf.d/90-radar.conf`. Likewise rerun `configure-database.sh` after a change to `ops/postgresql/*.sql`, and `configure-backups.sh` after a change to the backup settings (it reloads PostgreSQL, or restarts it when archiving was off).
 
 ## 9. Lockout recovery
 
 When SSH over Tailscale fails (Tailscale logged out, a broken sshd or ufw configuration, a lost key):
 
-1. Hetzner Console → the server → Rescue tab → "Reset root password", then open the web console (Console button) and log in as `root` with that password. The password works only there: sshd refuses passwords.
+1. Hetzner Console → the server → Rescue tab → "Reset root password", then open the web console (Console button) and log in as `root` with that password. The password works only there: sshd refuses passwords. The console types some symbols wrongly from a non-US keyboard layout (from an AZERTY keyboard, `|` becomes `\`, `:` becomes `;` and `_` becomes `-`): prefer commands without them, and complete paths such as `authorized_keys` with Tab.
 2. Diagnose: `tailscale status`, `systemctl status tailscaled ssh`, `ufw status verbose`, `sshd -t`. `tailscale up --hostname=radar-prod` prints a login URL when the machine was logged out.
 3. If public SSH is needed: `ufw allow 22/tcp` restores it in ufw, and **Owner** adds an inbound TCP 22 rule to the Hetzner Cloud Firewall; then `ssh root@157.90.125.226` works with the key. Close both again once Tailscale works: `ufw delete allow 22/tcp` and remove the firewall rule.
 4. If the system does not boot: Rescue tab → enable the rescue system with the owner's key, power-cycle the server, open public SSH in the Cloud Firewall as above, `ssh root@157.90.125.226`, then mount the root partition (`lsblk` shows it) to repair it.

@@ -84,6 +84,13 @@ describe("operations scripts", () => {
     expect(steps).toEqual([...steps].sort((a, b) => a - b));
   });
 
+  it("keeps needrestart from restarting PostgreSQL in the middle of the jobs", () => {
+    const dropIn = readFileSync(new URL("../../../ops/needrestart/90-radar.conf", import.meta.url), "utf8");
+    // needrestart matches these keys against the unit name, here postgresql@18-main.service.
+    expect(dropIn).toContain("$nrconf{override_rc}{qr(^postgresql)} = 0;");
+    expect(script("provision.sh")).toContain('install -m 644 "${ops}/needrestart/90-radar.conf" /etc/needrestart/conf.d/90-radar.conf');
+  });
+
   it("pins the TimescaleDB version of the CI image", () => {
     const image = /timescale\/timescaledb:([\d.]+)-pg18/.exec(readFileSync(new URL("../../../.github/workflows/ci.yml", import.meta.url), "utf8"));
     expect(script("provision.sh")).toContain(`readonly timescaledb_version=${image?.[1]}`);

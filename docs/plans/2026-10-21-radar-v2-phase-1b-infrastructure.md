@@ -2079,7 +2079,7 @@ Every step is a **Gate**. v1 keeps running untouched; nothing here writes to Aiv
   - **Active-set query** (`src/db/active-set.ts`): 56 ms. The real-time half of `game_hourly` reads only the newest `game_observations` chunk, from the watermark through the `observed_at` index; the materialized half excludes 3 chunks at startup.
   - **`games` updates:** 634,800, 90.5% HOT, no dead tuples.
   - **Follow-ups:**
-    - Keep needrestart from restarting PostgreSQL during the day (for example `$nrconf{override_rc}{qr(^postgresql)} = 0;` in `provision.sh`, leaving it to the 04:48 reboot), or move apt-daily-upgrade next to the reboot time.
+    - Keep needrestart from restarting PostgreSQL during the day (for example `$nrconf{override_rc}{qr(^postgresql)} = 0;` in `provision.sh`, leaving it to the 04:48 reboot), or move apt-daily-upgrade next to the reboot time. Done on 2026-10-25 with the first option (`ops/needrestart/90-radar.conf`), after it happened again with zlib1g on 2026-10-24.
     - A poll run whose every batch failed is degraded, not failed: the job check stays green and only the quality check alerts, after an hour. Thumbnails already fails such a run.
     - Roblox answers some requested ids with `id: 0`, which poll skips as malformed and counts as missing (a few per run).
     - Measure the compression ratio on 2026-10-29, and start the first-week measurements of the design (the CCU at which Rolimon's first lists a new game, how often it refreshes its list, the 429 rate) in an analysis session at the end of the week.
