@@ -12,7 +12,7 @@ export type RadarSort = (typeof RADAR_SORTS)[number];
 // baseline (v1 hours, or a census outage then).
 export type WeekBaseline = "tracked" | "census" | "new" | "unlisted" | "unknown";
 
-// One row of rising_games (drizzle/0007_rising_games.sql). Sample counts are hourly buckets.
+// One row of rising_games (drizzle/0009_rising_games_execute.sql). Sample counts are hourly buckets.
 export interface RisingGame {
   universeId: number;
   name: string;

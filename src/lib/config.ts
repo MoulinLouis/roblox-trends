@@ -238,8 +238,8 @@ export const STATUS_CONFIG = {
   summaryWindowHours: 24,
 } as const;
 
-// The Radar page and rising_games (drizzle/0007_rising_games.sql, design section 5A). The SQL function takes every
-// value below as a parameter; docs/operations.md shows a call with them for analysis sessions.
+// The Radar page and rising_games (drizzle/0009_rising_games_execute.sql, design section 5A). The SQL function takes
+// every value below as a parameter; docs/operations.md shows a call with them for analysis sessions.
 export const RADAR_CONFIG = {
   // Filters on the real age, from the Roblox creation date.
   ageOptionsDays: [14, 30, 90],

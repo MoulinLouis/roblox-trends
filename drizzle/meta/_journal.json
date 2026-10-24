@@ -64,6 +64,13 @@
       "when": 1792690310861,
       "tag": "0008_discovery_candidates",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792883246839,
+      "tag": "0009_rising_games_execute",
+      "breakpoints": true
     }
   ]
 }

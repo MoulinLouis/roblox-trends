@@ -56,7 +56,7 @@ Continuous aggregates, kept permanently. They are real-time: buckets not yet mat
 
 The view `game_daily_all` merges `game_daily` (`origin = 'observed'`) with `game_daily_legacy` (`origin = 'legacy'`) for the days `game_daily` lacks.
 
-The function `rising_games(as_of, …)` (`drizzle/0007_rising_games.sql`) computes the Radar page from `game_hourly` and `census_hourly` for any past hour: weekday-safe growth against the same hours a week earlier (through the census of its places for a game poll did not read then), growth against the day before, velocity from 100 to 1,000 and from 1,000 to 10,000 CCU, and an event flag, each with its sample size. It sorts and limits the rows itself. Its parameters come from `RADAR_CONFIG`.
+The function `rising_games(as_of, …)` (`drizzle/0009_rising_games_execute.sql`, first defined in 0007) computes the Radar page from `game_hourly` and `census_hourly` for any past hour: weekday-safe growth against the same hours a week earlier (through the census of its places for a game poll did not read then), growth against the day before, velocity from 100 to 1,000 and from 1,000 to 10,000 CCU, and an event flag, each with its sample size. It sorts and limits the rows itself. Its parameters come from `RADAR_CONFIG`. It is PL/pgSQL and runs its query through `EXECUTE … USING`, planned at every call with the arguments as constants: TimescaleDB replaces a continuous aggregate's watermark by its value only in a query that names the aggregate, which an inlined SQL function does not, and a scan then evaluated the watermark once per row.
 
 Regular tables (`src/db/schema.ts`):
 
