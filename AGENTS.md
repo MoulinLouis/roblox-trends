@@ -9,7 +9,7 @@
 - Preserve collection idempotency (observations are keyed by slot) and isolate external-source failures.
 - Use `npm run db:migrate` and `npm run collect` for local setup with live data; `npm run status` reports collection health.
 - Never insert synthetic or demo games into the application database. Test fixtures belong only in disposable test databases.
-- `LEGACY_DATABASE_URL` points to the production v1 database. Only `npm run import:legacy` reads it, in read-only transactions, and only during the documented production runbook steps (the first production deployment in phase 1b, the final incremental import in phase 4), always with `DATABASE_URL` set to the v2 database. Never point `DATABASE_URL` at the v1 database.
+- `LEGACY_DATABASE_URL` points to a v1 database. The production one (Aiven) was deleted on 2026-10-25, after the final incremental import; its dumps are in R2 under `v1/`. Only `npm run import:legacy` reads it, in read-only transactions, always with `DATABASE_URL` set to the v2 database. Never point `DATABASE_URL` at a v1 database.
 - Before handing off changes, run `npm run lint`, `npm run typecheck`, `npm run test`, and `npm run build`.
 
 <!-- BEGIN:nextjs-agent-rules -->

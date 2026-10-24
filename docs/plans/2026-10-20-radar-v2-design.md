@@ -245,9 +245,9 @@ The Ideas, Trends and Settings pages are removed.
 2. **Classification:** Opus 5.5 against Haiku 5.5 on 200 games (the owner chooses the model), initial classification, clusters.
 3. **Analysis:** SQL views and functions, then backtest validation.
 4. **Dashboard and cutover:** the remaining pages and the full versions of the first ones (which ship between phases 1 and 2, see section 6), then removal of v1 code (ideas, trends, agent brief, Discord reports, scheduler leases).
-   - A final incremental import from Aiven closes any gap.
-   - The GitHub scheduled workflow is disabled.
-   - Aiven stays read-only for 14 days, then is deleted.
+   - A final incremental import from Aiven closes any gap (done on 2026-10-24).
+   - The GitHub scheduled workflow is disabled (done on 2026-10-25).
+   - Aiven stays read-only for 14 days, then is deleted (deleted on 2026-10-25, the day it went read-only, after a last dump of the v1 tables to R2 under `v1/`).
 
 `AGENTS.md` and the README are updated to the v2 commands and local setup.
 

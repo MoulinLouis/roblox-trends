@@ -194,8 +194,6 @@ Rules:
 | `/etc/radar/healthchecks.env` | `root 600` | `HEALTHCHECKS_PING_BASE=https://hc-ping.com/<ping-key>` | owner |
 | `/etc/radar/r2.env` | `root 600` | `R2_ENDPOINT` (the host only, `<account-id>.r2.cloudflarestorage.com`, with or without `https://`), `R2_BUCKET` (`radar-backups`), `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | owner |
 | `/etc/radar/pgbackrest-cipher` | `root 600` | The backup encryption passphrase | generated once by `configure-backups.sh`; restored by the owner on a rebuild |
-| `/etc/radar/legacy.env` | `root 600` | `LEGACY_DATABASE_URL` (quoted, read-only Aiven role, no password) and `PGPASSWORD`; only for the v1 imports | owner |
-| `/etc/radar/aiven-ca.pem` | `root 644` | The Aiven CA certificate (`sslmode=verify-full`); not a secret | owner |
 | `/etc/radar/deploy.env` | `root` | Optional `RADAR_DEPLOY_BRANCH` (default `main`), only to deploy another branch; absent; not a secret | owner |
 | `/etc/radar/public-ssh-closed` | `root` | Empty marker (section 2) | Task B2 |
 | `/etc/pgbackrest/pgbackrest.conf` | `postgres 640` | The R2 keys and the cipher passphrase, copied from the two files above | `configure-backups.sh` |
@@ -207,7 +205,6 @@ The owner's password manager holds what the repository and the server cannot giv
 - the R2 access key ID, secret access key, endpoint host and bucket name;
 - the pgBackRest cipher passphrase (without it and the R2 keys, no backup can be restored);
 - the Healthchecks ping key and read-write API key;
-- the Aiven read-only password, until Aiven is deleted after the phase 4 cutover;
 - the Hetzner, Tailscale, Cloudflare, Healthchecks.io and GitHub account credentials.
 
 With them and this repository, a new server can be rebuilt and restored (section 6). The SSH key lives on the owner's machine; if it is lost, use the lockout recovery (section 9).
@@ -298,6 +295,7 @@ A migration must stay compatible with the previous release, which may still be r
 ### What runs
 
 - pgBackRest archives WAL continuously to Cloudflare R2 (bucket `radar-backups`, path `/pgbackrest`, encrypted, asynchronous), at least one segment every 5 minutes while the database writes (`archive_timeout`).
+- The same bucket keeps the v1 history under `v1/`: `pg_dump` custom-format dumps of the four v1 tables taken on 2026-10-21 and 2026-10-24, the only copies since the v1 database was deleted on 2026-10-25. pgBackRest's expiry manages `/pgbackrest` only and never touches them.
 - `radar-backup@diff` runs Monday to Saturday at 03:10 UTC, `radar-backup@full` on Sunday at 03:10. Each backup also runs `pgbackrest check` and `info`. Full backups are kept for 14 days, which gives point-in-time recovery over at least the last 14 days.
 - `radar-restore-test` restores the latest backup every Sunday at 05:30 into a scratch cluster (`/var/lib/postgresql/radar-restore-test`, port 5499, archiving off), checks that it holds at least 95% of the production games and, once jobs have run, a job run less than 2 days old, then deletes it and logs `Restore test passed: …`. It needs free space for the data plus 8 GB, so it starts failing for lack of room around 55% disk use, an early warning before the system check's 70%.
 - Hetzner's daily server backups are the second copy, for when the R2 repository itself is lost; restoring one loses everything after that day.
@@ -351,7 +349,7 @@ Power the old server off first: two servers must never archive into the same sta
 6. `/root/radar-bootstrap/ops/bin/configure-backups.sh` in full: its `stanza-create` is a no-op, then it turns archiving on and runs `pgbackrest check`.
 7. `/root/radar-bootstrap/ops/bin/configure-database.sh`: writes `radar.env`; the roles already came back with the restore, and the grants are idempotent.
 8. `/root/radar-bootstrap/ops/bin/deploy.sh`: clones the mirror, builds the branch head, runs any newer migration and installs the units. From now on, run the scripts from `/opt/radar/current/ops/bin`.
-9. **Owner** writes `/etc/radar/healthchecks.env` (and `legacy.env` with `aiven-ca.pem` only if an import is still to come).
+9. **Owner** writes `/etc/radar/healthchecks.env`.
 10. Enable everything:
     ```bash
     systemctl enable --now radar-web && tailscale serve --bg 3000
