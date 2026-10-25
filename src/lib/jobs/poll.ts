@@ -4,10 +4,12 @@ import { markGameDetailsAttempted, upsertGameDetails } from "@/db/games";
 import { writeGameObservations } from "@/db/observations";
 import { getHttpRequestMetrics } from "@/lib/api/http";
 import type { RobloxApi } from "@/lib/api/roblox";
-import { JOB_CONFIG } from "@/lib/config";
+import { JOB_CONFIG, RADAR_CONFIG } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
 import { evaluateCollectionQuality, httpMetricsSince, isRateLimited, runBatchesWithDeadline } from "./batching";
 import type { JobDefinition } from "./runner";
+
+const dayMs = 24 * 60 * 60 * 1000;
 
 export interface PollDependencies {
   roblox: Pick<RobloxApi, "getGameDetails">;
@@ -19,26 +21,43 @@ export interface PollDependencies {
   candidatesPerRun?: number;
 }
 
+export interface PollLimits {
+  hotUniverses: number;
+  tailUniversesPerRun: number;
+  // A tail game created within this many days is young; the others are established.
+  youngMaximumAgeDays: number;
+  // How long each lane of the tail should wait between two requests.
+  tailRefreshMinutes: Record<TailLane, number>;
+}
+
+export type TailLane = "young" | "established";
+
+// A game the run requests: an active game, or a promotion candidate that `games` does not hold yet.
+export type PlannedUniverse = Omit<ActiveUniverse, "robloxCreatedAt">;
+
 export interface PollPlan {
   // The first games of the active set, in priority order: requested on every run.
   hot: ActiveUniverse[];
   // Untracked universes from the promotion queue, busiest first, with the CCU their discovery listed as priority.
-  candidates: ActiveUniverse[];
+  candidates: PlannedUniverse[];
   // Every other active game.
   tail: ActiveUniverse[];
-  // The tail games requested this run, longest since their latest details request first.
+  // The tail games requested this run, furthest past their lane's refresh interval first.
   tailRequested: ActiveUniverse[];
   // The hot set, the candidates, then the tail slice: the deadline sheds the end of this order first.
-  requested: ActiveUniverse[];
+  requested: PlannedUniverse[];
 }
 
 // The active set holds more games than one run can request within the game details limit. The hot set is requested
 // on every run; the tail rotates, since every game requested moves behind the others: a game polled gets fresh
-// details, and a game Roblox does not answer gets a new request time, so it is retried once per tail cycle. Candidates
-// take the place of as many tail games, so promoting them adds no request to the run.
+// details, and a game Roblox does not answer gets a new request time, so it is retried once per interval. Young and
+// established tail games wait their own lane's interval: each run requests the games furthest past it, so when the
+// tail outgrows the budget both lanes slow down in proportion. Candidates take the place of as many tail games, so
+// promoting them adds no request to the run.
 export function planPollRun(
   active: readonly ActiveUniverse[],
-  limits: { hotUniverses: number; tailUniversesPerRun: number },
+  limits: PollLimits,
+  now: Date,
   promotionCandidates: readonly PromotionCandidate[] = [],
 ): PollPlan {
   const hot = active.slice(0, limits.hotUniverses);
@@ -49,16 +68,42 @@ export function planPollRun(
     lastDetailsAt: null,
     lastDetailsRequestAt: null,
   }));
-  const tailRequested = [...tail].sort(byOldestRequest).slice(0, limits.tailUniversesPerRun - candidates.length);
+  const tailRequested = tail
+    .map((game) => ({ game, overdue: overdueRatio(game, limits, now) }))
+    .sort((left, right) =>
+      left.overdue === right.overdue ? left.game.universeId - right.game.universeId : left.overdue > right.overdue ? -1 : 1,
+    )
+    .slice(0, limits.tailUniversesPerRun - candidates.length)
+    .map(({ game }) => game);
   return { hot, candidates, tail, tailRequested, requested: [...hot, ...candidates, ...tailRequested] };
 }
 
-// Never-requested games first, then the oldest request, then the lowest universe id.
-function byOldestRequest(left: ActiveUniverse, right: ActiveUniverse): number {
-  const leftAt = left.lastDetailsRequestAt?.getTime() ?? Number.NEGATIVE_INFINITY;
-  const rightAt = right.lastDetailsRequestAt?.getTime() ?? Number.NEGATIVE_INFINITY;
-  if (leftAt !== rightAt) return leftAt < rightAt ? -1 : 1;
-  return left.universeId - right.universeId;
+// Young when created less than youngMaximumAgeDays ago, the comparison of rising_games' age filter: a game exactly that
+// old is established.
+export function tailLane(game: Pick<ActiveUniverse, "robloxCreatedAt">, now: Date, youngMaximumAgeDays: number): TailLane {
+  return game.robloxCreatedAt.getTime() > now.getTime() - youngMaximumAgeDays * dayMs ? "young" : "established";
+}
+
+// The wait since the game's latest details request, in intervals of its lane: 1 when it is exactly due. A game never
+// requested comes first.
+function overdueRatio(game: ActiveUniverse, limits: PollLimits, now: Date): number {
+  if (game.lastDetailsRequestAt === null) return Number.POSITIVE_INFINITY;
+  const intervalMs = limits.tailRefreshMinutes[tailLane(game, now, limits.youngMaximumAgeDays)] * 60_000;
+  return (now.getTime() - game.lastDetailsRequestAt.getTime()) / intervalMs;
+}
+
+// medianTailDetailsMinutes for each lane of the tail.
+export function medianTailDetailsMinutesByLane(
+  tailRequested: readonly ActiveUniverse[],
+  unanswered: ReadonlySet<number>,
+  now: Date,
+  youngMaximumAgeDays: number,
+): Record<TailLane, number | null> {
+  const lane = (wanted: TailLane) => tailRequested.filter((game) => tailLane(game, now, youngMaximumAgeDays) === wanted);
+  return {
+    young: medianTailDetailsMinutes(lane("young"), unanswered, now),
+    established: medianTailDetailsMinutes(lane("established"), unanswered, now),
+  };
 }
 
 // How long the tail waits between two refreshes: the median age of the details of the tail games requested. Games
@@ -83,9 +128,11 @@ export function medianTailDetailsMinutes(
 export function createPollJob(dependencies: PollDependencies): JobDefinition {
   const config = JOB_CONFIG.poll;
   const clock = dependencies.clock ?? Date.now;
-  const limits = {
+  const limits: PollLimits = {
     hotUniverses: dependencies.hotUniverses ?? config.hotUniverses,
     tailUniversesPerRun: dependencies.tailUniversesPerRun ?? config.tailUniversesPerRun,
+    youngMaximumAgeDays: Math.max(...RADAR_CONFIG.ageOptionsDays),
+    tailRefreshMinutes: config.tailRefreshMinutes,
   };
   const candidatesPerRun = dependencies.candidatesPerRun ?? config.candidatesPerRun;
   return {
@@ -99,7 +146,7 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
         maximumAgeHours: config.candidateMaximumAgeHours,
         retryHours: config.candidateRetryHours,
       });
-      const plan = planPollRun(active, limits, promotionCandidates);
+      const plan = planPollRun(active, limits, now, promotionCandidates);
       const { requested } = plan;
       const httpBefore = getHttpRequestMetrics();
       // The universes of the batches whose request failed: Roblox did not answer for them, but it said nothing of them.
@@ -175,6 +222,7 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
           hot: plan.hot.length,
           candidates: plan.candidates.length,
           tail: plan.tail.length,
+          youngTail: plan.tail.filter((game) => tailLane(game, now, limits.youngMaximumAgeDays) === "young").length,
           tailRequested: plan.tailRequested.length,
           requested: requested.length,
           attempted: outcome.attempted,
@@ -186,7 +234,12 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
           // The priority of the first requested game left out: every game before it in the request order (the hot
           // set by priority, then the tail by request age) was attempted.
           shedBelowCcu: outcome.skippedItems > 0 ? requested[outcome.attempted].priority : null,
-          medianTailDetailsMinutes: medianTailDetailsMinutes(plan.tailRequested, new Set(missing), now),
+          medianTailDetailsMinutes: medianTailDetailsMinutesByLane(
+            plan.tailRequested,
+            new Set(missing),
+            now,
+            limits.youngMaximumAgeDays,
+          ),
           // The requested games Roblox did not answer: every requested game is answered, missing or skipped.
           missing: missing.length,
           missingSample: missing.slice(0, config.missingSampleSize),

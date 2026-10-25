@@ -5,6 +5,7 @@ import {
   formatDay,
   formatElapsed,
   formatHours,
+  formatMinutes,
   formatMultiplier,
   formatPercent,
   formatUtc,
@@ -49,6 +50,13 @@ describe("format", () => {
     expect(formatElapsed(minutesAgo(48 * 60), now)).toBe("2d");
     // A clock skew never prints a negative age.
     expect(formatElapsed(new Date(now.getTime() + 60_000), now)).toBe("0m");
+  });
+
+  it("formats a span of minutes like an elapsed time", () => {
+    expect(formatMinutes(15)).toBe("15m");
+    expect(formatMinutes(119.9)).toBe("119m");
+    expect(formatMinutes(6 * 60)).toBe("6h");
+    expect(formatMinutes(3 * 24 * 60)).toBe("3d");
   });
 
   it("formats durations in hours", () => {

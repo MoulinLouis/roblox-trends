@@ -88,16 +88,23 @@ export const JOB_CONFIG = {
     // before the deadline and is still in its retries.
     deadlineMs: 7.5 * 60_000,
     batchSize: 50,
-    // The active set (about 4,300 games on 2026-10-21, growing toward 5,000 as census promotes every place at or above
-    // 100 CCU) no longer fits one run. Each run requests the hot set, the first hotUniverses of the active set in
-    // priority order, then at most tailUniversesPerRun of the other games, the tail, whose details were stored or
-    // requested the longest ago (never either first): a game Roblox does not answer is retried once per tail cycle,
-    // not on every run. The hot set goes first, so the deadline sheds tail games before any hot game.
+    // The active set (about 4,300 games on 2026-10-21, 9,768 on 2026-10-25 once explore promoted what it found) no
+    // longer fits one run. Each run requests the hot set, the first hotUniverses of the active set in priority order,
+    // then at most tailUniversesPerRun of the other games, the tail, furthest past their lane's refresh interval
+    // (never-requested games first): a game Roblox does not answer is retried once per interval, not on every run.
+    // The hot set goes first, so the deadline sheds tail games before any hot game.
     // Hot 2,000 = 40 requests, plus tail 1,150 = 23 requests, gives 63 requests × 7 s ≈ 441 s, within the 450 s
-    // deadline. With about 2,300–3,000 tail games, each is refreshed every 20–30 minutes; census still counts their CCU
-    // every 10 minutes.
+    // deadline.
     hotUniverses: 2_000,
     tailUniversesPerRun: 1_150,
+    // How long a tail game waits between two requests. Young games, created within the Radar's widest age filter
+    // (RADAR_CONFIG.ageOptionsDays), are the only ones the Radar lists, and their hourly readings date its crossings
+    // and pair its weekday-safe growth. Census counts the CCU of nearly every established tail game every 10 minutes,
+    // so poll adds little more than their visits, favorites and metadata; a game that breaks out joins the hot set.
+    // On 2026-10-25 the tail held 2,240 young and 5,528 established games: about 2,240 × 2 + 5,528 / 4 ≈ 5,860
+    // requests an hour, against 6,300–6,900 (1,150 a run, fewer when candidates take their place). One rotating tail
+    // refreshed every game every 70 minutes. When the tail outgrows the budget, both lanes slow down in proportion.
+    tailRefreshMinutes: { young: 30, established: 240 },
     // Of the games requested (the hot set and the tail slice), not of the whole active set.
     minimumReturnedShare: 0.95,
     maximumConsecutiveFailedBatches: 3,
@@ -228,12 +235,13 @@ export const ACTIVE_SET_CONFIG = {
 
 export const STATUS_CONFIG = {
   coverageMinimumCcu: 100,
-  // Observations carry their slot, the run's start floored to 10 minutes, and a game is read up to the 7.5-minute
-  // deadline into its run. Poll reads a tail game every 2–3 runs (JOB_CONFIG.poll.tailUniversesPerRun), so its next
-  // observation arrives up to about 38 minutes after the slot of its last one, and a 20-minute window would count a
-  // healthy rotation as untracked. 60 minutes also covers a tail of up to about 5,700 games (5 runs) or a run that
-  // shed its tail.
-  trackedWithinMinutes: 60,
+  // A listed place counts as tracked when poll read its game within this window. Poll reads an established tail game
+  // every 4 hours (JOB_CONFIG.poll.tailRefreshMinutes), and an observation carries its slot, the run's start floored to
+  // 10 minutes, while the game is read up to the 7.5-minute deadline into its run: 6 hours leaves room for a few shed
+  // runs. A place outside it is one the radar does not follow at all (unresolved, never promoted, or a game Roblox
+  // does not answer) or a tail that fell far behind; how long each lane waits is the tail refresh (poll's
+  // medianTailDetailsMinutes).
+  trackedWithinMinutes: 6 * 60,
   // The window of the run counts, the 429 figures, the last error, the census list lookup and the data totals.
   summaryWindowHours: 24,
 } as const;
@@ -266,7 +274,8 @@ export const RADAR_CONFIG = {
   // the radar (poll or census) saw the game below the threshold it starts from.
   velocityThresholds: { start: 100, middle: 1_000, end: 10_000 },
   // Velocity is measured only when the reading before each crossing is at most this many hours older: v2 reads every
-  // game at least hourly, while v1 read 6–7 hours a day, so a crossing across a longer gap cannot be dated.
+  // game the Radar lists at least hourly (poll every 30 minutes, census every 10), while v1 read 6–7 hours a day, so a
+  // crossing across a longer gap cannot be dated.
   velocityMaximumGapHours: 2,
   pageSize: 100,
 } as const;

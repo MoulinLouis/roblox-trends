@@ -21,6 +21,7 @@ describe.skipIf(!hasTestDatabase)("readHealth", () => {
     expect(health.coverage.slot).toBeNull();
     expect(health.totals).toEqual({ games: 0, pollObservations: 0, censusRows: 0 });
     expect(health.rateLimits).toEqual({ responses: 0, attempts: 0, runs: 0, recorded: false });
+    expect(health.tailRefresh.map((lane) => lane.minutes)).toEqual([null, null]);
     expect(health.system.diskUsedShare).toBeGreaterThan(0);
     expect(health.system.policies).toBeGreaterThan(0);
     // Test databases pause every TimescaleDB policy, which the system check reports.

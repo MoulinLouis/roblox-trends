@@ -1,5 +1,6 @@
 import type { CensusCoverage, DataTotals, JobSummary } from "@/db/status";
-import { formatElapsed, formatUtc } from "@/lib/format";
+import { formatElapsed, formatMinutes, formatUtc } from "@/lib/format";
+import type { TailLane } from "@/lib/jobs/poll";
 import type { JobName } from "@/lib/jobs/types";
 
 export interface StatusSnapshot {
@@ -9,6 +10,8 @@ export interface StatusSnapshot {
   jobs: readonly JobSummary[];
   coverage: CensusCoverage;
   totals: DataTotals;
+  // How long each lane of poll's tail should wait between two requests (JOB_CONFIG.poll.tailRefreshMinutes).
+  tailRefreshMinutes: Record<TailLane, number>;
 }
 
 // The stats the design asks to watch in the first week, read from each job's latest completed run. Paths follow
@@ -24,8 +27,8 @@ export const WATCHED_STATS: Partial<Record<JobName, { values: readonly string[];
   // stoppedBy tells games shed at the deadline from games skipped after a rate limit or repeated failed batches;
   // requested is the hot set plus the tail slice the run planned, and skipped the part of it left out; missing counts
   // the requested games Roblox did not answer (job_runs.stats.missingSample lists some);
-  // medianTailDetailsMinutes shows how long the tail games wait between two refreshes; http.endpointIntervalMs shows
-  // the game details spacing the run ended with, above its configured value after a 429.
+  // medianTailDetailsMinutes shows how long the young and established tail games wait between two refreshes;
+  // http.endpointIntervalMs shows the game details spacing the run ended with, above its configured value after a 429.
   poll: {
     values: [
       "rateLimited",
@@ -35,7 +38,8 @@ export const WATCHED_STATS: Partial<Record<JobName, { values: readonly string[];
       "skipped",
       "missing",
       "shedBelowCcu",
-      "medianTailDetailsMinutes",
+      "medianTailDetailsMinutes.young",
+      "medianTailDetailsMinutes.established",
       "http.endpointIntervalMs",
     ],
   },
@@ -49,9 +53,9 @@ const messageSeparator = " … ";
 const columnGap = "  ";
 const counts = new Intl.NumberFormat("en-US");
 
-// A compact terminal view: one row per job, its watched stats and last error under it, then rate limits, coverage and
-// totals.
-export function formatStatusReport({ now, windowHours, jobs, coverage, totals }: StatusSnapshot): string {
+// A compact terminal view: one row per job, its watched stats and last error under it, then rate limits, coverage, the
+// tail refresh and totals.
+export function formatStatusReport({ now, windowHours, jobs, coverage, totals, tailRefreshMinutes }: StatusSnapshot): string {
   const header = ["job", "latest run", "last completed", "runs", "degraded", "failed", "rate-limited", "429s/requests"];
   const rows = jobs.map((job) => [
     job.job,
@@ -87,6 +91,7 @@ export function formatStatusReport({ now, windowHours, jobs, coverage, totals }:
     "",
     rateLimitLine(jobs, windowHours),
     coverageLine(now, coverage, windowHours),
+    tailRefreshLine(tailRefresh(jobs, tailRefreshMinutes)),
     totalsLine(totals, windowHours),
   ].join("\n");
 }
@@ -120,6 +125,32 @@ export function rateLimitTotals(jobs: readonly JobSummary[]): RateLimitTotals {
   };
 }
 
+export interface TailRefresh {
+  lane: TailLane;
+  // The median age of the details of the lane's tail games in poll's last completed run (medianTailDetailsMinutes);
+  // null when that run requested none of them, or when there is no such run.
+  minutes: number | null;
+  targetMinutes: number;
+}
+
+// How long each lane of poll's tail waits between two refreshes, against how long it should.
+export function tailRefresh(jobs: readonly JobSummary[], targets: Record<TailLane, number>): TailRefresh[] {
+  const stats = jobs.find((job) => job.job === "poll")?.lastCompleted?.stats ?? {};
+  return (["young", "established"] as const).map((lane) => {
+    const minutes = statAt(stats, `medianTailDetailsMinutes.${lane}`);
+    return { lane, minutes: typeof minutes === "number" ? minutes : null, targetMinutes: targets[lane] };
+  });
+}
+
+function tailRefreshLine(lanes: readonly TailRefresh[]): string {
+  const label: Record<TailLane, string> = { young: "young games", established: "established" };
+  const parts = lanes.map(
+    ({ lane, minutes, targetMinutes }) =>
+      `${label[lane]} ${minutes === null ? "n/a" : `${counts.format(minutes)} min`} (target ${counts.format(targetMinutes)})`,
+  );
+  return `Tail refresh in the last poll run: ${parts.join(", ")}`;
+}
+
 function rateLimitLine(jobs: readonly JobSummary[], windowHours: number): string {
   const { responses, attempts, runs, recorded } = rateLimitTotals(jobs);
   const share = attempts ? `${Math.round((responses / attempts) * 10_000) / 100}%` : "n/a";
@@ -132,7 +163,7 @@ function coverageLine(now: Date, coverage: CensusCoverage, windowHours: number):
   const share = coverage.listed ? `${Math.round((coverage.tracked / coverage.listed) * 1_000) / 10}%` : "n/a";
   return (
     `Coverage: ${counts.format(coverage.tracked)}/${counts.format(coverage.listed)} (${share}) Rolimon's places at or ` +
-    `above ${coverage.minimumCcu} CCU polled within ${coverage.withinMinutes} min; ` +
+    `above ${coverage.minimumCcu} CCU polled within ${formatMinutes(coverage.withinMinutes)}; ` +
     `complete list ${formatElapsed(coverage.slot, now)} old`
   );
 }
