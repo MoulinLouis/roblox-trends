@@ -2,9 +2,9 @@ import { statfs } from "node:fs/promises";
 import type { Database } from "@/db/client";
 import { type CensusCoverage, censusCoverage, type DataTotals, dataTotals, type JobSummary, jobSummaries } from "@/db/status";
 import { readArchiver, readTimescaleJobs } from "@/db/system-health";
-import { STATUS_CONFIG } from "@/lib/config";
+import { JOB_CONFIG, STATUS_CONFIG } from "@/lib/config";
 import { diskUsedShare, evaluateSystemHealth, type SystemHealthResult } from "@/lib/ops/system-check";
-import { type RateLimitTotals, rateLimitTotals } from "@/lib/status-report";
+import { type RateLimitTotals, rateLimitTotals, type TailRefresh, tailRefresh } from "@/lib/status-report";
 
 export interface HealthSnapshot {
   windowHours: number;
@@ -12,6 +12,7 @@ export interface HealthSnapshot {
   coverage: CensusCoverage;
   totals: DataTotals;
   rateLimits: RateLimitTotals;
+  tailRefresh: TailRefresh[];
   system: SystemHealthResult & { diskUsedShare: number; lastArchivedAt: Date | null; policies: number };
 }
 
@@ -39,6 +40,7 @@ export async function readHealth(db: Database, now: Date, config = STATUS_CONFIG
     coverage,
     totals,
     rateLimits: rateLimitTotals(jobs),
+    tailRefresh: tailRefresh(jobs, JOB_CONFIG.poll.tailRefreshMinutes),
     system: { ...result, diskUsedShare: share, lastArchivedAt: archiver.lastArchivedAt, policies: policies.length },
   };
 }

@@ -26,9 +26,14 @@ export function formatPercent(share: number | null | undefined, digits = 1): str
   return present(share) ? `${(share * 100).toFixed(digits)}%` : dash;
 }
 
-// Minutes up to 2 hours, hours up to 2 days, then days. A clock skew between two hosts never prints a negative age.
+// A clock skew between two hosts never prints a negative age.
 export function formatElapsed(since: Date, now: Date): string {
-  const minutes = Math.max(0, Math.floor((now.getTime() - since.getTime()) / 60_000));
+  return formatMinutes(Math.max(0, (now.getTime() - since.getTime()) / 60_000));
+}
+
+// Whole minutes up to 2 hours, hours up to 2 days, then days.
+export function formatMinutes(span: number): string {
+  const minutes = Math.floor(span);
   if (minutes < 120) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   return hours < 48 ? `${hours}h` : `${Math.floor(hours / 24)}d`;

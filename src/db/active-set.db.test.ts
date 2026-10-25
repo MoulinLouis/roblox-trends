@@ -11,10 +11,10 @@ import { createTestDatabase, hasTestDatabase, type TestDatabase } from "./test-d
 describe.skipIf(!hasTestDatabase)("selectActiveUniverses", () => {
   let database: TestDatabase;
   const now = new Date("2026-10-20T14:00:00Z");
+  const old = new Date("2025-01-01T00:00:00Z");
 
   beforeAll(async () => {
     database = await createTestDatabase();
-    const old = new Date("2025-01-01T00:00:00Z");
     await upsertGameDetails(database.db, [
       gameDetail(1, { playing: 5_000, created: old }),
       gameDetail(2, { playing: 0, created: old }),
@@ -64,19 +64,33 @@ describe.skipIf(!hasTestDatabase)("selectActiveUniverses", () => {
 
   // lastDetailsAt is when the game's details were last stored (games.last_ccu_at); null when they never were.
   // lastDetailsRequestAt is the later of that and games.details_attempted_at; null when neither is set.
+  // robloxCreatedAt is the Roblox creation date, which sets the game's poll lane.
   const expected = [
-    { universeId: 1, priority: 5_000, lastDetailsAt: now, lastDetailsRequestAt: now },
+    { universeId: 1, priority: 5_000, robloxCreatedAt: old, lastDetailsAt: now, lastDetailsRequestAt: now },
     {
       universeId: 2,
       priority: 800,
+      robloxCreatedAt: old,
       lastDetailsAt: new Date("2026-10-20T09:00:00Z"),
       lastDetailsRequestAt: new Date("2026-10-20T13:00:00Z"),
     },
-    { universeId: 10, priority: 300, lastDetailsAt: now, lastDetailsRequestAt: now },
-    { universeId: 3, priority: 120, lastDetailsAt: null, lastDetailsRequestAt: null },
-    { universeId: 11, priority: 50, lastDetailsAt: now, lastDetailsRequestAt: now },
-    { universeId: 4, priority: 10, lastDetailsAt: now, lastDetailsRequestAt: now },
-    { universeId: 9, priority: 0, lastDetailsAt: now, lastDetailsRequestAt: now },
+    { universeId: 10, priority: 300, robloxCreatedAt: old, lastDetailsAt: now, lastDetailsRequestAt: now },
+    { universeId: 3, priority: 120, robloxCreatedAt: old, lastDetailsAt: null, lastDetailsRequestAt: null },
+    { universeId: 11, priority: 50, robloxCreatedAt: old, lastDetailsAt: now, lastDetailsRequestAt: now },
+    {
+      universeId: 4,
+      priority: 10,
+      robloxCreatedAt: new Date("2026-10-10T00:00:00Z"),
+      lastDetailsAt: now,
+      lastDetailsRequestAt: now,
+    },
+    {
+      universeId: 9,
+      priority: 0,
+      robloxCreatedAt: new Date("2026-09-15T00:00:00Z"),
+      lastDetailsAt: now,
+      lastDetailsRequestAt: now,
+    },
   ];
 
   it("selects busy, recently busy, census-visible and young active games by priority, with their details and request times", async () => {

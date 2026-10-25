@@ -5,6 +5,8 @@ import type { Database } from "./client";
 export interface ActiveUniverse {
   universeId: number;
   priority: number;
+  // Poll's tail lane: young or established.
+  robloxCreatedAt: Date;
   // When the game's details were last stored (games.last_ccu_at, set by poll and by every promotion); null when they
   // never were. Poll reports how old they are.
   lastDetailsAt: Date | null;
@@ -26,6 +28,7 @@ export async function selectActiveUniverses(db: Database, now: Date): Promise<Ac
   const result = await db.execute<{
     universe_id: string;
     priority: number;
+    roblox_created_at: Date | string;
     last_details_at: Date | string | null;
     last_details_request_at: Date | string | null;
   }>(sql`
@@ -66,6 +69,7 @@ export async function selectActiveUniverses(db: Database, now: Date): Promise<Ac
     select
       universe_id,
       priority::int as priority,
+      roblox_created_at,
       last_ccu_at as last_details_at,
       -- greatest() ignores nulls: null only when the game was neither stored nor requested.
       greatest(last_ccu_at, details_attempted_at) as last_details_request_at
@@ -80,6 +84,7 @@ export async function selectActiveUniverses(db: Database, now: Date): Promise<Ac
   return result.rows.map((row) => ({
     universeId: Number(row.universe_id),
     priority: Number(row.priority),
+    robloxCreatedAt: new Date(row.roblox_created_at),
     lastDetailsAt: toDate(row.last_details_at),
     lastDetailsRequestAt: toDate(row.last_details_request_at),
   }));

@@ -1,12 +1,12 @@
 import { closeDatabaseWithin, getDatabase } from "@/db/client";
 import { assertNotLegacyDatabase, assertSupportedPostgres } from "@/db/legacy-guard";
 import { censusCoverage, dataTotals, jobSummaries } from "@/db/status";
-import { DATABASE_SESSION_CONFIG, STATUS_CONFIG } from "@/lib/config";
+import { DATABASE_SESSION_CONFIG, JOB_CONFIG, STATUS_CONFIG } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
 import { formatStatusReport } from "@/lib/status-report";
 
-// The owner's health view until the dashboard's Health page: job freshness, the stats to watch, 429s, coverage and
-// totals.
+// The owner's health view in a terminal, beside the dashboard's Health page: job freshness, the stats to watch, 429s,
+// coverage, the tail refresh and totals.
 let exitCode = 1;
 try {
   const database = getDatabase("radar-status", {
@@ -26,7 +26,8 @@ try {
     }),
     dataTotals(database, now, windowHours),
   ]);
-  console.log(formatStatusReport({ now, windowHours, jobs, coverage, totals }));
+  const tailRefreshMinutes = JOB_CONFIG.poll.tailRefreshMinutes;
+  console.log(formatStatusReport({ now, windowHours, jobs, coverage, totals, tailRefreshMinutes }));
   exitCode = 0;
 } catch (error) {
   logger.error("Status could not be read", { error: errorMessage(error) });

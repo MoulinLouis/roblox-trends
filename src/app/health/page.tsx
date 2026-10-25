@@ -6,15 +6,15 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { dashboardDatabase } from "@/db/dashboard";
 import type { JobSummary } from "@/db/status";
 import { readHealth } from "@/lib/dashboard/health";
-import { formatCount, formatElapsed, formatPercent, formatUtc } from "@/lib/format";
-import { formatStat, hasStat, statAt, WATCHED_STATS } from "@/lib/status-report";
+import { formatCount, formatElapsed, formatMinutes, formatPercent, formatUtc } from "@/lib/format";
+import { formatStat, hasStat, statAt, type TailRefresh, WATCHED_STATS } from "@/lib/status-report";
 
 export const metadata: Metadata = { title: "Health" };
 
 export default async function HealthPage() {
   await connection();
   const now = new Date();
-  const { windowHours, jobs, coverage, totals, rateLimits, system } = await readHealth(dashboardDatabase(), now);
+  const { windowHours, jobs, coverage, totals, rateLimits, tailRefresh, system } = await readHealth(dashboardDatabase(), now);
   const archived = system.lastArchivedAt ? `${formatElapsed(system.lastArchivedAt, now)} ago` : "never";
   const problems = system.problems.length;
   return (
@@ -29,16 +29,17 @@ export default async function HealthPage() {
           </p>
         </div>
       </div>
-      <div className="grid grid-4">
+      <div className="grid grid-3">
         <MetricCard
           label="Coverage"
           value={formatPercent(coverage.listed ? coverage.tracked / coverage.listed : null)}
           detail={
             coverage.slot
-              ? `${formatCount(coverage.tracked)} of ${formatCount(coverage.listed)} Rolimon's places at or above ${coverage.minimumCcu} CCU polled within ${coverage.withinMinutes} min; list ${formatElapsed(coverage.slot, now)} old`
+              ? `${formatCount(coverage.tracked)} of ${formatCount(coverage.listed)} Rolimon's places at or above ${coverage.minimumCcu} CCU polled within ${formatMinutes(coverage.withinMinutes)}; list ${formatElapsed(coverage.slot, now)} old`
               : `No complete Rolimon's list in the last ${windowHours} h`
           }
         />
+        {tailRefresh.map((lane) => <TailRefreshCard key={lane.lane} lane={lane} />)}
         <MetricCard
           label="Games known"
           value={formatCount(totals.games)}
@@ -87,6 +88,24 @@ export default async function HealthPage() {
         </div>
       </section>
     </div>
+  );
+}
+
+const tailLaneCopy: Record<TailRefresh["lane"], { label: string; games: string }> = {
+  young: { label: "Young games refresh", games: "young tail games, the ones the Radar lists" },
+  established: { label: "Established games refresh", games: "established tail games, whose CCU census counts every 10 min" },
+};
+
+// Above its target, the lane waits longer than poll's budget was planned for: the tail outgrew it.
+function TailRefreshCard({ lane }: { lane: TailRefresh }) {
+  const copy = tailLaneCopy[lane.lane];
+  return (
+    <MetricCard
+      label={copy.label}
+      value={lane.minutes === null ? "—" : `${formatCount(lane.minutes)} min`}
+      tone={lane.minutes !== null && lane.minutes > lane.targetMinutes ? "warning" : undefined}
+      detail={`Median wait of the ${copy.games}, in the last poll run; target ${formatCount(lane.targetMinutes)} min`}
+    />
   );
 }
 

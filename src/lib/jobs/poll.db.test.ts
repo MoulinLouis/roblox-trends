@@ -71,12 +71,13 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
         active: 2,
         hot: 2,
         tail: 0,
+        youngTail: 0,
         tailRequested: 0,
         requested: 2,
         returned: 2,
         http: { attempts: 1, retries: 0, rateLimitedResponses: 0, endpointIntervalMs: { "games.roblox.com/v1/games": 7_000 } },
         shedBelowCcu: null,
-        medianTailDetailsMinutes: null,
+        medianTailDetailsMinutes: { young: null, established: null },
         missing: 0,
         missingSample: [],
       });
@@ -102,6 +103,7 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
         "stoppedBy",
         "tail",
         "tailRequested",
+        "youngTail",
       ]);
       // `npm run status` prints these paths: a renamed stat must fail here rather than print a dash.
       expect(WATCHED_STATS.poll?.values.filter((path) => !hasStat(run.stats, path))).toEqual([]);
@@ -171,8 +173,9 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
         stoppedBy: "deadline",
         shedBelowCcu: 1_840,
         // The tail games shed at the deadline were never requested: they are skipped, not missing, and still count here.
-        // Nine of the ten hold details stored at `now`, so their median age is 0 (null if they did not count).
-        medianTailDetailsMinutes: 0,
+        // Nine of the ten hold details stored at `now`, so their median age is 0 (null if they did not count). The
+        // fixtures are young games.
+        medianTailDetailsMinutes: { young: 0, established: null },
         missing: 0,
       });
     });
@@ -365,6 +368,7 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
         active: 6,
         hot: 2,
         tail: 4,
+        youngTail: 4,
         tailRequested: 2,
         requested: 4,
         attempted: 4,
@@ -372,8 +376,8 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
         skipped: 0,
         stoppedBy: null,
         shedBelowCcu: null,
-        // Game 205 has no details to date; game 204's are 50 minutes old.
-        medianTailDetailsMinutes: 50,
+        // Game 205 has no details to date; game 204's are 50 minutes old. Every game here is young.
+        medianTailDetailsMinutes: { young: 50, established: null },
       });
     });
 
@@ -399,7 +403,9 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
         [201, 202, 204, 205],
       ]);
       const runs = await database.db.select().from(jobRuns).orderBy(jobRuns.startedAt);
-      expect(runs.map((run) => run.stats.medianTailDetailsMinutes)).toEqual([50, 30, 20]);
+      expect(runs.map((run) => run.stats.medianTailDetailsMinutes)).toEqual(
+        [50, 30, 20].map((young) => ({ young, established: null })),
+      );
     });
 
     it("moves a requested game that Roblox did not answer behind the other tail games, once per tail cycle", async () => {
@@ -427,7 +433,9 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
       expect(runs.map((run) => run.stats.missingSample)).toEqual([[204], [], [204]]);
       // Game 204's 50-minute-old details never count: the first run reports game 205's 40 minutes, the second run the
       // median of 203's 40 and 206's 20 minutes, the last game 205's details from the first run, 20 minutes before.
-      expect(runs.map((run) => run.stats.medianTailDetailsMinutes)).toEqual([40, 30, 20]);
+      expect(runs.map((run) => run.stats.medianTailDetailsMinutes)).toEqual(
+        [40, 30, 20].map((young) => ({ young, established: null })),
+      );
     });
 
     it("keeps the latest request time when an older overlapping run finishes last", async () => {
