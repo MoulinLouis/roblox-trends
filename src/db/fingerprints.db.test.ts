@@ -71,6 +71,17 @@ describe.skipIf(!hasTestDatabase)("content fingerprint refresh", () => {
     expect(game.contentFingerprint).toBe("f52b742d46d5d0fdd4da1893313c9c03a6210d47");
   });
 
+  // Roblox answers some ids with a placeholder universe 0, which the v1 import brought into games.
+  it("refreshes the game of universe 0", async () => {
+    await upsertGameDetails(database.db, [gameDetail(0, { name: "[TITLE UNAVAILABLE]" })], observedAt);
+    await database.db.update(games).set(stale).where(eq(games.universeId, 0));
+
+    expect(await refreshContentFingerprints(database.db)).toEqual({ games: 1, versions: 0 });
+
+    const [game] = await database.db.select().from(games).where(eq(games.universeId, 0));
+    expect(game.contentFingerprintVersion).toBe(CONTENT_FINGERPRINT_VERSION);
+  });
+
   it("refreshes a backlog larger than one batch", async () => {
     const details = Array.from({ length: 2_501 }, (_, index) => gameDetail(10_000 + index));
     await upsertGameDetails(database.db, details, observedAt);
