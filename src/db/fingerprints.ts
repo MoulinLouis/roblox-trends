@@ -21,7 +21,8 @@ export async function refreshContentFingerprints(db: Database): Promise<ContentF
 // game's fingerprint and leaves the version it finds.
 async function refreshGames(db: Database): Promise<number> {
   let refreshed = 0;
-  for (let after = 0; ; ) {
+  // Below 0: the v1 import brought the placeholder universe 0 that Roblox answers for some ids.
+  for (let after = -1; ; ) {
     const rows = await db
       .select({
         universeId: games.universeId,
