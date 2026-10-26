@@ -295,6 +295,30 @@ export const GAME_VIEW_CONFIG = {
   timelineEntries: 40,
 } as const;
 
+// npm run concept (scripts/concept.ts): every Roblox attempt at a concept, for analysis sessions on the owner's
+// machine. The diagnosis thresholds come from the stone-skipping check of 2026-10-26: the attempts before the owner's
+// game had 6,720 to 57,235 visits, the two from early September 88% and 93% likes on 24 and 681 votes, and none had
+// players.
+export const CONCEPT_CHECK_CONFIG = {
+  // Page 2 lists smaller games than page 1, as for explore's terms.
+  searchPagesPerPhrase: 2,
+  // Attempts created this recently mean the race has started.
+  recentDays: 14,
+  // The daily curve of a tracked attempt goes back this far.
+  historyDays: 60,
+  diagnosis: {
+    // Fewer visits than this: no audience.
+    noAudienceMaximumVisits: 10_000,
+    // At least this share of likes on at least this many votes, with fewer players than the maximum: liked but stuck.
+    likedMinimumRatio: 0.85,
+    likedMinimumVotes: 20,
+    stuckMaximumPlayers: 100,
+    // Players at most this share of a tracked peak of at least the minimum: fading.
+    fadingMinimumPeakCcu: 1_000,
+    fadingMaximumShareOfPeak: 0.1,
+  },
+} as const;
+
 // The Healthchecks checks (npm run provision:healthchecks). Periods come from JOB_CONFIG; graces from here.
 export const HEALTHCHECKS_CONFIG = {
   // A run may use its whole timeoutMs before it pings, so a heartbeat is late only after that plus this margin.
