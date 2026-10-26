@@ -149,6 +149,14 @@ psql postgresql://radar_analysis@localhost:15432/radar
 
 The server sees a socket connection from the OS user `analysis`, so the same peer mapping applies and no password is asked.
 
+The concept check (`npm run concept`, `src/lib/concept/`) runs on the owner's machine, never on the server: it searches Roblox from the IP it runs on, and the production IP's one search a minute belongs to explore. Through the tunnel it adds the radar's history of the attempts it finds:
+
+```bash
+DATABASE_URL=postgresql://radar_analysis@localhost:15432/radar npm run concept -- "stone skipping" "skip stones"
+```
+
+Without `DATABASE_URL`, or when the tunnel is down, the report says so and comes without history.
+
 `rising_games` computes the Radar page's metrics for any `as_of`. A session calls it with the values of `RADAR_CONFIG` in `src/lib/config.ts`; `sort_by` is `growth`, `acceleration`, `ccu` or `age`, and `row_limit` null returns every game (about 1 s for 90 days):
 
 ```sql

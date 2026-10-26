@@ -309,10 +309,14 @@ export const CONCEPT_CHECK_CONFIG = {
   diagnosis: {
     // Fewer visits than this: no audience.
     noAudienceMaximumVisits: 10_000,
-    // At least this share of likes on at least this many votes, with fewer players than the maximum: liked but stuck.
+    // At least this share of likes on at least this many votes, with fewer players and visits than the maximums: liked
+    // but stuck. The visits cap keeps out games that found an audience and lost it: on the live check of 2026-10-26,
+    // "[NEW]Stone Miner Evolution" had 91% likes, 2 players and 8.7 million visits; the liked attempts it should name had
+    // 9,309 to 174,791.
     likedMinimumRatio: 0.85,
     likedMinimumVotes: 20,
     stuckMaximumPlayers: 100,
+    stuckMaximumVisits: 1_000_000,
     // Players at most this share of a tracked peak of at least the minimum: fading.
     fadingMinimumPeakCcu: 1_000,
     fadingMaximumShareOfPeak: 0.1,

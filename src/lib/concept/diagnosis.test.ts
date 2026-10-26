@@ -52,6 +52,12 @@ describe("diagnose", () => {
     });
   });
 
+  // Found on the live check of 2026-10-26: an old game with millions of visits found its audience, then lost it.
+  it("does not call a liked game with millions of visits stuck", () => {
+    const miner = attempt(9, "[NEW]Stone Miner Evolution", "2025-07-17", { visits: 8_725_802, playing: 2, upVotes: 4_794, downVotes: 474 });
+    expect(diagnose([d, miner])[1].labels).toEqual([]);
+  });
+
   it("never calls a game without votes liked", () => {
     const [row] = diagnose([a, g]).filter((item) => item.universeId === g.universeId);
     expect(row.likeRatio).toBeNull();

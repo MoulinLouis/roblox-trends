@@ -24,7 +24,8 @@ export function diagnose(attempts: ConceptAttempt[], rules: DiagnosisRules = CON
       attempt.likeRatio !== null &&
       attempt.upVotes + attempt.downVotes >= rules.likedMinimumVotes &&
       attempt.likeRatio >= rules.likedMinimumRatio &&
-      attempt.playing < rules.stuckMaximumPlayers;
+      attempt.playing < rules.stuckMaximumPlayers &&
+      attempt.visits < rules.stuckMaximumVisits;
     if (liked) labels.push("liked but stuck");
     else if (attempt.visits < rules.noAudienceMaximumVisits) labels.push("no audience");
     return { ...attempt, labels };

@@ -348,3 +348,19 @@ git commit -m "feat(concept): print a concept check from the command line"
 ## Execution notes
 
 (Record decisions and surprises here as tasks complete; committed code is authoritative over the code blocks above.)
+
+- **Task 1** (`bd44c2e`, `45f7086`): `titleWords` and its stop words moved to `src/lib/title.ts` unchanged.
+- **Task 3** (`df4ed25`): the database suite runs only in CI; it ran on the pull request of Task 5.
+- **Task 4** (`79ab5f5`): one more test covers the history that was read (window start, fading from the history peak).
+- **Task 5**, live checks of "stone skipping", "skip stones" and "skipping stones" on 2026-10-26 at 16:57 and 16:59 UTC:
+  - 120 search results, 22 attempts kept, 98 hidden, none unavailable;
+  - the first attempt is `Squid Game | Glass Stepping Stone` (2021), a false friend on the word "stone"; the relevance
+    filter keeps such games on purpose, and Claude reads past them;
+  - `+1 Stone Skipping` is the leader (17,590 playing, 67.4 million visits). The radar first saw it on 2026-09-29, 24
+    days after its creation, and its tracked peak is 75,862;
+  - `Skip a Stone!` (9,309 visits, 88% on 24 votes), `🏞️ Skip a stone` (40,186, 93% on 681) and `+1 Throw A Rock`
+    (174,791, 93% on 441) are liked but stuck;
+  - the 6,720-visit `Skip A Stone` has no audience;
+  - `Egg Skipping` was first seen on 2026-10-21 and peaked at 4,668.
+  - Threshold change: `[NEW]Stone Miner Evolution` (8.7 million visits, 91% likes, 2 playing) came out liked but
+    stuck. The design says "few visits or players", so `stuckMaximumVisits` (1,000,000) was added.
