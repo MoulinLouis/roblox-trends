@@ -14,6 +14,11 @@ export function rawFingerprint(name: string, description: string): string {
   return sha1(`${name}\u0000${description}`);
 }
 
+// The algorithm behind contentFingerprint. Bump it whenever normalizeTitle or normalizeText returns something else:
+// `npm run db:migrate` recomputes the stored fingerprints of earlier versions, and a classification records the
+// version it compared, so a normalizer change does not read as a change of every game.
+export const CONTENT_FINGERPRINT_VERSION = 1;
+
 // Changes only when the concept text changes; used to decide reclassification.
 export function contentFingerprint(name: string, description: string): string {
   return sha1(`${normalizeTitle(name).toLowerCase()}\u0000${normalizeText(description)}`);

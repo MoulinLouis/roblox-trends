@@ -6,7 +6,7 @@ import { assertNotLegacyDatabase } from "@/db/legacy-guard";
 import { writeChartPlacements, writeGameObservations, writeVoteObservations } from "@/db/observations";
 import { gameDailyLegacy, games, gameVersions, places } from "@/db/schema";
 import { chunk, compareText } from "@/lib/arrays";
-import { contentFingerprint, rawFingerprint } from "@/lib/fingerprint";
+import { CONTENT_FINGERPRINT_VERSION, contentFingerprint, rawFingerprint } from "@/lib/fingerprint";
 import { logger } from "@/lib/logger";
 import { INTEGER_MAX, legacyCount, legacyDiscovery, parseLegacyId, sortIdFromLegacyChartLabel } from "./mapping";
 
@@ -277,6 +277,7 @@ async function importGames(target: Database, source: Pool): Promise<Set<number>>
           lastObservedAt: new Date(Math.min(row.last_seen_at.getTime(), Date.now())),
           metadataFingerprint: rawFingerprint(row.name, row.description),
           contentFingerprint: contentFingerprint(row.name, row.description),
+          contentFingerprintVersion: CONTENT_FINGERPRINT_VERSION,
           // v1 stored the square game icon (games/icons) under this name.
           iconUrl: row.thumbnail_url,
         },
@@ -334,6 +335,7 @@ async function importVersions(target: Database, source: Pool, imported: Set<numb
           kind: "metadata" as const,
           rawFingerprint: rawFingerprint(row.name, row.description),
           contentFingerprint: contentFingerprint(row.name, row.description),
+          contentFingerprintVersion: CONTENT_FINGERPRINT_VERSION,
           name: row.name,
           description: row.description,
           robloxUpdatedAt: row.game_updated_at,

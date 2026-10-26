@@ -1,0 +1,2 @@
+ALTER TABLE "game_versions" ADD COLUMN "content_fingerprint_version" integer DEFAULT 1 NOT NULL;--> statement-breakpoint
+ALTER TABLE "games" ADD COLUMN "content_fingerprint_version" integer DEFAULT 1 NOT NULL;

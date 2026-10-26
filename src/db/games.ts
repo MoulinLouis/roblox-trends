@@ -1,11 +1,11 @@
 import { and, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import type { RobloxGameDetail } from "@/lib/api/roblox";
 import { chunk, uniqueBy } from "@/lib/arrays";
-import { contentFingerprint, rawFingerprint } from "@/lib/fingerprint";
+import { CONTENT_FINGERPRINT_VERSION, contentFingerprint, rawFingerprint } from "@/lib/fingerprint";
 import type { Database } from "./client";
 import { games, gameVersions, places } from "./schema";
 
-// A game row binds 17 parameters, and CHUNK_SIZE × 17 must stay under PostgreSQL's limit of 65,535 per statement.
+// A game row binds 18 parameters, and CHUNK_SIZE × 18 must stay under PostgreSQL's limit of 65,535 per statement.
 const CHUNK_SIZE = 500;
 
 export interface GameUpsertResult {
@@ -50,6 +50,7 @@ export async function upsertGameDetails(db: Database, details: RobloxGameDetail[
             lastActiveAt: sql`greatest(excluded.last_active_at, ${games.lastActiveAt})`,
             metadataFingerprint: sql`excluded.metadata_fingerprint`,
             contentFingerprint: sql`excluded.content_fingerprint`,
+            contentFingerprintVersion: sql`excluded.content_fingerprint_version`,
           },
           // A detail older than the stored observation (a late retry, or a job that started earlier but committed
           // later) is ignored: the row is neither updated nor returned, so it counts as neither inserted nor changed.
@@ -91,6 +92,7 @@ export async function upsertGameDetails(db: Database, details: RobloxGameDetail[
           kind: "metadata" as const,
           rawFingerprint: rawFingerprint(detail.name, detail.description),
           contentFingerprint: contentFingerprint(detail.name, detail.description),
+          contentFingerprintVersion: CONTENT_FINGERPRINT_VERSION,
           name: detail.name,
           description: detail.description,
           robloxUpdatedAt: detail.updated,
@@ -175,5 +177,6 @@ function toGameRow(detail: RobloxGameDetail, observedAt: Date): typeof games.$in
     lastActiveAt: lastCcu > 0 ? observedAt : null,
     metadataFingerprint: rawFingerprint(detail.name, detail.description),
     contentFingerprint: contentFingerprint(detail.name, detail.description),
+    contentFingerprintVersion: CONTENT_FINGERPRINT_VERSION,
   };
 }

@@ -1,6 +1,6 @@
 import { and, between, eq, inArray, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { rawFingerprint } from "@/lib/fingerprint";
+import { CONTENT_FINGERPRINT_VERSION, rawFingerprint } from "@/lib/fingerprint";
 import { gameDetail } from "@/test/fixtures";
 import { createDatabase } from "./client";
 import { recordDiscoveries } from "./discovery";
@@ -55,6 +55,28 @@ describe.skipIf(!hasTestDatabase)("game repositories", () => {
     const result = await upsertGameDetails(database.db, [gameDetail(1, { name: "[🎃] +1 Stone Skipping" })], second);
     expect(result.metadataChanged).toEqual([1]);
     expect(await database.db.select().from(gameVersions).where(eq(gameVersions.universeId, 1))).toHaveLength(2);
+  });
+
+  it("stores the content fingerprint and its version with the game and its first version", async () => {
+    await upsertGameDetails(database.db, [gameDetail(70, { name: "[🎃] +1 Stone Skipping", description: "Skip stones" })], first);
+    const [game] = await database.db.select().from(games).where(eq(games.universeId, 70));
+    const [version] = await database.db.select().from(gameVersions).where(eq(gameVersions.universeId, 70));
+    for (const row of [game, version]) {
+      expect(row.contentFingerprint).toBe("f52b742d46d5d0fdd4da1893313c9c03a6210d47");
+      expect(row.contentFingerprintVersion).toBe(CONTENT_FINGERPRINT_VERSION);
+    }
+  });
+
+  it("rewrites a content fingerprint of an earlier version without recording a version", async () => {
+    await database.db
+      .update(games)
+      .set({ contentFingerprint: "stale", contentFingerprintVersion: CONTENT_FINGERPRINT_VERSION - 1 })
+      .where(eq(games.universeId, 70));
+    await upsertGameDetails(database.db, [gameDetail(70, { name: "[🎃] +1 Stone Skipping", description: "Skip stones" })], second);
+    const [game] = await database.db.select().from(games).where(eq(games.universeId, 70));
+    expect(game.contentFingerprint).toBe("f52b742d46d5d0fdd4da1893313c9c03a6210d47");
+    expect(game.contentFingerprintVersion).toBe(CONTENT_FINGERPRINT_VERSION);
+    expect(await versionCount([70])).toBe(1);
   });
 
   it("records a revert to an earlier title", async () => {

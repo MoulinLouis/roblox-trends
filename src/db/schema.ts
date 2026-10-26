@@ -39,6 +39,9 @@ export const games = pgTable(
     // Raw fingerprint of the current name + description; a version is recorded whenever it changes.
     metadataFingerprint: text("metadata_fingerprint").notNull(),
     contentFingerprint: text("content_fingerprint").notNull(),
+    // CONTENT_FINGERPRINT_VERSION of the algorithm behind content_fingerprint; 1 for rows written before versions were
+    // recorded. A release older than the column inserts 1, but keeps the stored version when it rewrites a fingerprint.
+    contentFingerprintVersion: integer("content_fingerprint_version").notNull().default(1),
     thumbnailUrl: text("thumbnail_url"),
     iconUrl: text("icon_url"),
     // Identity of the current thumbnail: "media:<asset id>", or "url:<sha1>" when Roblox gives no asset id.
@@ -77,6 +80,8 @@ export const gameVersions = pgTable(
     kind: text("kind").$type<"metadata" | "thumbnail">().notNull(),
     rawFingerprint: text("raw_fingerprint").notNull(),
     contentFingerprint: text("content_fingerprint"),
+    // As in games; it only describes content_fingerprint, which thumbnail versions leave null.
+    contentFingerprintVersion: integer("content_fingerprint_version").notNull().default(1),
     name: text("name"),
     description: text("description"),
     thumbnailUrl: text("thumbnail_url"),

@@ -71,6 +71,13 @@
       "when": 1792883246839,
       "tag": "0009_rising_games_execute",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793026185007,
+      "tag": "0010_content_fingerprint_version",
+      "breakpoints": true
     }
   ]
 }
