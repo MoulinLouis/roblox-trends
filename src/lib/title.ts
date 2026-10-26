@@ -68,6 +68,58 @@ export function titleText(title: string): string {
   return firstWithWords([withoutBracketedMarkers(emojiFree)], emojiFree);
 }
 
+// Words too generic to point to one trend: searching them returns the platform's biggest games, not related ones.
+const SEARCH_STOP_WORDS = new Set([
+  "and",
+  "the",
+  "for",
+  "with",
+  "your",
+  "you",
+  "from",
+  "into",
+  "but",
+  "are",
+  "all",
+  "can",
+  "not",
+  "how",
+  "who",
+  "what",
+  "this",
+  "that",
+  "its",
+  "our",
+  "out",
+  "game",
+  "games",
+  "roblox",
+  "simulator",
+  "obby",
+  "tycoon",
+  "update",
+  "new",
+]);
+
+// The words of a title, each folded word mapped to the form the title spells it in. Hyphens join words
+// ("Steal-a-Brainrot"); a possessive or a plural folds into the word ("Egg's" and "Eggs" into "egg"), but a double s
+// does not ("boss"). A plus and a number are a word of their own ("+1 Speed Every Second" formats), other numbers are
+// not.
+export function titleWords(title: string): Map<string, string> {
+  const words = new Map<string, string>();
+  for (const token of titleText(title).toLowerCase().split(/[\s-]+/)) {
+    if (/^\+\d+$/.test(token)) {
+      if (!words.has(token)) words.set(token, token);
+      continue;
+    }
+    const form = token.replace(/^['+]+|['+]+$/g, "").replace(/'s$/, "");
+    const word = form.length >= 4 && form.endsWith("s") && !form.endsWith("ss") ? form.slice(0, -1) : form;
+    if (word.length < 3 || !/\p{L}/u.test(word) || SEARCH_STOP_WORDS.has(word) || SEARCH_STOP_WORDS.has(form)) continue;
+    if (!words.has(word)) words.set(word, form);
+  }
+  return words;
+}
+
 function withoutEmoji(title: string): string {
   return title.normalize("NFKC").replace(/\p{Extended_Pictographic}|\uFE0F|\u200D/gu, " ");
 }
