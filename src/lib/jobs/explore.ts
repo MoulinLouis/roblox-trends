@@ -8,7 +8,7 @@ import type { RobloxApi, RobloxChartGame } from "@/lib/api/roblox";
 import { compareText } from "@/lib/arrays";
 import { JOB_CONFIG } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
-import { normalizeTitle } from "@/lib/title";
+import { titleText } from "@/lib/title";
 import { httpMetricsSince, isRateLimited } from "./batching";
 import type { JobDefinition } from "./runner";
 import type { DiscoverySource } from "./types";
@@ -110,7 +110,7 @@ export function termSearchTimes(searched: ReadonlyMap<string, Date>): Map<string
 // not.
 function titleWords(title: string): Map<string, string> {
   const words = new Map<string, string>();
-  for (const token of normalizeTitle(title).toLowerCase().split(/[\s-]+/)) {
+  for (const token of titleText(title).toLowerCase().split(/[\s-]+/)) {
     if (/^\+\d+$/.test(token)) {
       if (!words.has(token)) words.set(token, token);
       continue;

@@ -37,10 +37,12 @@ describe("fingerprints", () => {
     expect(urlFingerprint("https://tr.rbxcdn.com/a")).not.toBe(urlFingerprint("https://tr.rbxcdn.com/b"));
   });
 
-  // Stored fingerprints must never change across releases or hosts.
+  // Stored fingerprints never change across hosts, and content fingerprints change only with
+  // CONTENT_FINGERPRINT_VERSION. Version 2 ignores bracketed text in titles.
   it("keeps stored fingerprint values stable", () => {
     expect(rawFingerprint("+1 Stone Skipping", "Skip stones")).toBe("8a5794c48ac7989708062a262843068792207752");
     expect(contentFingerprint("+1 Stone Skipping", "Skip stones")).toBe("f52b742d46d5d0fdd4da1893313c9c03a6210d47");
+    expect(contentFingerprint("[⏳ 2H] +1 Stone Skipping", "Skip stones")).toBe("f52b742d46d5d0fdd4da1893313c9c03a6210d47");
     expect(urlFingerprint("https://tr.rbxcdn.com/a")).toBe("fbfe1d0b88393007bea8c86d66dd83499d9b98ea");
   });
 });

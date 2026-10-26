@@ -15,6 +15,11 @@ describe("titleVocabulary", () => {
     expect(terms(titleVocabulary(["Steal An Egg", "Break and Steal an Egg", "[🎃] Stone Skipping", "Egg Obby"], 3))).toEqual(["egg"]);
   });
 
+  it("reads the words inside brackets, where titles name their wave", () => {
+    const titles = ["[Sprunki] Morphs", "[Sprunki] Obby", "[Sprunki] Tycoon", "Sprunki Hide and Seek"];
+    expect(terms(titleVocabulary(titles, 3))).toEqual(["sprunki"]);
+  });
+
   it("lowers the minimum to the number of titles available", () => {
     expect(terms(titleVocabulary(["Steal An Egg", "Egg Farm"], 3))).toEqual(["egg"]);
     expect(terms(titleVocabulary(["[UPDATE] Grow a Garden"], 3))).toEqual(["garden", "grow"]);
