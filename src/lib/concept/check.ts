@@ -47,9 +47,12 @@ export async function runConceptCheck(
   const ids = [...matchedPhrases.keys()].map(String);
   const details = ids.length ? (await api.getGameDetails(ids)).filter((detail) => matchedPhrases.has(detail.id)) : [];
   const votes = new Map((ids.length ? await api.getGameVotes(ids) : []).map((vote) => [vote.id, vote]));
-  // A phrase with no usable word (a two-letter word, another script) cannot tell results apart: every one is kept.
+  // A phrase with no usable word ("io", only stop words) cannot tell its results apart: every one of them is kept.
   const words = relevanceWords(phrases);
-  const relevant = details.filter((detail) => words.size === 0 || isRelevant(detail, words));
+  const openPhrases = new Set(phrases.filter((phrase) => relevanceWords([phrase]).size === 0));
+  const relevant = details.filter(
+    (detail) => (matchedPhrases.get(detail.id) ?? []).some((phrase) => openPhrases.has(phrase)) || isRelevant(detail, words),
+  );
   let attempts: ConceptAttempt[] = relevant.map((detail) => {
     const upVotes = votes.get(detail.id)?.upVotes ?? 0;
     const downVotes = votes.get(detail.id)?.downVotes ?? 0;

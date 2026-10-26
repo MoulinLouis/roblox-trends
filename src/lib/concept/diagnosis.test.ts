@@ -58,6 +58,11 @@ describe("diagnose", () => {
     expect(diagnose([d, miner])[1].labels).toEqual([]);
   });
 
+  it("does not call a new attempt with players no audience", () => {
+    const rising = attempt(10, "Skip Stones Race", "2026-10-24", { visits: 8_000, playing: 400 });
+    expect(diagnose([d, rising])[1].labels).toEqual([]);
+  });
+
   it("never calls a game without votes liked", () => {
     const [row] = diagnose([a, g]).filter((item) => item.universeId === g.universeId);
     expect(row.likeRatio).toBeNull();
@@ -85,7 +90,15 @@ describe("summarize", () => {
       hidden: 40,
       unavailable: 1,
       firstAttempt: { universeId: 1, name: "Skip a Rock!", created: new Date("2026-01-05T00:00:00Z") },
-      leader: { universeId: 4, name: "+1 Stone Skipping", playing: 17_579, visits: 67_362_222, fading: false },
+      leader: {
+        universeId: 4,
+        name: "+1 Stone Skipping",
+        playing: 17_579,
+        visits: 67_362_222,
+        fading: false,
+        peakCcu: 41_000,
+        peakDay: new Date("2026-09-05T00:00:00Z"),
+      },
       recent: [{ universeId: 6, name: "+1 TNT Skipping", created: new Date("2026-10-13T00:00:00Z") }],
     });
   });

@@ -83,11 +83,29 @@ describe("runConceptCheck", () => {
     expect(report.attempts.map((attempt) => attempt.universeId)).toEqual([1]);
   });
 
-  it("keeps every result when the phrases have no usable words", async () => {
-    const { api } = fakeApi({ 타일: { "": { games: [found(5)], nextPageToken: null } } }, [detail(5, "시퀀스 타일")]);
-    const report = await runConceptCheck(["타일"], dependencies(api));
-    expect(report.attempts.map((attempt) => attempt.name)).toEqual(["시퀀스 타일"]);
+  it("keeps every result of a phrase with no usable words", async () => {
+    const { api } = fakeApi(
+      {
+        "stone skipping": { "": { games: [found(1)], nextPageToken: null } },
+        io: { "": { games: [found(5)], nextPageToken: null } },
+      },
+      [detail(1, "Skip a Stone"), detail(5, "Arena Royale")],
+    );
+    const report = await runConceptCheck(["stone skipping", "io"], dependencies(api));
+    expect(report.attempts.map((attempt) => attempt.name)).toEqual(["Skip a Stone", "Arena Royale"]);
     expect(report.summary.hidden).toBe(0);
+  });
+
+  it("keeps the results of a phrase in another language beside English ones", async () => {
+    const { api } = fakeApi(
+      {
+        "tile sequence": { "": { games: [found(1)], nextPageToken: null } },
+        타일: { "": { games: [found(5)], nextPageToken: null } },
+      },
+      [detail(1, "Tile Sequence Obby"), detail(5, "시퀀스 타일")],
+    );
+    const report = await runConceptCheck(["tile sequence", "타일"], dependencies(api));
+    expect(report.attempts.map((attempt) => attempt.name)).toEqual(["Tile Sequence Obby", "시퀀스 타일"]);
   });
 
   it("reports history it could not read", async () => {

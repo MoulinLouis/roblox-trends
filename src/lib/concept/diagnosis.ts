@@ -27,7 +27,9 @@ export function diagnose(attempts: ConceptAttempt[], rules: DiagnosisRules = CON
       attempt.playing < rules.stuckMaximumPlayers &&
       attempt.visits < rules.stuckMaximumVisits;
     if (liked) labels.push("liked but stuck");
-    else if (attempt.visits < rules.noAudienceMaximumVisits) labels.push("no audience");
+    else if (attempt.visits < rules.noAudienceMaximumVisits && attempt.playing < rules.noAudienceMaximumPlayers) {
+      labels.push("no audience");
+    }
     return { ...attempt, labels };
   });
 }
@@ -52,7 +54,15 @@ export function summarize(
     unavailable: counts.unavailable,
     firstAttempt: first ? { universeId: first.universeId, name: first.name, created: first.created } : null,
     leader: leader
-      ? { universeId: leader.universeId, name: leader.name, playing: leader.playing, visits: leader.visits, fading: leader.labels.includes("fading") }
+      ? {
+          universeId: leader.universeId,
+          name: leader.name,
+          playing: leader.playing,
+          visits: leader.visits,
+          fading: leader.labels.includes("fading"),
+          peakCcu: leader.history?.peakCcu ?? null,
+          peakDay: leader.history?.peakDay ?? null,
+        }
       : null,
     recent: byCreation
       .filter((attempt) => attempt.created.getTime() >= recentSince)

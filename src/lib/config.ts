@@ -307,8 +307,9 @@ export const CONCEPT_CHECK_CONFIG = {
   // The daily curve of a tracked attempt goes back this far.
   historyDays: 60,
   diagnosis: {
-    // Fewer visits than this: no audience.
+    // Fewer visits and players than these: no audience. A new attempt with few visits but players already has one.
     noAudienceMaximumVisits: 10_000,
+    noAudienceMaximumPlayers: 100,
     // At least this share of likes on at least this many votes, with fewer players and visits than the maximums: liked
     // but stuck. The visits cap keeps out games that found an audience and lost it: on the live check of 2026-10-26,
     // "[NEW]Stone Miner Evolution" had 91% likes, 2 players and 8.7 million visits; the liked attempts it should name had

@@ -40,7 +40,7 @@ const owner = attempt(4, "+1 Stone Skipping", "2026-09-05", {
     peakCcu: 41_000,
     peakDay: new Date("2026-10-12T00:00:00Z"),
     daily: [],
-    earlierNames: [],
+    earlierNames: ["Stone Skipping"],
     sources: ["chart"],
   },
 });
@@ -54,7 +54,15 @@ const report: ConceptReport = {
     hidden: 40,
     unavailable: 1,
     firstAttempt: { universeId: 1, name: "Skip a Rock!", created: rock.created },
-    leader: { universeId: 4, name: "+1 Stone Skipping", playing: 17_579, visits: 67_362_222, fading: false },
+    leader: {
+      universeId: 4,
+      name: "+1 Stone Skipping",
+      playing: 17_579,
+      visits: 67_362_222,
+      fading: false,
+      peakCcu: 41_000,
+      peakDay: new Date("2026-10-12T00:00:00Z"),
+    },
     recent: [],
   },
   failures: [],
@@ -68,9 +76,10 @@ describe("formatConceptReport", () => {
     'Concept check: "stone skipping", "skip stones"',
     "3 attempts (40 unrelated results hidden, 1 unavailable)",
     "First attempt: Skip a Rock! (2026-01-05)",
-    "Leader: +1 Stone Skipping, 17,579 playing, 67,362,222 visits",
+    "Leader: +1 Stone Skipping, 17,579 playing, 67,362,222 visits, tracked peak 41,000 on 2026-10-12",
+    "Renamed:\n  +1 Stone Skipping: was Stone Skipping",
     "History: not read (DATABASE_URL is not set)",
-    "no audience: under 10,000 visits",
+    "no audience: under 10,000 visits and 100 playing",
     "liked but stuck: at least 85% likes on 20 or more votes, under 100 playing and 1,000,000 visits",
     "fading: playing at most 10% of a tracked peak of 1,000 or more",
     "leader: most playing, or most visits when none plays",
@@ -98,5 +107,10 @@ describe("formatConceptReport", () => {
     expect(empty).toContain("No attempt found");
     expect(empty).toContain('Search failed for "x": HTTP 429');
     expect(empty).not.toContain("First attempt");
+  });
+
+  it("leaves the tracked peak out of a leader the radar does not track", () => {
+    const untracked = formatConceptReport({ ...report, summary: { ...report.summary, leader: { ...report.summary.leader!, peakCcu: null, peakDay: null } } });
+    expect(untracked).toContain("Leader: +1 Stone Skipping, 17,579 playing, 67,362,222 visits\n");
   });
 });

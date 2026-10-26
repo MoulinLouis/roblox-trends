@@ -364,3 +364,12 @@ git commit -m "feat(concept): print a concept check from the command line"
   - `Egg Skipping` was first seen on 2026-10-21 and peaked at 4,668.
   - Threshold change: `[NEW]Stone Miner Evolution` (8.7 million visits, 91% likes, 2 playing) came out liked but
     stuck. The design says "few visits or players", so `stuckMaximumVisits` (1,000,000) was added.
+- **Final review** (fixed in one pass, each with a test seen failing first):
+  - relevance matches words of Chinese, Japanese and Korean inside titles and keeps their two-letter words, and a
+    phrase with no usable word keeps its own results even beside other phrases: `["tile sequence", "타일"]` hid
+    `시퀀스 타일`;
+  - "no audience" also needs fewer than 100 players (`noAudienceMaximumPlayers`): a new attempt with 8,000 visits and
+    400 players was labelled no audience;
+  - the leader line shows its tracked peak and day, the trend the spec asks for;
+  - renamed attempts list their earlier titles under the table.
+

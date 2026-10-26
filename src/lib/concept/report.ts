@@ -18,8 +18,9 @@ export function formatConceptReport(report: ConceptReport, rules: DiagnosisRules
     lines.push(`${plural(summary.attempts, "attempt")} ${counts}`);
     if (summary.firstAttempt) lines.push(`First attempt: ${summary.firstAttempt.name} (${isoDay(summary.firstAttempt.created)})`);
     if (summary.leader) {
-      const { name, playing, visits, fading } = summary.leader;
-      lines.push(`Leader: ${name}, ${formatCount(playing)} playing, ${formatCount(visits)} visits${fading ? ", fading" : ""}`);
+      const { name, playing, visits, fading, peakCcu, peakDay } = summary.leader;
+      const peak = peakCcu !== null && peakDay ? `, tracked peak ${formatCount(peakCcu)} on ${isoDay(peakDay)}` : "";
+      lines.push(`Leader: ${name}, ${formatCount(playing)} playing, ${formatCount(visits)} visits${peak}${fading ? ", fading" : ""}`);
     }
     const recent = summary.recent.map((attempt) => attempt.name).join(", ");
     lines.push(`Started in the last ${CONCEPT_CHECK_CONFIG.recentDays} days: ${summary.recent.length ? `${summary.recent.length} (${recent})` : "none"}`);
@@ -27,7 +28,12 @@ export function formatConceptReport(report: ConceptReport, rules: DiagnosisRules
   lines.push(historyLine(report.history));
   for (const failure of report.failures) lines.push(`Search failed for "${failure.phrase}": ${failure.error}`);
   if (summary.attempts) {
-    lines.push("", ...table(report.attempts), "", "Labels:", ...legend(rules).map((line) => `  ${line}`));
+    lines.push("", ...table(report.attempts));
+    const renamed = report.attempts.filter((attempt) => attempt.history?.earlierNames.length);
+    if (renamed.length) {
+      lines.push("", "Renamed:", ...renamed.map((attempt) => `  ${attempt.name.trim()}: was ${attempt.history!.earlierNames.join(", ")}`));
+    }
+    lines.push("", "Labels:", ...legend(rules).map((line) => `  ${line}`));
   }
   return lines.join("\n");
 }
@@ -70,7 +76,7 @@ function legend(rules: DiagnosisRules): string[] {
     "leader: most playing, or most visits when none plays",
     `fading: playing at most ${formatPercent(rules.fadingMaximumShareOfPeak, 0)} of a tracked peak of ${formatCount(rules.fadingMinimumPeakCcu)} or more`,
     `liked but stuck: at least ${formatPercent(rules.likedMinimumRatio, 0)} likes on ${formatCount(rules.likedMinimumVotes)} or more votes, under ${formatCount(rules.stuckMaximumPlayers)} playing and ${formatCount(rules.stuckMaximumVisits)} visits`,
-    `no audience: under ${formatCount(rules.noAudienceMaximumVisits)} visits`,
+    `no audience: under ${formatCount(rules.noAudienceMaximumVisits)} visits and ${formatCount(rules.noAudienceMaximumPlayers)} playing`,
   ];
 }
 

@@ -43,7 +43,16 @@ export interface ConceptSummary {
   // Search results Roblox returned no details for.
   unavailable: number;
   firstAttempt: { universeId: number; name: string; created: Date } | null;
-  leader: { universeId: number; name: string; playing: number; visits: number; fading: boolean } | null;
+  // The tracked peak shows where the leader stands against its best day; null when the radar does not track it.
+  leader: {
+    universeId: number;
+    name: string;
+    playing: number;
+    visits: number;
+    fading: boolean;
+    peakCcu: number | null;
+    peakDay: Date | null;
+  } | null;
   // Created within CONCEPT_CHECK_CONFIG.recentDays, oldest first.
   recent: { universeId: number; name: string; created: Date }[];
 }

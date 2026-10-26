@@ -20,3 +20,20 @@ describe("isRelevant", () => {
     expect(isRelevant(text, relevanceWords(["stone skipping", "skip stones"]))).toBe(expected);
   });
 });
+
+// Scripts without spaces between words, and two-letter Korean or Chinese words, which titleWords drops.
+describe("relevance in Chinese, Japanese and Korean", () => {
+  it("keeps short words of these scripts", () => {
+    expect(relevanceWords(["타일"])).toEqual(new Set(["타일"]));
+  });
+
+  it.each([
+    [["타일"], "시퀀스 타일", true],
+    [["打水漂"], "打水漂模拟器", true],
+    [["水切り"], "水切りシミュレーター", true],
+    [["打水漂"], "Egg Tycoon", false],
+  ])("matches %o inside the title %s", (phrases, name, expected) => {
+    expect(isRelevant({ name, description: "" }, relevanceWords(phrases))).toBe(expected);
+  });
+});
+
