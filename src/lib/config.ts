@@ -376,3 +376,63 @@ export const SYSTEM_CHECK_CONFIG = {
   lateJobIntervals: 3,
   minimumLateJobMinutes: 60,
 } as const;
+
+// The classification trial (docs/plans/2026-10-28-radar-v2-classification-trial.md); the production job reuses the
+// request settings, prices and description length.
+export const CLASSIFICATION_CONFIG = {
+  effort: "low",
+  // Thinking counts against it; a classification answer is a few hundred tokens.
+  maxTokens: 8_000,
+  // Descriptions are keyword-stuffed: the start carries the pitch, the rest is codes and update notes.
+  descriptionMaxCharacters: 1_000,
+  thumbnailJpegQuality: 80,
+  thumbnailDownloadConcurrency: 8,
+  batchPollIntervalMs: 30_000,
+  // Most batches end within an hour; a rerun of the command resumes polling after this.
+  batchMaximumWaitMs: 2 * 60 * 60_000,
+  // USD per million tokens, Anthropic list prices on 2026-10-28. A 5-minute cache write costs 1.25 times the input
+  // price. Batches bill half of every price.
+  pricing: {
+    "claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2 },
+    "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01 },
+  },
+  cacheWriteMultiplier: 1.25,
+  batchDiscount: 0.5,
+  sample: {
+    youngDays: 60,
+    // Postgres regular expressions on the title, tried in this order; the first match sets the game's stratum.
+    waves: [
+      { stratum: "plus-one", pattern: "(^|[^0-9a-z])\\+1([^0-9]|$)" },
+      { stratum: "verb-for-reward", pattern: "\\mfor\\M.*\\m(eggs?|animals?|pets?|dinos?|brainrots?)\\M" },
+      { stratum: "steal", pattern: "\\msteal\\M" },
+      { stratum: "eggs", pattern: "\\meggs?\\M" },
+      { stratum: "fart", pattern: "\\mfart" },
+    ],
+    // Young games that match no wave, by all-time peak CCU.
+    youngPeakBuckets: [
+      { stratum: "young-under-100", below: 100 },
+      { stratum: "young-100-1k", below: 1_000 },
+      { stratum: "young-1k-10k", below: 10_000 },
+      { stratum: "young-10k-plus", below: null },
+    ],
+  },
+  trials: {
+    // The owner's +1 Stone Skipping is always in the comparison.
+    comparison: {
+      seed: "comparison-2026-10-28",
+      requiredUniverseIds: [10765298801],
+      quotas: {
+        "plus-one": 20, "verb-for-reward": 12, steal: 12, eggs: 16, fart: 5,
+        "young-under-100": 25, "young-100-1k": 30, "young-1k-10k": 30, "young-10k-plus": 25, established: 24,
+      },
+    },
+    review: {
+      seed: "review-2026-10-28",
+      requiredUniverseIds: [],
+      quotas: {
+        "plus-one": 10, "verb-for-reward": 6, steal: 6, eggs: 8, fart: 2,
+        "young-under-100": 13, "young-100-1k": 15, "young-1k-10k": 15, "young-10k-plus": 13, established: 12,
+      },
+    },
+  },
+} as const;
