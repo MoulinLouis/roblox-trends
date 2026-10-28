@@ -45,13 +45,13 @@ const answer: GameClassification = {
   confidence: "medium",
 };
 
-function answered(customId: string): Anthropic.Messages.MessageBatchIndividualResponse {
+function answered(customId: string, text = JSON.stringify(answer)): Anthropic.Messages.MessageBatchIndividualResponse {
   const message = {
     id: `msg_${customId}`,
     type: "message",
     role: "assistant",
     model: haiku,
-    content: [{ type: "text", text: JSON.stringify(answer), citations: null }],
+    content: [{ type: "text", text, citations: null }],
     stop_reason: "end_turn",
     stop_sequence: null,
     stop_details: null,
@@ -82,6 +82,7 @@ class MemoryStore implements TrialStore {
   locked = false;
   readonly thumbnails = new Map<number, Buffer>();
   readonly results = new Map<ClassificationModel, TrialResult[]>();
+  readonly rawResults = new Map<ClassificationModel, string[]>();
 
   async lock() {
     if (this.locked) throw new Error("The trial directory is locked");
@@ -109,6 +110,9 @@ class MemoryStore implements TrialStore {
   async writeResults(model: ClassificationModel, results: TrialResult[]) {
     this.results.set(model, structuredClone(results));
   }
+  async writeRawResults(model: ClassificationModel, lines: string[]) {
+    this.rawResults.set(model, [...lines]);
+  }
 }
 
 interface FakeBatch {
@@ -125,6 +129,8 @@ class FakeBatchApi {
   readonly resultsRead: string[] = [];
   // What create throws for a model.
   readonly failures = new Map<ClassificationModel, unknown>();
+  // Custom ids answered with text that is not JSON.
+  readonly unparseable = new Set<string>();
   private readonly batches = new Map<string, FakeBatch>();
 
   constructor(
@@ -160,9 +166,10 @@ class FakeBatchApi {
     results: async (id) => {
       this.resultsRead.push(id);
       const { customIds } = this.batch(id);
+      const unparseable = this.unparseable;
       return (async function* () {
         yield { custom_id: "not-a-game", result: { type: "canceled" } } satisfies Anthropic.Messages.MessageBatchIndividualResponse;
-        for (const customId of customIds) yield answered(customId);
+        for (const customId of customIds) yield unparseable.has(customId) ? answered(customId, "not json") : answered(customId);
       })();
     },
   };
@@ -460,6 +467,23 @@ describe("runClassificationTrial", () => {
     expect(trial.store.thumbnails.get(1)).toEqual(jpeg("stored"));
     expect(trial.store.thumbnails.get(2)).toEqual(jpeg(inputs[1].thumbnailUrl!));
     expect(imageData(trial.batches.created[0].requests[0])).toBe(jpeg("stored").toString("base64"));
+  });
+
+  it("keeps every raw answer, including one that fails to parse", async () => {
+    const trial = setup();
+    trial.batches.unparseable.add(classificationCustomId(20));
+
+    const outcome = await runClassificationTrial([game(10), game(20)], [haiku], trial.dependencies);
+
+    expect(trial.store.rawResults.get(haiku)).toEqual([
+      JSON.stringify({ custom_id: "not-a-game", result: { type: "canceled" } }),
+      JSON.stringify(answered("u10")),
+      JSON.stringify(answered("u20", "not json")),
+    ]);
+    expect(outcome.results.map((item) => [item.universeId, item.outcome.ok])).toEqual([
+      [10, true],
+      [20, false],
+    ]);
   });
 
   it("returns pending models after the maximum wait", async () => {

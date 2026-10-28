@@ -131,6 +131,7 @@ function fileTrialStore(dir: string): TrialStore {
   const stateFile = path.join(dir, STATE_FILE);
   const thumbnailFile = (universeId: number) => path.join(dir, "thumbnails", `${universeId}.jpg`);
   const resultsFile = (model: string) => path.join(dir, `results-${model}.json`);
+  const rawResultsFile = (model: string) => path.join(dir, `raw-${model}.jsonl`);
   return {
     lock: () => lockDirectory(dir),
     readState: () => readJson<TrialState>(stateFile),
@@ -139,6 +140,7 @@ function fileTrialStore(dir: string): TrialStore {
     writeThumbnail: (universeId, jpeg) => writeReplacing(thumbnailFile(universeId), jpeg),
     readResults: (model) => readJson<TrialResult[]>(resultsFile(model)),
     writeResults: (model, results) => writeJson(resultsFile(model), results),
+    writeRawResults: (model, lines) => writeReplacing(rawResultsFile(model), lines.map((line) => `${line}\n`).join("")),
   };
 }
 

@@ -31,6 +31,8 @@ export interface TrialStore {
   writeThumbnail(universeId: number, jpeg: Buffer): Promise<void>;
   readResults(model: ClassificationModel): Promise<TrialResult[] | null>;
   writeResults(model: ClassificationModel, results: TrialResult[]): Promise<void>;
+  // One JSON line per batch answer, as the API returned it.
+  writeRawResults(model: ClassificationModel, lines: string[]): Promise<void>;
 }
 
 // The subset of client.messages.batches the runner uses.
@@ -246,10 +248,14 @@ async function pollUntilEnded(
   return waiting;
 }
 
-// Read once, then stored: a stored result file is reused instead of the batch on later runs.
+// Read once, then stored: a stored result file is reused instead of the batch on later runs. The raw answers are stored
+// before they are parsed, so an answer the parser rejects or misreads can still be checked.
 async function collectResults(batch: SubmittedBatch, { batches, store, log }: TrialDependencies): Promise<TrialResult[]> {
+  const responses: Anthropic.Messages.MessageBatchIndividualResponse[] = [];
+  for await (const response of await batches.results(batch.id)) responses.push(response);
+  await store.writeRawResults(batch.model, responses.map((response) => JSON.stringify(response)));
   const results: TrialResult[] = [];
-  for await (const response of await batches.results(batch.id)) {
+  for (const response of responses) {
     const read = readBatchResult(response);
     // A custom id the runner did not write names no game.
     if (read === null) continue;
