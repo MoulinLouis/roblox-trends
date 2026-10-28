@@ -778,3 +778,34 @@ These steps spend money and need the owner. Claude runs the commands from the wo
     - an unknown batch result type is a failed game, not a crash.
   - **Not done:** moving the script's sample guards into a tested module, since they were checked by hand and serve
     only this trial.
+- **S2–S3, comparison on 2026-10-29** (`.data/classification/comparison-1`, prompt v1, 200 games, 4 without thumbnail):
+  - **Smoke test:** a direct request per model on `+1 Stone Skipping` and `Bike For Egg!` parsed cleanly ($0.05 at
+    full price). The system prompt is 4,463 tokens.
+  - **Opus and Haiku batches:** both ended within 7 minutes, with no failures.
+  - **Cost and cache:** Opus cost $2.75 at batch prices: it read the one-hour cache in only 80 of 200 requests, and the
+    120 writes at twice the input price made $2.1. Haiku cost $0.02, with 199 of 200 reads. The cache went back to
+    5 minutes (`9f2249f`).
+  - **Agreement between Opus and Haiku:** family 66%, template 68%, reward loop 80%, core action 53%, format 42%. They
+    differ on 157 games, 40 of them on core action only.
+  - **Judging:** eight Sonnet 5.5 judges (the owner wants subagents on Sonnet) settled each differing field blind, with
+    A and B randomized, reasons removed and the thumbnail opened. A first round that judged from titles alone was
+    discarded. 45 of 157 verdicts are low confidence.
+  - **Who was right on differing fields:**
+    - family: Opus 52, Haiku 10, both 5, neither 1;
+    - template: Opus 41, Haiku 11, both 9, neither 3;
+    - reward loop: Opus 23, Haiku 11, both 6, neither 1.
+  - **Estimated accuracy over 200 games** (fields both models agree on count as right): Opus family 94%, template 93%,
+    reward loop 94%, format 84%; Haiku 74%, 78%, 88%, format 54%.
+  - **Sonnet 5.5** (`fb697e6`, same 200 games and prompt v1):
+    - cost $0.40, or $0.0020 a game, with 199 cache reads at 5 minutes;
+    - answers equal to a judged value inherit its verdict, and its 77 unseen format values were judged blind against
+      the reference answer;
+    - estimated family 87%, template 87%, reward loop 91%, format 72.5%;
+    - it won 12 of those duels, some debatable, so a Sonnet judge's possible self-preference favours it.
+  - **Vocabulary:** both models invent about 30 single-use families each (quiz, party, job simulator, io, wave
+    survival, social deduction, and so on). Prompt v2 needs the broad missing genres and a rule that a new family is a
+    shared genre.
+  - **Volume:** 146–246 new games a day since 2026-10-26.
+  - **Comparison page:** https://claude.ai/artifact/4BvzHUpJ5aKbYanYATQFDY.
+  - **The owner's call:** $55–60 a month for Opus is too much (2026-10-29). Proposed next: prompt v2, then the
+    100-game review sample classified by both Opus (to measure its cache at 5 minutes) and Sonnet.
