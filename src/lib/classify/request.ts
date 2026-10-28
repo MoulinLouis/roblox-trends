@@ -68,6 +68,9 @@ export function readBatchResult(
     case "canceled":
     case "expired":
       return { universeId, outcome: failure(result.type, null) };
+    // A type added to the API after this SDK: one failed game, not a crashed collection of a paid batch.
+    default:
+      return { universeId, outcome: failure(`unknown result type: ${(result as { type: string }).type}`, null) };
   }
 }
 

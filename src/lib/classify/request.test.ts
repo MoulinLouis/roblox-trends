@@ -188,4 +188,11 @@ describe("readBatchResult", () => {
   it("ignores a request this module did not name", () => {
     expect(readBatchResult(response({ type: "expired" }, "game-1"))).toBeNull();
   });
+
+  it("fails a result type it does not know instead of crashing the collection", () => {
+    expect(readBatchResult(response({ type: "paused" } as unknown as Anthropic.Messages.MessageBatchResult))).toEqual({
+      universeId: 10765298801,
+      outcome: { ok: false, error: "unknown result type: paused", usage: null },
+    });
+  });
 });
