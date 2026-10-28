@@ -749,3 +749,32 @@ These steps spend money and need the owner. Claude runs the commands from the wo
     every stratum filled to its quota.
   - The `verb-for-reward` stratum also holds `{verb} for Brainrots` games (`Rope Bridge for Brainrots`, `Claw for
     Brainrots!`).
+- **Task 6** (`1c1bd00`):
+  - `batches.create` runs with `maxRetries: 0`: the SDK retries timeouts, 408/409/429 and 5xx by default, and a batch
+    has no idempotency key, so a retry after a lost response would pay for a second batch with an unsaved id.
+  - Thumbnails are downloaded only when a model still needs submitting.
+  - A batch is collected as soon as it ends, so a later timeout keeps its results.
+- **Task 7** (`6a5129b`):
+  - Argument parsing and the printed report live in `src/lib/classify/arguments.ts` and `report.ts`, with tests.
+  - Files are written to a temporary name and renamed.
+  - A reused sample is checked against the `--exclude` samples.
+  - The command was run end to end against a local fake of the Batches API, never against the real one.
+- **Final review**, fixed in `e548fe7` to `e871d16`:
+  - **Submission record:** an entry with `id: null` is written before each `create`. A 4xx from the API removes it;
+    any other failure keeps it, and every later run refuses until the owner finds the batch in the Console or deletes
+    the entry.
+  - **Lock:** `<dir>/run.lock` holds the pid, so a second run on the same directory refuses.
+  - **`withoutImage`:** the state records which requests went without a thumbnail, instead of inferring it on resume.
+  - **`promptHash`:** SHA-256 of the system prompt and the JSON schema, stored in the state. A directory built with
+    another prompt is refused even if nobody bumped `CLASSIFICATION_PROMPT_VERSION`.
+  - **Cache:** the system prompt is cached for one hour (`cacheTtl: "1h"`). Batch requests sharing the prefix can run
+    more than 5 minutes apart. A one-hour write costs twice the input price (`cacheWriteMultiplier: 2`).
+  - **Cost per game:** `costPerGameUsd` divides by every input game, the way a full run attempts every game.
+  - **Raw answers:** every batch answer is kept in `raw-<model>.jsonl` before parsing, so paid output survives a
+    parsing bug.
+  - **Smaller fixes:**
+    - `summary.json` carries `promptVersion`;
+    - a missing required game is warned about;
+    - an unknown batch result type is a failed game, not a crash.
+  - **Not done:** moving the script's sample guards into a tested module, since they were checked by hand and serve
+    only this trial.
