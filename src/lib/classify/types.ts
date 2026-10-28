@@ -1,6 +1,6 @@
 import type { GameClassification } from "./schema";
 
-export const CLASSIFICATION_MODELS = ["claude-opus-5-5", "claude-haiku-5-5"] as const;
+export const CLASSIFICATION_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] as const;
 export type ClassificationModel = (typeof CLASSIFICATION_MODELS)[number];
 
 export interface ClassificationInput {

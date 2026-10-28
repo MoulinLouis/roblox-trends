@@ -160,7 +160,7 @@ Without `DATABASE_URL`, or when the tunnel is down, the report says so and comes
 The classification trial (`npm run classify:trial`, `src/lib/classify/`) also runs on the owner's machine. It sends the games to Claude through the Message Batches API with the key in `~/.config/radar/anthropic.env` (mode 600, one line `ANTHROPIC_API_KEY=...`), which the npm script loads into the command's process only; a variable already set in the shell wins. The tunnel is needed only to draw the sample of a new trial directory:
 
 ```bash
-DATABASE_URL=postgresql://radar_analysis@localhost:15432/radar npm run classify:trial -- --trial comparison --dir .data/classification/comparison-1
+DATABASE_URL=postgresql://radar_analysis@localhost:15432/radar npm run classify:trial -- --trial comparison --dir .data/classification/comparison-1 --models claude-opus-5-5,claude-haiku-5-5
 ```
 
 The owner's review then draws a fresh sample with the model chosen from the comparison, leaving out the compared games:

@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import { CLASSIFICATION_TRIAL_USAGE, parseTrialArguments } from "./arguments";
 
 describe("parseTrialArguments", () => {
-  it("runs both models by default", () => {
-    expect(parseTrialArguments(["--trial", "comparison", "--dir", ".data/classification/comparison-1"])).toEqual({
+  it("reads two models to compare", () => {
+    expect(
+      parseTrialArguments(["--trial", "comparison", "--dir", ".data/classification/comparison-1", "--models", "claude-opus-5-5,claude-sonnet-5-5"]),
+    ).toEqual({
       trial: "comparison",
       dir: ".data/classification/comparison-1",
-      models: ["claude-opus-5-5", "claude-haiku-5-5"],
+      models: ["claude-opus-5-5", "claude-sonnet-5-5"],
       exclude: [],
     });
   });
@@ -35,12 +37,14 @@ describe("parseTrialArguments", () => {
 
   it.each([
     [[], /--trial is required/],
+    [["--trial", "comparison", "--dir", "d"], /--models is required/],
+    [["--trial", "comparison", "--dir", "d", "--models", "claude-opus-5-5,claude-sonnet-5-5,claude-haiku-5-5"], /--models takes one model, or two to compare/],
     [["--dir", "d"], /--trial is required/],
     [["--trial", "comparison"], /--dir is required/],
     [["--trial", "comparison", "--dir", ""], /--dir is required/],
     [["--trial", "full", "--dir", "d"], /Unknown trial: full \(comparison or review\)/],
     [["--trial", "toString", "--dir", "d"], /Unknown trial: toString/],
-    [["--trial", "comparison", "--dir", "d", "--models", "claude-sonnet-5-5"], /Unknown model: claude-sonnet-5-5 \(claude-opus-5-5, claude-haiku-5-5\)/],
+    [["--trial", "comparison", "--dir", "d", "--models", "claude-sonnet-4-6"], /Unknown model: claude-sonnet-4-6 \(claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5\)/],
     [["--trial", "comparison", "--dir", "d", "--models", "claude-opus-5-5,"], /Unknown model: /],
     [["--trial", "comparison", "--dir", "d", "--models", "claude-opus-5-5,claude-opus-5-5"], /claude-opus-5-5 is given more than once/],
     [["--trial", "comparison", "--dir", "d", "--exclude", ""], /--exclude needs a directory/],
@@ -59,8 +63,8 @@ describe("CLASSIFICATION_TRIAL_USAGE", () => {
   it("names the trials and the models", () => {
     expect(CLASSIFICATION_TRIAL_USAGE).toBe(
       [
-        "Usage: npm run classify:trial -- --trial comparison|review --dir <directory> [--models <model>[,<model>]] [--exclude <directory>]...",
-        "Models: claude-opus-5-5, claude-haiku-5-5 (all by default, compared in the order given)",
+        "Usage: npm run classify:trial -- --trial comparison|review --dir <directory> --models <model>[,<model>] [--exclude <directory>]...",
+        "Models: claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5 (one, or two compared in the order given)",
       ].join("\n"),
     );
   });

@@ -397,6 +397,7 @@ export const CLASSIFICATION_CONFIG = {
   // USD per million tokens, Anthropic list prices on 2026-10-28. Batches bill half of every price.
   pricing: {
     "claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2 },
+    "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.2 },
     "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01 },
   },
   cacheWriteMultiplier: 1.25,

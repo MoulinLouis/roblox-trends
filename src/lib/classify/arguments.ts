@@ -16,8 +16,8 @@ export interface TrialArguments {
 const trialNames = Object.keys(CLASSIFICATION_CONFIG.trials) as TrialName[];
 
 export const CLASSIFICATION_TRIAL_USAGE = [
-  `Usage: npm run classify:trial -- --trial ${trialNames.join("|")} --dir <directory> [--models <model>[,<model>]] [--exclude <directory>]...`,
-  `Models: ${CLASSIFICATION_MODELS.join(", ")} (all by default, compared in the order given)`,
+  `Usage: npm run classify:trial -- --trial ${trialNames.join("|")} --dir <directory> --models <model>[,<model>] [--exclude <directory>]...`,
+  `Models: ${CLASSIFICATION_MODELS.join(", ")} (one, or two compared in the order given)`,
 ].join("\n");
 
 // The command line of `npm run classify:trial`. A run spends money, so anything unexpected is rejected rather than
@@ -43,8 +43,10 @@ export function parseTrialArguments(argv: readonly string[]): TrialArguments {
   if (!dir?.trim()) throw new Error("--dir is required");
   const exclude = values.exclude ?? [];
   if (exclude.some((directory) => !directory.trim())) throw new Error("--exclude needs a directory");
+  // Required: each model is a paid batch, so a run names what it pays for.
   const models = single(values.models, "models");
-  return { trial: trial as TrialName, dir, models: models === undefined ? [...CLASSIFICATION_MODELS] : parseModels(models), exclude };
+  if (models === undefined) throw new Error("--models is required");
+  return { trial: trial as TrialName, dir, models: parseModels(models), exclude };
 }
 
 function single(values: string[] | undefined, name: string): string | undefined {
@@ -62,5 +64,6 @@ function parseModels(list: string): ClassificationModel[] {
     if (models.includes(model)) throw new Error(`${model} is given more than once`);
     models.push(model);
   }
+  if (models.length > 2) throw new Error("--models takes one model, or two to compare");
   return models;
 }
