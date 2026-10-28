@@ -18,8 +18,10 @@
 - Domain logic goes in `src/lib`, persistence in `src/db`, the entry point in `scripts`. Every limit, price, quota and
   pattern lives in `CLASSIFICATION_CONFIG` in `src/lib/config.ts`.
 - The command never writes to the database. Its session sets `default_transaction_read_only=on`, like `scripts/concept.ts`.
-- It runs on the owner's machine. The Anthropic key comes from the environment (`ANTHROPIC_API_KEY`), read by the SDK.
-  Nobody but the owner reads or writes it.
+- It runs on the owner's machine. The Anthropic key lives in `~/.config/radar/anthropic.env` (mode 600, one line
+  `ANTHROPIC_API_KEY=...`), loaded only into the command's process by Node's `--env-file-if-exists`; a variable already
+  set in the shell wins. It is never exported globally: Claude Code would offer to bill its own sessions to it. Nobody
+  but the owner reads or writes the file.
 - A batch is submitted once per model and trial directory: its id is saved before any polling, and a rerun resumes
   polling instead of submitting again.
 - No `fallbacks` parameter: the Batches API rejects it. A refusal becomes a failed classification, reported as such.
@@ -625,7 +627,7 @@ Order:
 
 **Files:**
 - Create: `scripts/classify-trial.ts`
-- Modify: `package.json` (script `"classify:trial": "tsx scripts/classify-trial.ts"`), `README.md` (commands table, after `npm run concept`), `docs/operations.md` ("Analysis sessions")
+- Modify: `package.json` (script `"classify:trial": "tsx --env-file-if-exists=$HOME/.config/radar/anthropic.env scripts/classify-trial.ts"`), `README.md` (commands table, after `npm run concept`), `docs/operations.md` ("Analysis sessions")
 
 **Usage:**
 
@@ -641,8 +643,8 @@ npm run classify:trial -- --trial comparison|review --dir <directory> [--models 
   no tunnel.
 - **Files** under `<dir>`: `state.json`, `thumbnails/<universeId>.jpg`, `results-<model>.json`, then `comparison.json`
   with two models or `summary.json` with one.
-- **Anthropic client.** `new Anthropic()`. A missing key fails before any request, with a message that names
-  `ANTHROPIC_API_KEY`.
+- **Anthropic client.** `new Anthropic()`. A missing key fails before the sample is drawn or any request is sent,
+  with a message that names `ANTHROPIC_API_KEY` and `~/.config/radar/anthropic.env`.
 - **Output.** Lines like these:
 
 ```text
@@ -661,7 +663,7 @@ New values: claude-opus-5-5 4 families, 9 templates, 2 reward loops; claude-haik
 - [ ] **Step 1: Write `scripts/classify-trial.ts`** and its file-system `TrialStore` (`fs/promises`, JSON with two-space indentation, directories created on write).
 - [ ] **Step 2: Document the command.**
   - **README.** One row: the command classifies a sample of tracked games with Claude through the Batches API, on the
-    owner's machine, with `ANTHROPIC_API_KEY` and, for a new trial, the analysis tunnel. It costs a few dollars and
+    owner's machine, with the key in `~/.config/radar/anthropic.env` and, for a new trial, the analysis tunnel. It costs a few dollars and
     never writes to the database.
   - **`docs/operations.md`, "Analysis sessions".** Add after the concept check:
 
@@ -680,8 +682,8 @@ New values: claude-opus-5-5 4 families, 9 templates, 2 reward loops; claude-haik
 These steps spend money and need the owner. Claude runs the commands from the worktree; the owner provides the key.
 
 - [ ] **S1: Prerequisites.**
-  - **Key.** The owner exports `ANTHROPIC_API_KEY` in a way the session's shell inherits, for example a line in
-    `~/.zshenv`, and sets a spend limit in the Anthropic console.
+  - **Key.** The owner writes `~/.config/radar/anthropic.env` (mode 600) from their own terminal and sets a spend
+    limit in the Anthropic console. Done on 2026-10-28; a free `models.retrieve` call reached both models.
   - **Tunnel.** Claude opens it: `ssh -f -N -L 15432:/var/run/postgresql/.s.PGSQL.5432 radar-analysis`.
 - [ ] **S2: Comparison run.**
   - **Command.**
@@ -727,3 +729,23 @@ These steps spend money and need the owner. Claude runs the commands from the wo
 ## Execution notes
 
 (Record decisions and surprises here as tasks complete; committed code is authoritative over the code blocks above.)
+
+- **Task 1** (`a7b1e12`, `d96c419`):
+  - `sharp` is at `^0.35.5`, not `^0.35.3`. `npm audit` flags 0.35.3 for libheif and librsvg advisories in image
+    decoding, which the trial does; Next's `^0.35.3` range accepts 0.35.5, so both share one copy.
+  - The lockfile also lost the nested optional esbuild entries that a plain `npm install` drops on the unchanged tree.
+- **Task 2** (`76f22b0`):
+  - The description is trimmed before it is cut, and cut by code points, so an emoji at the 1,000th character is not
+    split into a lone surrogate.
+  - Schema mismatches use `describeIssue`.
+- **Task 3** (`c1fa78f`):
+  - A run's numbers cover its inputs only.
+  - A missing result counts as a failure (`no result`).
+  - New values tie-break with `compareText`.
+- **Task 4** (`a1a8554`): a non-2xx response's body is cancelled.
+- **Task 5** (`4cd48e2`):
+  - Quotas naming an unknown stratum throw.
+  - The query ran read-only on production on 2026-10-28 through the tunnel: 200 games in 0.5 s, 5 without thumbnail,
+    every stratum filled to its quota.
+  - The `verb-for-reward` stratum also holds `{verb} for Brainrots` games (`Rope Bridge for Brainrots`, `Claw for
+    Brainrots!`).
