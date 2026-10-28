@@ -75,7 +75,8 @@ async function runTrial({ trial, dir, models, exclude }: TrialArguments): Promis
   } else {
     const file = path.join(dir, "summary.json");
     const summary = summarizeRun(models[0], inputs, run.results);
-    await writeJson(file, summary);
+    // Like comparison.json, so the file says which prompt its answers came from.
+    await writeJson(file, { promptVersion: CLASSIFICATION_PROMPT_VERSION, ...summary });
     console.log(formatRunSummary(summary, CLASSIFICATION_PROMPT_VERSION, file));
   }
   return 0;
