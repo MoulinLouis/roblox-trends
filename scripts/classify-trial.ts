@@ -125,7 +125,12 @@ async function drawSample(trial: TrialName, excludeUniverseIds: number[]): Promi
   });
   await assertNotLegacyDatabase(database);
   const { seed, requiredUniverseIds, quotas } = CLASSIFICATION_CONFIG.trials[trial];
-  return readClassificationSample(database, { now: new Date(), seed, requiredUniverseIds, quotas, excludeUniverseIds });
+  const sample = await readClassificationSample(database, { now: new Date(), seed, requiredUniverseIds, quotas, excludeUniverseIds });
+  // The draw drops a required game the radar does not track or an --exclude directory holds, without failing.
+  const drawn = new Set(sample.map((input) => input.universeId));
+  const missing = requiredUniverseIds.filter((universeId) => !drawn.has(universeId));
+  if (missing.length) logger.warn(`Required games missing from the sample (untracked or excluded): ${missing.join(", ")}`);
+  return sample;
 }
 
 function fileTrialStore(dir: string): TrialStore {

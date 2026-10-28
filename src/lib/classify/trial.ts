@@ -42,7 +42,7 @@ export interface BatchApi {
     options: { maxRetries: number },
   ): Promise<{ id: string }>;
   retrieve(id: string): Promise<{
-    processing_status: string;
+    processing_status: Anthropic.Messages.MessageBatch["processing_status"];
     request_counts: { processing: number; succeeded: number; errored: number; canceled: number; expired: number };
   }>;
   results(id: string): Promise<AsyncIterable<Anthropic.Messages.MessageBatchIndividualResponse>>;
