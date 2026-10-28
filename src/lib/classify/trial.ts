@@ -5,13 +5,23 @@ import { CLASSIFICATION_PROMPT_VERSION, classificationSystemPrompt } from "./pro
 import { classificationCustomId, classificationRequest, readBatchResult } from "./request";
 import type { ClassificationInput, ClassificationModel, ThumbnailImage, TrialResult } from "./types";
 
+export interface TrialBatch {
+  // Null from just before the submission until the API returns the id. A submission whose answer was lost may still
+  // have created a batch, so a stored null stops every later run until the owner settles it.
+  id: string | null;
+  submittedAt: string;
+  requests: number;
+}
+
 export interface TrialState {
   promptVersion: number;
-  batches: Partial<Record<ClassificationModel, { id: string; submittedAt: string; requests: number }>>;
+  batches: Partial<Record<ClassificationModel, TrialBatch>>;
 }
 
 // The trial directory, abstracted for tests. scripts/classify-trial.ts implements it on the file system.
 export interface TrialStore {
+  // Two runs on one directory would each submit a batch for a model that has none. Resolves with the release.
+  lock(): Promise<() => Promise<void>>;
   readState(): Promise<TrialState | null>;
   writeState(state: TrialState): Promise<void>;
   readThumbnail(universeId: number): Promise<Buffer | null>;
@@ -49,18 +59,38 @@ interface SubmittedBatch {
   withImage: ReadonlySet<number>;
 }
 
-// Every batch is paid for, so each model gets at most one per trial directory: its id is saved as soon as it exists,
-// and a later run polls it instead of submitting again.
+type TrialOptions = { pollIntervalMs?: number; maximumWaitMs?: number };
+type TrialOutcome = { results: TrialResult[]; pending: ClassificationModel[] };
+
+// Every batch is paid for, so each model gets at most one per trial directory: its submission is recorded before it is
+// sent, its id as soon as it exists, and a later run polls it instead of submitting again.
 export async function runClassificationTrial(
   inputs: ClassificationInput[],
   models: readonly ClassificationModel[],
   dependencies: TrialDependencies,
-  options: { pollIntervalMs?: number; maximumWaitMs?: number } = {},
-): Promise<{ results: TrialResult[]; pending: ClassificationModel[] }> {
+  options: TrialOptions = {},
+): Promise<TrialOutcome> {
+  const release = await dependencies.store.lock();
+  try {
+    return await runLocked(inputs, models, dependencies, options);
+  } finally {
+    await release();
+  }
+}
+
+async function runLocked(
+  inputs: ClassificationInput[],
+  models: readonly ClassificationModel[],
+  dependencies: TrialDependencies,
+  options: TrialOptions,
+): Promise<TrialOutcome> {
   const { store, batches, now, log } = dependencies;
   let state: TrialState = (await store.readState()) ?? { promptVersion: CLASSIFICATION_PROMPT_VERSION, batches: {} };
   if (state.promptVersion !== CLASSIFICATION_PROMPT_VERSION) {
     throw new Error(`Trial directory holds prompt version ${state.promptVersion}; use a new directory`);
+  }
+  for (const [model, batch] of Object.entries(state.batches)) {
+    if (batch?.id === null) throw new Error(unsavedSubmission(model, batch.submittedAt));
   }
 
   const finished: TrialResult[] = [];
@@ -85,20 +115,32 @@ export async function runClassificationTrial(
       custom_id: classificationCustomId(input.universeId),
       params: classificationRequest(model, input, thumbnails?.images.get(input.universeId) ?? null, system),
     }));
-    // The SDK retries a timed-out or failed request, and a batch has no idempotency key: a retry after a lost response
-    // would pay for a second batch whose id nobody saved. A failure is thrown instead, for the owner to check.
-    const { id } = await batches.create({ requests }, { maxRetries: 0 });
+    const submittedAt = now().toISOString();
+    state = withBatch(state, model, { id: null, submittedAt, requests: requests.length });
+    await store.writeState(state);
+    let id: string;
+    try {
+      // The SDK retries a timed-out or failed request, and a batch has no idempotency key: a retry after a lost
+      // response would pay for a second batch whose id nobody saved. A failure is thrown instead, for the owner to check.
+      ({ id } = await batches.create({ requests }, { maxRetries: 0 }));
+    } catch (error) {
+      if (rejectedByApi(error)) {
+        state = withBatch(state, model, null);
+        await store.writeState(state);
+      } else {
+        log(unsavedSubmission(model, submittedAt));
+      }
+      throw error;
+    }
     // Logged before the state is written, so the id of a paid batch is on screen even if the write fails.
     log(`Submitted the ${model} batch ${id} (${requests.length} requests)`);
-    state = {
-      ...state,
-      batches: { ...state.batches, [model]: { id, submittedAt: now().toISOString(), requests: requests.length } },
-    };
+    state = withBatch(state, model, { id, submittedAt, requests: requests.length });
     await store.writeState(state);
   }
 
   const submitted = unfinished.map((model): SubmittedBatch => {
-    const { id } = state.batches[model]!;
+    // Set for every model: a stored null throws above, and a new submission saves its id or throws.
+    const id = state.batches[model]!.id!;
     if (toSubmit.includes(model)) return { model, id, withImage: sentWithImage };
     log(`Resuming the ${model} batch ${id}`);
     // Thumbnails are stored only before a submission, so an earlier batch carried those stored before this run.
@@ -114,6 +156,28 @@ export async function runClassificationTrial(
 
   finished.sort((left, right) => left.universeId - right.universeId || compareText(left.model, right.model));
   return { results: finished, pending: pending.map((batch) => batch.model) };
+}
+
+function withBatch(state: TrialState, model: ClassificationModel, batch: TrialBatch | null): TrialState {
+  const batches = { ...state.batches };
+  if (batch === null) delete batches[model];
+  else batches[model] = batch;
+  return { ...state, batches };
+}
+
+// A 4xx answer means the API refused the request, so no batch exists. A timeout, a lost connection or a 5xx answer may
+// come after the batch was created.
+function rejectedByApi(error: unknown): boolean {
+  const status = typeof error === "object" && error !== null && "status" in error ? error.status : undefined;
+  return typeof status === "number" && status >= 400 && status <= 499;
+}
+
+// The runner does not know the directory, so it names the state file alone.
+function unsavedSubmission(model: string, submittedAt: string): string {
+  return (
+    `The ${model} batch submission of ${submittedAt} may have reached Anthropic without its id being saved. Find it ` +
+    `in the Console's batch list and write its id into state.json, or delete the ${model} entry to submit again.`
+  );
 }
 
 // Reads every stored thumbnail and, when `download` is set, downloads and stores the missing ones. A game whose

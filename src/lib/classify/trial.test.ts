@@ -4,7 +4,14 @@ import { CLASSIFICATION_CONFIG } from "@/lib/config";
 import { CLASSIFICATION_PROMPT_VERSION } from "./prompt";
 import { classificationCustomId } from "./request";
 import type { GameClassification } from "./schema";
-import { type BatchApi, runClassificationTrial, type TrialDependencies, type TrialState, type TrialStore } from "./trial";
+import {
+  type BatchApi,
+  runClassificationTrial,
+  type TrialBatch,
+  type TrialDependencies,
+  type TrialState,
+  type TrialStore,
+} from "./trial";
 import type { ClassificationInput, ClassificationModel, TrialResult } from "./types";
 
 const opus: ClassificationModel = "claude-opus-5-5";
@@ -72,13 +79,22 @@ function jpeg(url: string): Buffer {
 
 class MemoryStore implements TrialStore {
   state: TrialState | null = null;
+  locked = false;
   readonly thumbnails = new Map<number, Buffer>();
   readonly results = new Map<ClassificationModel, TrialResult[]>();
 
+  async lock() {
+    if (this.locked) throw new Error("The trial directory is locked");
+    this.locked = true;
+    return async () => {
+      this.locked = false;
+    };
+  }
   async readState() {
     return structuredClone(this.state);
   }
   async writeState(state: TrialState) {
+    if (!this.locked) throw new Error("State written without the lock");
     this.state = structuredClone(state);
   }
   async readThumbnail(universeId: number) {
@@ -107,7 +123,8 @@ class FakeBatchApi {
   readonly created: { model: ClassificationModel; requests: BatchRequest[]; maxRetries: number }[] = [];
   readonly retrieved: string[] = [];
   readonly resultsRead: string[] = [];
-  readonly failingModels = new Set<ClassificationModel>();
+  // What create throws for a model.
+  readonly failures = new Map<ClassificationModel, unknown>();
   private readonly batches = new Map<string, FakeBatch>();
 
   constructor(
@@ -122,7 +139,7 @@ class FakeBatchApi {
   readonly api: BatchApi = {
     create: async ({ requests }, { maxRetries }) => {
       const model = requests[0].params.model as ClassificationModel;
-      if (this.failingModels.has(model)) throw new Error("529 overloaded");
+      if (this.failures.has(model)) throw this.failures.get(model);
       this.created.push({ model, requests, maxRetries });
       const id = `msgbatch_${this.created.length}`;
       this.batches.set(id, { model, customIds: requests.map((request) => request.custom_id), retrievals: 0 });
@@ -167,13 +184,20 @@ function setup(endsAfter: Partial<Record<ClassificationModel, number>> = {}) {
   const batches = new FakeBatchApi(endsAfter, () => {
     if (stateAtFirstRetrieve === undefined) stateAtFirstRetrieve = structuredClone(store.state);
   });
+  const statesAtCreate: (TrialState | null)[] = [];
   const downloads: (string | null)[] = [];
   const logs: string[] = [];
   const start = Date.parse("2026-10-28T12:00:00.000Z");
   let time = start;
   const dependencies: TrialDependencies = {
     store,
-    batches: batches.api,
+    batches: {
+      ...batches.api,
+      create: (params, options) => {
+        statesAtCreate.push(structuredClone(store.state));
+        return batches.api.create(params, options);
+      },
+    },
     downloadThumbnail: async (url) => {
       downloads.push(url);
       return url === null ? null : jpeg(url);
@@ -191,11 +215,16 @@ function setup(endsAfter: Partial<Record<ClassificationModel, number>> = {}) {
     logs,
     dependencies,
     stateAtFirstRetrieve: () => stateAtFirstRetrieve,
+    statesAtCreate,
     elapsedMs: () => time - start,
   };
 }
 
-function storedBatch(id: string): NonNullable<TrialState["batches"][ClassificationModel]> {
+function apiError(status: number, message: string): Error {
+  return Object.assign(new Error(message), { status });
+}
+
+function storedBatch(id: string): TrialBatch {
   return { id, submittedAt: "2026-10-28T10:00:00.000Z", requests: 2 };
 }
 
@@ -267,12 +296,12 @@ describe("runClassificationTrial", () => {
     expect(outcome.pending).toEqual([]);
   });
 
-  it("keeps the first model's batch id when the second submission fails, and a rerun submits only the second", async () => {
+  it("keeps the first model's batch id when the API rejects the second submission, and a rerun submits only the second", async () => {
     const trial = setup();
     const inputs = [game(10), game(20)];
-    trial.batches.failingModels.add(haiku);
+    trial.batches.failures.set(haiku, apiError(429, "429 rate_limit_error"));
 
-    await expect(runClassificationTrial(inputs, [opus, haiku], trial.dependencies)).rejects.toThrow("529 overloaded");
+    await expect(runClassificationTrial(inputs, [opus, haiku], trial.dependencies)).rejects.toThrow("429 rate_limit_error");
 
     expect(trial.store.state).toEqual({
       promptVersion: CLASSIFICATION_PROMPT_VERSION,
@@ -280,12 +309,94 @@ describe("runClassificationTrial", () => {
     });
     expect(trial.batches.retrieved).toEqual([]);
 
-    trial.batches.failingModels.clear();
+    trial.batches.failures.clear();
     const outcome = await runClassificationTrial(inputs, [opus, haiku], trial.dependencies);
 
     expect(trial.batches.createdModels()).toEqual([opus, haiku]);
     expect(trial.store.state?.batches[opus]?.id).toBe("msgbatch_1");
     expect(outcome.results).toHaveLength(4);
+  });
+
+  it("records each submission before sending it", async () => {
+    const trial = setup();
+
+    await runClassificationTrial([game(10), game(20)], [opus, haiku], trial.dependencies);
+
+    expect(trial.statesAtCreate.map((state) => state?.batches)).toEqual([
+      { [opus]: { id: null, submittedAt: "2026-10-28T12:00:00.000Z", requests: 2 } },
+      {
+        [opus]: { id: "msgbatch_1", submittedAt: "2026-10-28T12:00:00.000Z", requests: 2 },
+        [haiku]: { id: null, submittedAt: "2026-10-28T12:00:00.000Z", requests: 2 },
+      },
+    ]);
+  });
+
+  // A timeout, a lost connection or a server error can follow a batch that was created and is billed.
+  it.each([
+    ["a server error", apiError(500, "500 api_error")],
+    ["an error without a status", new Error("Connection error.")],
+  ])("keeps a submission that failed with %s, and a rerun refuses to submit again", async (_, error) => {
+    const trial = setup();
+    const inputs = [game(10), game(20)];
+    trial.batches.failures.set(opus, error);
+
+    await expect(runClassificationTrial(inputs, [opus, haiku], trial.dependencies)).rejects.toBe(error);
+
+    expect(trial.store.state?.batches).toEqual({ [opus]: { id: null, submittedAt: "2026-10-28T12:00:00.000Z", requests: 2 } });
+    const message =
+      "The claude-opus-5-5 batch submission of 2026-10-28T12:00:00.000Z may have reached Anthropic without its id being " +
+      "saved. Find it in the Console's batch list and write its id into state.json, or delete the claude-opus-5-5 entry " +
+      "to submit again.";
+    expect(trial.logs).toContain(message);
+
+    trial.batches.failures.clear();
+    const downloads = trial.downloads.length;
+    await expect(runClassificationTrial(inputs, [opus, haiku], trial.dependencies)).rejects.toThrow(message);
+    expect(trial.batches.created).toEqual([]);
+    expect(trial.downloads).toHaveLength(downloads);
+    expect(trial.store.state?.batches[opus]?.id).toBeNull();
+  });
+
+  it("drops a submission the API rejected, and a rerun submits it", async () => {
+    const trial = setup();
+    const inputs = [game(10), game(20)];
+    const error = apiError(400, "400 invalid_request_error");
+    trial.batches.failures.set(opus, error);
+
+    await expect(runClassificationTrial(inputs, [opus], trial.dependencies)).rejects.toBe(error);
+
+    expect(trial.store.state?.batches).toEqual({});
+
+    trial.batches.failures.clear();
+    const outcome = await runClassificationTrial(inputs, [opus], trial.dependencies);
+
+    expect(trial.batches.createdModels()).toEqual([opus]);
+    expect(trial.store.state?.batches[opus]?.id).toBe("msgbatch_1");
+    expect(outcome.results).toHaveLength(2);
+  });
+
+  it("releases the directory lock when it ends and when it throws", async () => {
+    const trial = setup();
+
+    await runClassificationTrial([game(10)], [haiku], trial.dependencies);
+    expect(trial.store.locked).toBe(false);
+
+    trial.batches.failures.set(opus, new Error("Connection error."));
+    await expect(runClassificationTrial([game(10)], [opus], trial.dependencies)).rejects.toThrow("Connection error.");
+    expect(trial.store.locked).toBe(false);
+  });
+
+  it("does nothing while another run holds the directory lock", async () => {
+    const trial = setup();
+    trial.store.locked = true;
+
+    await expect(runClassificationTrial([game(10)], [opus, haiku], trial.dependencies)).rejects.toThrow(
+      "The trial directory is locked",
+    );
+
+    expect(trial.store.locked).toBe(true);
+    expect(trial.downloads).toEqual([]);
+    expect(trial.batches.created).toEqual([]);
   });
 
   it("reuses stored results", async () => {

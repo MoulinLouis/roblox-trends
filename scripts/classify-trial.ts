@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import Anthropic from "@anthropic-ai/sdk";
@@ -21,6 +21,7 @@ import { errorMessage, logger } from "@/lib/logger";
 // a new sample, through the analysis tunnel in a read-only session, and never writes to it.
 const SAMPLE_FILE = "sample.json";
 const STATE_FILE = "state.json";
+const LOCK_FILE = "run.lock";
 
 let exitCode = 1;
 let parsed: TrialArguments | null = null;
@@ -59,12 +60,8 @@ async function runTrial({ trial, dir, models, exclude }: TrialArguments): Promis
       log: (message) => logger.info(message),
     });
   } catch (error) {
+    // A submission that may have reached Anthropic stays in state.json without an id; the runner logged what to do.
     logger.error("Classification trial failed", { error: errorMessage(error) });
-    // A submission that timed out or lost its connection may still have been accepted, and paid for, by Anthropic.
-    console.error(
-      "If a batch submission failed, check the batch list in the Anthropic Console before running again: a batch may " +
-        `have been created without its id being saved in ${path.join(dir, STATE_FILE)}.`,
-    );
     return 1;
   }
 
@@ -135,6 +132,7 @@ function fileTrialStore(dir: string): TrialStore {
   const thumbnailFile = (universeId: number) => path.join(dir, "thumbnails", `${universeId}.jpg`);
   const resultsFile = (model: string) => path.join(dir, `results-${model}.json`);
   return {
+    lock: () => lockDirectory(dir),
     readState: () => readJson<TrialState>(stateFile),
     writeState: (state) => writeJson(stateFile, state),
     readThumbnail: (universeId) => readOptional(thumbnailFile(universeId)),
@@ -142,6 +140,35 @@ function fileTrialStore(dir: string): TrialStore {
     readResults: (model) => readJson<TrialResult[]>(resultsFile(model)),
     writeResults: (model, results) => writeJson(resultsFile(model), results),
   };
+}
+
+// The lock holds the pid of its run. A lock whose pid no longer runs was left by a run that crashed, and is replaced.
+async function lockDirectory(dir: string): Promise<() => Promise<void>> {
+  const file = path.join(dir, LOCK_FILE);
+  const pid = `${process.pid}\n`;
+  await mkdir(dir, { recursive: true });
+  try {
+    await writeFile(file, pid, { flag: "wx" });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const holder = Number((await readOptional(file))?.toString("utf8").trim());
+    // After a reboot, a crashed run's pid can be this run's own.
+    if (Number.isInteger(holder) && holder > 0 && holder !== process.pid && isRunning(holder)) {
+      throw new Error(`Another classify:trial run (pid ${holder}) is using ${dir}`);
+    }
+    await writeFile(file, pid);
+  }
+  return () => rm(file, { force: true });
+}
+
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM: the process exists under another user.
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
 }
 
 // Null when the file does not exist.

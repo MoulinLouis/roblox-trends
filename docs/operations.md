@@ -169,7 +169,9 @@ The owner's review then draws a fresh sample with the model chosen from the comp
 DATABASE_URL=postgresql://radar_analysis@localhost:15432/radar npm run classify:trial -- --trial review --dir .data/classification/review-1 --models <model> --exclude .data/classification/comparison-1
 ```
 
-A batch usually ends within an hour; after 2 hours the command prints the models still processing. Running the same command again resumes: the directory keeps the sample, each model's batch id and its results, so nothing is drawn or paid twice and the tunnel is not needed. If a run fails while submitting a batch, check the batch list in the Anthropic Console before running it again: a batch may have been created without its id being saved in `state.json`.
+A batch usually ends within an hour; after 2 hours the command prints the models still processing. Running the same command again resumes: the directory keeps the sample, each model's batch id and its results, so nothing is drawn or paid twice and the tunnel is not needed. A run holds `run.lock` in the directory, so a second run on it refuses to start; a lock left by a run that crashed is replaced.
+
+`state.json` records each batch submission before it is sent. When a submission fails without an answer from the API (a timeout, a lost connection, a server error), the batch may still have been created and billed, so every later run refuses until the entry is settled: find the batch in the Anthropic Console's batch list and write its id into the model's entry, or, if no batch was created, delete that entry to submit again.
 
 `rising_games` computes the Radar page's metrics for any `as_of`. A session calls it with the values of `RADAR_CONFIG` in `src/lib/config.ts`; `sort_by` is `growth`, `acceleration`, `ccu` or `age`, and `row_limit` null returns every game (about 1 s for 90 days):
 
