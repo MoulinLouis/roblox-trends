@@ -157,6 +157,20 @@ DATABASE_URL=postgresql://radar_analysis@localhost:15432/radar npm run concept -
 
 Without `DATABASE_URL`, or when the tunnel is down, the report says so and comes without history.
 
+The classification trial (`npm run classify:trial`, `src/lib/classify/`) also runs on the owner's machine. It sends the games to Claude through the Message Batches API with the key in `~/.config/radar/anthropic.env` (mode 600, one line `ANTHROPIC_API_KEY=...`), which the npm script loads into the command's process only; a variable already set in the shell wins. The tunnel is needed only to draw the sample of a new trial directory:
+
+```bash
+DATABASE_URL=postgresql://radar_analysis@localhost:15432/radar npm run classify:trial -- --trial comparison --dir .data/classification/comparison-1
+```
+
+The owner's review then draws a fresh sample with the model chosen from the comparison, leaving out the compared games:
+
+```bash
+DATABASE_URL=postgresql://radar_analysis@localhost:15432/radar npm run classify:trial -- --trial review --dir .data/classification/review-1 --models <model> --exclude .data/classification/comparison-1
+```
+
+A batch usually ends within an hour; after 2 hours the command prints the models still processing. Running the same command again resumes: the directory keeps the sample, each model's batch id and its results, so nothing is drawn or paid twice and the tunnel is not needed. If a run fails while submitting a batch, check the batch list in the Anthropic Console before running it again: a batch may have been created without its id being saved in `state.json`.
+
 `rising_games` computes the Radar page's metrics for any `as_of`. A session calls it with the values of `RADAR_CONFIG` in `src/lib/config.ts`; `sort_by` is `growth`, `acceleration`, `ccu` or `age`, and `row_limit` null returns every game (about 1 s for 90 days):
 
 ```sql
