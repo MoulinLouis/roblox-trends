@@ -1,7 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { chunk, compareText } from "@/lib/arrays";
 import { CLASSIFICATION_CONFIG } from "@/lib/config";
-import { CLASSIFICATION_PROMPT_VERSION, classificationSystemPrompt } from "./prompt";
+import { CLASSIFICATION_PROMPT_VERSION, classificationPromptHash, classificationSystemPrompt } from "./prompt";
 import { classificationCustomId, classificationRequest, readBatchResult } from "./request";
 import type { ClassificationInput, ClassificationModel, ThumbnailImage, TrialResult } from "./types";
 
@@ -17,6 +17,7 @@ export interface TrialBatch {
 
 export interface TrialState {
   promptVersion: number;
+  promptHash: string; // classificationPromptHash
   batches: Partial<Record<ClassificationModel, TrialBatch>>;
 }
 
@@ -86,10 +87,13 @@ async function runLocked(
   options: TrialOptions,
 ): Promise<TrialOutcome> {
   const { store, batches, now, log } = dependencies;
-  let state: TrialState = (await store.readState()) ?? { promptVersion: CLASSIFICATION_PROMPT_VERSION, batches: {} };
+  const system = classificationSystemPrompt();
+  const promptHash = classificationPromptHash(system);
+  let state: TrialState = (await store.readState()) ?? { promptVersion: CLASSIFICATION_PROMPT_VERSION, promptHash, batches: {} };
   if (state.promptVersion !== CLASSIFICATION_PROMPT_VERSION) {
     throw new Error(`Trial directory holds prompt version ${state.promptVersion}; use a new directory`);
   }
+  if (state.promptHash !== promptHash) throw new Error("Trial directory was built with another prompt; use a new directory");
   for (const [model, batch] of Object.entries(state.batches)) {
     if (batch?.id === null) throw new Error(unsavedSubmission(model, batch.submittedAt));
   }
@@ -113,7 +117,6 @@ async function runLocked(
     .map((input) => input.universeId)
     .filter((universeId) => !images.has(universeId))
     .sort((left, right) => left - right);
-  const system = classificationSystemPrompt();
   for (const model of toSubmit) {
     const requests = inputs.map((input) => ({
       custom_id: classificationCustomId(input.universeId),

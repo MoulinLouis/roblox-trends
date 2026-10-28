@@ -1,7 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { CLASSIFICATION_CONFIG } from "@/lib/config";
-import { CLASSIFICATION_PROMPT_VERSION } from "./prompt";
+import { CLASSIFICATION_PROMPT_VERSION, classificationPromptHash } from "./prompt";
 import { classificationCustomId } from "./request";
 import type { GameClassification } from "./schema";
 import {
@@ -224,6 +224,10 @@ function apiError(status: number, message: string): Error {
   return Object.assign(new Error(message), { status });
 }
 
+function storedState(batches: TrialState["batches"]): TrialState {
+  return { promptVersion: CLASSIFICATION_PROMPT_VERSION, promptHash: classificationPromptHash(), batches };
+}
+
 function storedBatch(id: string, withoutImage: number[] = []): TrialBatch {
   return { id, submittedAt: "2026-10-28T10:00:00.000Z", requests: 2, withoutImage };
 }
@@ -256,6 +260,7 @@ describe("runClassificationTrial", () => {
     expect(trial.batches.created.map((batch) => batch.maxRetries)).toEqual([0, 0]);
     expect(trial.stateAtFirstRetrieve()).toEqual({
       promptVersion: CLASSIFICATION_PROMPT_VERSION,
+      promptHash: classificationPromptHash(),
       batches: {
         [opus]: { id: "msgbatch_1", submittedAt: "2026-10-28T12:00:00.000Z", requests: 3, withoutImage: [] },
         [haiku]: { id: "msgbatch_2", submittedAt: "2026-10-28T12:00:00.000Z", requests: 3, withoutImage: [] },
@@ -284,7 +289,7 @@ describe("runClassificationTrial", () => {
   it("resumes a stored batch instead of submitting again", async () => {
     const trial = setup();
     const inputs = [game(10), game(20)];
-    trial.store.state = { promptVersion: CLASSIFICATION_PROMPT_VERSION, batches: { [opus]: storedBatch("msgbatch_earlier") } };
+    trial.store.state = storedState({ [opus]: storedBatch("msgbatch_earlier") });
     trial.batches.seed("msgbatch_earlier", opus, inputs);
 
     const outcome = await runClassificationTrial(inputs, [opus, haiku], trial.dependencies);
@@ -305,6 +310,7 @@ describe("runClassificationTrial", () => {
 
     expect(trial.store.state).toEqual({
       promptVersion: CLASSIFICATION_PROMPT_VERSION,
+      promptHash: classificationPromptHash(),
       batches: { [opus]: { id: "msgbatch_1", submittedAt: "2026-10-28T12:00:00.000Z", requests: 2, withoutImage: [] } },
     });
     expect(trial.batches.retrieved).toEqual([]);
@@ -405,7 +411,7 @@ describe("runClassificationTrial", () => {
   it("reuses stored results", async () => {
     const trial = setup();
     const inputs = [game(10), game(20)];
-    trial.store.state = { promptVersion: CLASSIFICATION_PROMPT_VERSION, batches: { [opus]: storedBatch("msgbatch_earlier") } };
+    trial.store.state = storedState({ [opus]: storedBatch("msgbatch_earlier") });
     trial.store.results.set(opus, [result(10, opus, true), result(20, opus, false)]);
 
     const outcome = await runClassificationTrial(inputs, [opus, haiku], trial.dependencies);
@@ -419,7 +425,7 @@ describe("runClassificationTrial", () => {
   it("downloads no thumbnail when every model already has a batch or results", async () => {
     const trial = setup();
     const inputs = [game(10), game(20)];
-    trial.store.state = { promptVersion: CLASSIFICATION_PROMPT_VERSION, batches: { [haiku]: storedBatch("msgbatch_earlier", [20]) } };
+    trial.store.state = storedState({ [haiku]: storedBatch("msgbatch_earlier", [20]) });
     trial.batches.seed("msgbatch_earlier", haiku, inputs);
     trial.store.results.set(opus, [result(10, opus, true), result(20, opus, true)]);
 
@@ -513,7 +519,7 @@ describe("runClassificationTrial", () => {
     const inputs = [game(10), game(20)];
     trial.store.thumbnails.set(10, jpeg("10"));
     trial.store.thumbnails.set(20, jpeg("20"));
-    trial.store.state = { promptVersion: CLASSIFICATION_PROMPT_VERSION, batches: { [opus]: storedBatch("msgbatch_earlier", [10]) } };
+    trial.store.state = storedState({ [opus]: storedBatch("msgbatch_earlier", [10]) });
     trial.batches.seed("msgbatch_earlier", opus, inputs);
 
     const outcome = await runClassificationTrial(inputs, [opus], trial.dependencies);
@@ -529,7 +535,7 @@ describe("runClassificationTrial", () => {
     const inputs = [game(10), game(20)];
     // The earlier run stored game 10's thumbnail, failed to download game 20's and submitted Opus before it stopped.
     trial.store.thumbnails.set(10, jpeg("10"));
-    trial.store.state = { promptVersion: CLASSIFICATION_PROMPT_VERSION, batches: { [opus]: storedBatch("msgbatch_earlier", [20]) } };
+    trial.store.state = storedState({ [opus]: storedBatch("msgbatch_earlier", [20]) });
     trial.batches.seed("msgbatch_earlier", opus, inputs);
 
     const outcome = await runClassificationTrial(inputs, [opus, haiku], trial.dependencies);
@@ -546,10 +552,22 @@ describe("runClassificationTrial", () => {
   it("refuses a directory of another prompt version", async () => {
     const trial = setup();
     const version = CLASSIFICATION_PROMPT_VERSION + 1;
-    trial.store.state = { promptVersion: version, batches: {} };
+    trial.store.state = { promptVersion: version, promptHash: classificationPromptHash(), batches: {} };
 
     await expect(runClassificationTrial([game(10)], [opus, haiku], trial.dependencies)).rejects.toThrow(
       `Trial directory holds prompt version ${version}; use a new directory`,
+    );
+    expect(trial.downloads).toEqual([]);
+    expect(trial.batches.created).toEqual([]);
+  });
+
+  // An edit of the prompt or of the schema made without bumping the version.
+  it("refuses a directory built with another prompt", async () => {
+    const trial = setup();
+    trial.store.state = { ...storedState({}), promptHash: "0".repeat(64) };
+
+    await expect(runClassificationTrial([game(10)], [opus, haiku], trial.dependencies)).rejects.toThrow(
+      "Trial directory was built with another prompt; use a new directory",
     );
     expect(trial.downloads).toEqual([]);
     expect(trial.batches.created).toEqual([]);

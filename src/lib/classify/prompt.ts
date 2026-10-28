@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import type Anthropic from "@anthropic-ai/sdk";
 import { CLASSIFICATION_CONFIG } from "@/lib/config";
+import { classificationJsonSchema } from "./schema";
 import type { ClassificationInput, ClassificationVocabulary, ThumbnailImage, VocabularyEntry } from "./types";
 import { CLASSIFICATION_VOCABULARY } from "./vocabulary";
 
@@ -37,6 +39,14 @@ ${vocabularyLines(vocabulary.templates)}
 
 Reward loops:
 ${vocabularyLines(vocabulary.rewardLoops)}`;
+}
+
+// Catches an edit of the system prompt or of the output schema made without bumping CLASSIFICATION_PROMPT_VERSION.
+export function classificationPromptHash(
+  system: string = classificationSystemPrompt(),
+  schema: Record<string, unknown> = classificationJsonSchema,
+): string {
+  return createHash("sha256").update(system).update("\u0000").update(JSON.stringify(schema)).digest("hex");
 }
 
 export function classificationUserContent(input: ClassificationInput, image: ThumbnailImage | null): Anthropic.ContentBlockParam[] {

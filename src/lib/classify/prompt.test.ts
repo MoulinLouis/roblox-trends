@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { classificationSystemPrompt, classificationUserContent } from "./prompt";
+import { classificationPromptHash, classificationSystemPrompt, classificationUserContent } from "./prompt";
+import { classificationJsonSchema } from "./schema";
 import type { ClassificationInput, ClassificationVocabulary, ThumbnailImage } from "./types";
 import { CLASSIFICATION_VOCABULARY } from "./vocabulary";
 
@@ -101,5 +102,18 @@ describe("classificationUserContent", () => {
 
   it("reads a missing genre as none", () => {
     expect(text(game({ genre: null }), image)).toContain("\nRoblox genre: none\n");
+  });
+});
+
+describe("classificationPromptHash", () => {
+  it("is a hex SHA-256 of the system prompt and the output schema", () => {
+    expect(classificationPromptHash()).toMatch(/^[0-9a-f]{64}$/);
+    expect(classificationPromptHash()).toBe(classificationPromptHash(classificationSystemPrompt(), classificationJsonSchema));
+  });
+
+  it("changes with the system prompt or the output schema", () => {
+    const hash = classificationPromptHash();
+    expect(classificationPromptHash(`${classificationSystemPrompt()} `)).not.toBe(hash);
+    expect(classificationPromptHash(classificationSystemPrompt(), { ...classificationJsonSchema, title: "x" })).not.toBe(hash);
   });
 });
