@@ -26,7 +26,7 @@ export function classificationRequest(
   return {
     model,
     max_tokens: CLASSIFICATION_CONFIG.maxTokens,
-    system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
+    system: [{ type: "text", text: system, cache_control: { type: "ephemeral", ttl: CLASSIFICATION_CONFIG.cacheTtl } }],
     messages: [{ role: "user", content: classificationUserContent(input, image) }],
     output_config: {
       effort: CLASSIFICATION_CONFIG.effort,

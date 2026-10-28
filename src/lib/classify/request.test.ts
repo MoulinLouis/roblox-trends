@@ -68,11 +68,12 @@ function answered(text: string, values: Partial<Anthropic.Message> = {}): Anthro
 describe("classificationRequest", () => {
   const request = classificationRequest("claude-opus-5-5", input, image);
 
-  it("asks the model for the schema at low effort, with the system prompt cached", () => {
+  // Requests of a batch can run more than 5 minutes apart, the default lifetime of a cache entry.
+  it("asks the model for the schema at low effort, with the system prompt cached for an hour", () => {
     expect(request).toEqual({
       model: "claude-opus-5-5",
       max_tokens: 8_000,
-      system: [{ type: "text", text: classificationSystemPrompt(), cache_control: { type: "ephemeral" } }],
+      system: [{ type: "text", text: classificationSystemPrompt(), cache_control: { type: "ephemeral", ttl: "1h" } }],
       messages: [{ role: "user", content: classificationUserContent(input, image) }],
       output_config: { effort: "low", format: { type: "json_schema", schema: classificationJsonSchema } },
     });
@@ -86,7 +87,7 @@ describe("classificationRequest", () => {
 
   it("uses the system prompt it is given", () => {
     expect(classificationRequest("claude-haiku-5-5", input, null, "Classify.").system).toEqual([
-      { type: "text", text: "Classify.", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "Classify.", cache_control: { type: "ephemeral", ttl: "1h" } },
     ]);
   });
 });
