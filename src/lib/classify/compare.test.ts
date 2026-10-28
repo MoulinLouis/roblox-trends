@@ -123,7 +123,8 @@ describe("compareModels", () => {
     expect(firstCost).toBeCloseTo(0.012, 10);
     expect(firstCostPerGame).toBeCloseTo(0.004, 10);
 
-    // The refused game is billed and counts in the cost, not in the games classified.
+    // The refused game is billed and counts in the cost, not in the games classified. The cost per game divides by
+    // every game, as a full run attempts every game.
     const { costUsd: secondCost, costPerGameUsd: secondCostPerGame, ...secondRest } = second;
     expect(secondRest).toEqual({
       model: haiku,
@@ -134,7 +135,7 @@ describe("compareModels", () => {
       newValues: { family: [], template: [], rewardLoop: [] },
     });
     expect(secondCost).toBeCloseTo(0.0003, 12);
-    expect(secondCostPerGame).toBeCloseTo(0.00015, 12);
+    expect(secondCostPerGame).toBeCloseTo(0.0001, 12);
   });
 
   it("follows the order of the models it is given", () => {
@@ -185,10 +186,16 @@ describe("summarizeRun", () => {
     ]);
   });
 
-  it("has no cost per game when nothing was classified", () => {
+  it("divides the cost by every game, even when nothing was classified", () => {
     const summary = summarizeRun(opus, inputs, [failed(opus, 1, "ran out of tokens"), failed(opus, 2, "expired", false)]);
     expect(summary.classified).toBe(0);
     expect(summary.costUsd).toBeCloseTo(0.004, 10);
+    expect(summary.costPerGameUsd).toBeCloseTo(0.004 / 3, 10);
+  });
+
+  it("has no cost per game without games", () => {
+    const summary = summarizeRun(opus, [], []);
+    expect(summary.costUsd).toBe(0);
     expect(summary.costPerGameUsd).toBeNull();
   });
 

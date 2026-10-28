@@ -68,7 +68,7 @@ describe("formatComparison", () => {
           classified: 199,
           failures: [{ universeId: 7, error: "refusal" }],
           costUsd: 0.07,
-          costPerGameUsd: 0.07 / 199,
+          costPerGameUsd: 0.07 / 200,
           newValues: { family: values(6), template: values(12), rewardLoop: values(3) },
         }),
       ],
@@ -131,7 +131,7 @@ describe("formatRunSummary", () => {
       ],
       withoutThumbnail: 2,
       costUsd: 0.041,
-      costPerGameUsd: 0.041 / 98,
+      costPerGameUsd: 0.041 / 100,
       newValues: { family: values(2), template: values(5), rewardLoop: values(0) },
     });
 

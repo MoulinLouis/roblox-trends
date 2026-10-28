@@ -32,6 +32,7 @@ export interface ModelRunSummary {
   failures: { universeId: number; error: string }[];
   withoutThumbnail: number;
   costUsd: number; // batch prices
+  // costUsd over every game, classified or not, as a full run attempts every game; null without games.
   costPerGameUsd: number | null;
   // Values outside the vocabulary, compared ignoring case, with how many games used each, most used first.
   newValues: Record<FormatField, { value: string; games: number }[]>;
@@ -82,7 +83,7 @@ export function summarizeRun(
     failures: games.flatMap(({ input, outcome }) => (outcome.ok ? [] : [{ universeId: input.universeId, error: outcome.error }])),
     withoutThumbnail: games.filter((game) => game.hadThumbnail === false).length,
     costUsd,
-    costPerGameUsd: classifications.length ? costUsd / classifications.length : null,
+    costPerGameUsd: inputs.length ? costUsd / inputs.length : null,
     newValues: {
       family: newValues(classifications, "family", vocabulary.families),
       template: newValues(classifications, "template", vocabulary.templates),
