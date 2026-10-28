@@ -1,6 +1,8 @@
 import type { ClassificationVocabulary } from "./types";
 
 // The starting vocabulary, seeded from production titles on 2026-10-26 and 2026-10-28 (phase 2 design, section 2).
+// Prompt v2 added the shared genres, templates and reward loops that both models had to invent in the 2026-10-29
+// comparison; its examples come from that comparison's sample, which the review samples exclude.
 // The model reuses a value when one fits and proposes a new one otherwise; the production job will add the values it
 // learns, and merges will fold near-duplicates.
 export const CLASSIFICATION_VOCABULARY: ClassificationVocabulary = {
@@ -9,7 +11,7 @@ export const CLASSIFICATION_VOCABULARY: ClassificationVocabulary = {
     { value: "Steal a", meaning: "Players own a base of units that earn money, buy or win more units, and steal other players' units.", examples: ["Steal a Brainrot", "Steal An Egg", "Break and Steal an Egg"] },
     { value: "{verb} for {reward}", meaning: "One repeated action earns the reward the title names, usually eggs or animals.", examples: ["Bike For Egg!", "Climb For Animals Eggs", "Backflip for Animals!"] },
     { value: "{verb} a {thing}", meaning: "One simple action on one object named in the title, upgraded over time.", examples: ["Ride A Pet", "Kick a Lucky Block", "Chop A Forest"] },
-    { value: "simulator", meaning: "A clicker or training loop: click or train, rebirth, unlock areas, often with pets.", examples: ["Tap Simulator REBORN", "Pet Simulator 99!"] },
+    { value: "simulator", meaning: "A clicker or training loop: click or train, rebirth, unlock areas, often with pets. A job done shift after shift is `job simulator`.", examples: ["Tap Simulator REBORN", "Pet Simulator 99!"] },
     { value: "tycoon", meaning: "Build and expand a business or base that makes money on its own.", examples: ["Prince's Pizza Tycoon", "Halloween Tycoon"] },
     { value: "obby", meaning: "An obstacle course or a tower to climb, stage by stage.", examples: ["Tower of Hell"] },
     { value: "escape", meaning: "Run from a disaster, a chaser or a rising danger to a safe zone.", examples: ["Escape the Tsunami", "100 Players Escape Lava"] },
@@ -30,6 +32,15 @@ export const CLASSIFICATION_VOCABULARY: ClassificationVocabulary = {
     { value: "anime RPG", meaning: "Quest, level up and gain powers in an anime-inspired world.", examples: ["Blox Fruits", "Anime Zero"] },
     { value: "physics sandbox", meaning: "Throw, fling or ragdoll players and objects for fun.", examples: ["Fling Things and People", "Ragdoll Reality"] },
     { value: "modded copy", meaning: "An unofficial copy of a hit with boosted multipliers or an admin panel.", examples: ["SAE X9999 + MODDED ADMIN PANEL", "EGG but X9999999 [MODDED]"] },
+    { value: "puzzle", meaning: "Solve puzzles, quizzes, riddles or word games.", examples: ["The Cube", "Take An IQ Test!", "Word Hunt"] },
+    { value: "party", meaning: "Short rounds among many players: minigames, eliminations or tag.", examples: ["Disappearing Blocks", "Spidey Bomb Tag"] },
+    { value: "job simulator", meaning: "Do a job shift after shift, such as repairing, delivering, serving or cleaning, and upgrade the tools.", examples: ["Electrician Simulator"] },
+    { value: "evolution", meaning: "Eat, absorb or fight to grow and evolve into bigger forms, .io games included.", examples: ["Eat to Evolve", "Bug Evolution", "Animal.io"] },
+    { value: "board game", meaning: "Chess, cards, dice or other table games.", examples: ["RoChess!"] },
+    { value: "drawing", meaning: "Draw, paint or make pixel art, often judged by other players.", examples: ["Draw a Dumpling!", "Draw a Cat!"] },
+    { value: "wave survival", meaning: "Hold off waves of enemies with weapons, turrets or a base, without crafting.", examples: ["Princess Vs Zombies"] },
+    { value: "creature collecting", meaning: "Catch, tame, train and battle creatures.", examples: ["Pokemon Bronze Rebirth"] },
+    { value: "destruction", meaning: "Smash, break or demolish buildings and objects to earn rewards.", examples: ["Smash the City"] },
     { value: "other", meaning: "None of the above, and no new family stands out.", examples: ["Catalog Avatar Creator"] },
   ],
   templates: [
@@ -50,6 +61,13 @@ export const CLASSIFICATION_VOCABULARY: ClassificationVocabulary = {
     { value: "Escape {danger}", meaning: "Escape and the danger.", examples: ["Escape the Tsunami", "100 Players Escape Lava"] },
     { value: "{thing} RP", meaning: "A place or a theme followed by RP.", examples: ["Brookhaven RP", "Berry Avenue RP"] },
     { value: "{hit} X{multiplier} MODDED", meaning: "A hit's name or initials with a multiplier and a modded or admin marker.", examples: ["SAE X9999 + MODDED ADMIN PANEL"] },
+    { value: "{verb} the {thing}", meaning: "The action and its object, with the.", examples: ["Smash the City", "Pave the Road", "Crack the Egg"] },
+    { value: "Be a {thing}", meaning: "Be a, then what the player becomes.", examples: ["Be a Lucky Egg and Hatch"] },
+    { value: "Survive the {thing}", meaning: "Survive the, then the danger.", examples: ["Survive the Brainrots"] },
+    { value: "{thing} Evolution", meaning: "A creature or a theme followed by Evolution, without +1.", examples: ["Bug Evolution"] },
+    { value: "{thing} Tower", meaning: "A theme or an action followed by Tower, usually an obby to climb.", examples: ["Clone Keyboard Tower", "Hug TROLL Tower!", "Climb The Locust Tower"] },
+    { value: "My {thing}", meaning: "My, then the shop, farm or place the player runs.", examples: ["My Sari-Sari Store"] },
+    { value: "{thing}.io", meaning: "A theme followed by .io.", examples: ["Animal.io"] },
     { value: "none", meaning: "The title is a name, not a reusable pattern.", examples: ["DOORS", "Murder Mystery 2", "The Hollow"] },
   ],
   rewardLoops: [
@@ -65,6 +83,8 @@ export const CLASSIFICATION_VOCABULARY: ClassificationVocabulary = {
     { value: "cosmetics", meaning: "Outfits, skins or avatar items.", examples: ["Dress To Impress"] },
     { value: "catches", meaning: "Fish or creatures caught, sold or indexed.", examples: ["Fisch"] },
     { value: "plants", meaning: "Seeds and crops.", examples: ["Grow a Garden"] },
+    { value: "cards", meaning: "Cards opened from packs or collected, often ranked by rarity.", examples: ["Collect Cat Cards!"] },
+    { value: "vehicles", meaning: "Cars, planes or other vehicles bought, upgraded or collected.", examples: ["Steal a Vehicle"] },
     { value: "progress", meaning: "Getting further, by stages, distance or wins, with nothing to collect.", examples: ["Tower of Hell", "Escape the Tsunami"] },
     { value: "none", meaning: "No lasting reward: rounds, hangouts or stories.", examples: ["RIVALS", "Brookhaven RP", "DOORS"] },
   ],
