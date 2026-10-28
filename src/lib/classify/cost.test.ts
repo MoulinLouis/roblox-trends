@@ -10,19 +10,19 @@ const usage: ClassificationUsage = {
 };
 
 describe("classificationCostUsd", () => {
-  // (3,000×4 + 500×20 + 2,000×0.2 + 1,000×4×2) / 1,000,000
-  it("prices Opus tokens, a one-hour cache write at twice the input price", () => {
-    expect(classificationCostUsd("claude-opus-5-5", usage, { batch: false })).toBeCloseTo(0.0304, 10);
+  // (3,000×4 + 500×20 + 2,000×0.2 + 1,000×4×1.25) / 1,000,000
+  it("prices Opus tokens, a five-minute cache write at 1.25 times the input price", () => {
+    expect(classificationCostUsd("claude-opus-5-5", usage, { batch: false })).toBeCloseTo(0.0274, 10);
   });
 
   it("bills half in a batch", () => {
-    expect(classificationCostUsd("claude-opus-5-5", usage, { batch: true })).toBeCloseTo(0.0152, 10);
+    expect(classificationCostUsd("claude-opus-5-5", usage, { batch: true })).toBeCloseTo(0.0137, 10);
   });
 
-  // (3,000×0.1 + 500×0.5 + 2,000×0.01 + 1,000×0.1×2) / 1,000,000
+  // (3,000×0.1 + 500×0.5 + 2,000×0.01 + 1,000×0.1×1.25) / 1,000,000
   it("prices Haiku tokens", () => {
-    expect(classificationCostUsd("claude-haiku-5-5", usage, { batch: false })).toBeCloseTo(0.00077, 12);
-    expect(classificationCostUsd("claude-haiku-5-5", usage, { batch: true })).toBeCloseTo(0.000385, 12);
+    expect(classificationCostUsd("claude-haiku-5-5", usage, { batch: false })).toBeCloseTo(0.000695, 12);
+    expect(classificationCostUsd("claude-haiku-5-5", usage, { batch: true })).toBeCloseTo(0.0003475, 12);
   });
 
   it("costs nothing without tokens", () => {

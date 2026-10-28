@@ -390,15 +390,16 @@ export const CLASSIFICATION_CONFIG = {
   batchPollIntervalMs: 30_000,
   // Most batches end within an hour; a rerun of the command resumes polling after this.
   batchMaximumWaitMs: 2 * 60 * 60_000,
-  // Requests of a batch can run more than 5 minutes apart, the default lifetime of the cached system prompt.
-  cacheTtl: "1h",
-  // USD per million tokens, Anthropic list prices on 2026-10-28. A one-hour cache write costs twice the input price.
-  // Batches bill half of every price.
+  // On 2026-10-29 a 200-request Opus batch read its one-hour cached prompt in only 80 requests, and the 120 writes at
+  // twice the input price made 2.1 of its 2.75 dollars. A five-minute write costs 1.25 times the input price, so it
+  // costs less whenever a batch reads the cache this rarely; Haiku read it in 199 requests either way.
+  cacheTtl: "5m",
+  // USD per million tokens, Anthropic list prices on 2026-10-28. Batches bill half of every price.
   pricing: {
     "claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2 },
     "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01 },
   },
-  cacheWriteMultiplier: 2,
+  cacheWriteMultiplier: 1.25,
   batchDiscount: 0.5,
   sample: {
     youngDays: 60,

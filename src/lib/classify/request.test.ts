@@ -73,7 +73,7 @@ describe("classificationRequest", () => {
     expect(request).toEqual({
       model: "claude-opus-5-5",
       max_tokens: 8_000,
-      system: [{ type: "text", text: classificationSystemPrompt(), cache_control: { type: "ephemeral", ttl: "1h" } }],
+      system: [{ type: "text", text: classificationSystemPrompt(), cache_control: { type: "ephemeral", ttl: "5m" } }],
       messages: [{ role: "user", content: classificationUserContent(input, image) }],
       output_config: { effort: "low", format: { type: "json_schema", schema: classificationJsonSchema } },
     });
@@ -87,7 +87,7 @@ describe("classificationRequest", () => {
 
   it("uses the system prompt it is given", () => {
     expect(classificationRequest("claude-haiku-5-5", input, null, "Classify.").system).toEqual([
-      { type: "text", text: "Classify.", cache_control: { type: "ephemeral", ttl: "1h" } },
+      { type: "text", text: "Classify.", cache_control: { type: "ephemeral", ttl: "5m" } },
     ]);
   });
 });
