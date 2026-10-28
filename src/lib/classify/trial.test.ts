@@ -224,8 +224,8 @@ function apiError(status: number, message: string): Error {
   return Object.assign(new Error(message), { status });
 }
 
-function storedBatch(id: string): TrialBatch {
-  return { id, submittedAt: "2026-10-28T10:00:00.000Z", requests: 2 };
+function storedBatch(id: string, withoutImage: number[] = []): TrialBatch {
+  return { id, submittedAt: "2026-10-28T10:00:00.000Z", requests: 2, withoutImage };
 }
 
 function imageData(request: BatchRequest): string | null {
@@ -257,8 +257,8 @@ describe("runClassificationTrial", () => {
     expect(trial.stateAtFirstRetrieve()).toEqual({
       promptVersion: CLASSIFICATION_PROMPT_VERSION,
       batches: {
-        [opus]: { id: "msgbatch_1", submittedAt: "2026-10-28T12:00:00.000Z", requests: 3 },
-        [haiku]: { id: "msgbatch_2", submittedAt: "2026-10-28T12:00:00.000Z", requests: 3 },
+        [opus]: { id: "msgbatch_1", submittedAt: "2026-10-28T12:00:00.000Z", requests: 3, withoutImage: [] },
+        [haiku]: { id: "msgbatch_2", submittedAt: "2026-10-28T12:00:00.000Z", requests: 3, withoutImage: [] },
       },
     });
     expect(trial.batches.created[0].requests.map((request) => request.custom_id)).toEqual(["u30", "u10", "u20"]);
@@ -305,7 +305,7 @@ describe("runClassificationTrial", () => {
 
     expect(trial.store.state).toEqual({
       promptVersion: CLASSIFICATION_PROMPT_VERSION,
-      batches: { [opus]: { id: "msgbatch_1", submittedAt: "2026-10-28T12:00:00.000Z", requests: 2 } },
+      batches: { [opus]: { id: "msgbatch_1", submittedAt: "2026-10-28T12:00:00.000Z", requests: 2, withoutImage: [] } },
     });
     expect(trial.batches.retrieved).toEqual([]);
 
@@ -317,16 +317,17 @@ describe("runClassificationTrial", () => {
     expect(outcome.results).toHaveLength(4);
   });
 
+  // The entry is complete but for the id, so an owner who finds the batch in the Console only has to write its id.
   it("records each submission before sending it", async () => {
     const trial = setup();
 
-    await runClassificationTrial([game(10), game(20)], [opus, haiku], trial.dependencies);
+    await runClassificationTrial([game(10), game(20, null)], [opus, haiku], trial.dependencies);
 
     expect(trial.statesAtCreate.map((state) => state?.batches)).toEqual([
-      { [opus]: { id: null, submittedAt: "2026-10-28T12:00:00.000Z", requests: 2 } },
+      { [opus]: { id: null, submittedAt: "2026-10-28T12:00:00.000Z", requests: 2, withoutImage: [20] } },
       {
-        [opus]: { id: "msgbatch_1", submittedAt: "2026-10-28T12:00:00.000Z", requests: 2 },
-        [haiku]: { id: null, submittedAt: "2026-10-28T12:00:00.000Z", requests: 2 },
+        [opus]: { id: "msgbatch_1", submittedAt: "2026-10-28T12:00:00.000Z", requests: 2, withoutImage: [20] },
+        [haiku]: { id: null, submittedAt: "2026-10-28T12:00:00.000Z", requests: 2, withoutImage: [20] },
       },
     ]);
   });
@@ -342,7 +343,9 @@ describe("runClassificationTrial", () => {
 
     await expect(runClassificationTrial(inputs, [opus, haiku], trial.dependencies)).rejects.toBe(error);
 
-    expect(trial.store.state?.batches).toEqual({ [opus]: { id: null, submittedAt: "2026-10-28T12:00:00.000Z", requests: 2 } });
+    expect(trial.store.state?.batches).toEqual({
+      [opus]: { id: null, submittedAt: "2026-10-28T12:00:00.000Z", requests: 2, withoutImage: [] },
+    });
     const message =
       "The claude-opus-5-5 batch submission of 2026-10-28T12:00:00.000Z may have reached Anthropic without its id being " +
       "saved. Find it in the Console's batch list and write its id into state.json, or delete the claude-opus-5-5 entry " +
@@ -416,16 +419,14 @@ describe("runClassificationTrial", () => {
   it("downloads no thumbnail when every model already has a batch or results", async () => {
     const trial = setup();
     const inputs = [game(10), game(20)];
-    trial.store.state = { promptVersion: CLASSIFICATION_PROMPT_VERSION, batches: { [haiku]: storedBatch("msgbatch_earlier") } };
+    trial.store.state = { promptVersion: CLASSIFICATION_PROMPT_VERSION, batches: { [haiku]: storedBatch("msgbatch_earlier", [20]) } };
     trial.batches.seed("msgbatch_earlier", haiku, inputs);
     trial.store.results.set(opus, [result(10, opus, true), result(20, opus, true)]);
-    trial.store.thumbnails.set(10, jpeg("10"));
 
     const outcome = await runClassificationTrial(inputs, [opus, haiku], trial.dependencies);
 
     expect(trial.downloads).toEqual([]);
     expect(trial.batches.created).toEqual([]);
-    // The earlier batch carried the thumbnails the store held.
     expect(outcome.results.filter((item) => item.model === haiku)).toEqual([result(10, haiku, true), result(20, haiku, false)]);
   });
 
@@ -496,12 +497,39 @@ describe("runClassificationTrial", () => {
     ]);
   });
 
+  it("records the games sent without a thumbnail in the batch's entry, sorted", async () => {
+    const trial = setup();
+    const inputs = [game(40, null), game(10), game(30)];
+    trial.dependencies.downloadThumbnail = async (url) => (url === inputs[2].thumbnailUrl || url === null ? null : jpeg(url));
+
+    await runClassificationTrial(inputs, [haiku], trial.dependencies);
+
+    expect(trial.store.state?.batches[haiku]?.withoutImage).toEqual([30, 40]);
+  });
+
+  // Thumbnails stored since the submission, or deleted, do not change what the batch carried.
+  it("reads which requests of a resumed batch carried an image from its entry, not from the stored thumbnails", async () => {
+    const trial = setup();
+    const inputs = [game(10), game(20)];
+    trial.store.thumbnails.set(10, jpeg("10"));
+    trial.store.thumbnails.set(20, jpeg("20"));
+    trial.store.state = { promptVersion: CLASSIFICATION_PROMPT_VERSION, batches: { [opus]: storedBatch("msgbatch_earlier", [10]) } };
+    trial.batches.seed("msgbatch_earlier", opus, inputs);
+
+    const outcome = await runClassificationTrial(inputs, [opus], trial.dependencies);
+
+    expect(outcome.results.map((item) => [item.universeId, item.hadThumbnail])).toEqual([
+      [10, false],
+      [20, true],
+    ]);
+  });
+
   it("records the image a resumed batch carried, not one downloaded since", async () => {
     const trial = setup();
     const inputs = [game(10), game(20)];
     // The earlier run stored game 10's thumbnail, failed to download game 20's and submitted Opus before it stopped.
     trial.store.thumbnails.set(10, jpeg("10"));
-    trial.store.state = { promptVersion: CLASSIFICATION_PROMPT_VERSION, batches: { [opus]: storedBatch("msgbatch_earlier") } };
+    trial.store.state = { promptVersion: CLASSIFICATION_PROMPT_VERSION, batches: { [opus]: storedBatch("msgbatch_earlier", [20]) } };
     trial.batches.seed("msgbatch_earlier", opus, inputs);
 
     const outcome = await runClassificationTrial(inputs, [opus, haiku], trial.dependencies);

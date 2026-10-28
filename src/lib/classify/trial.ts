@@ -11,6 +11,8 @@ export interface TrialBatch {
   id: string | null;
   submittedAt: string;
   requests: number;
+  // The games whose request went without a thumbnail, sorted. Thumbnails stored later do not change what was sent.
+  withoutImage: number[];
 }
 
 export interface TrialState {
@@ -55,8 +57,7 @@ export interface TrialDependencies {
 interface SubmittedBatch {
   model: ClassificationModel;
   id: string;
-  // The games whose request carried their thumbnail.
-  withImage: ReadonlySet<number>;
+  withoutImage: ReadonlySet<number>;
 }
 
 type TrialOptions = { pollIntervalMs?: number; maximumWaitMs?: number };
@@ -107,16 +108,19 @@ async function runLocked(
   }
   const toSubmit = unfinished.filter((model) => state.batches[model] === undefined);
 
-  const thumbnails = unfinished.length > 0 ? await loadThumbnails(inputs, dependencies, toSubmit.length > 0) : null;
-  const sentWithImage = new Set(thumbnails?.images.keys());
+  const images = toSubmit.length > 0 ? await loadThumbnails(inputs, dependencies) : new Map<number, ThumbnailImage>();
+  const withoutImage = inputs
+    .map((input) => input.universeId)
+    .filter((universeId) => !images.has(universeId))
+    .sort((left, right) => left - right);
   const system = classificationSystemPrompt();
   for (const model of toSubmit) {
     const requests = inputs.map((input) => ({
       custom_id: classificationCustomId(input.universeId),
-      params: classificationRequest(model, input, thumbnails?.images.get(input.universeId) ?? null, system),
+      params: classificationRequest(model, input, images.get(input.universeId) ?? null, system),
     }));
     const submittedAt = now().toISOString();
-    state = withBatch(state, model, { id: null, submittedAt, requests: requests.length });
+    state = withBatch(state, model, { id: null, submittedAt, requests: requests.length, withoutImage });
     await store.writeState(state);
     let id: string;
     try {
@@ -134,17 +138,16 @@ async function runLocked(
     }
     // Logged before the state is written, so the id of a paid batch is on screen even if the write fails.
     log(`Submitted the ${model} batch ${id} (${requests.length} requests)`);
-    state = withBatch(state, model, { id, submittedAt, requests: requests.length });
+    state = withBatch(state, model, { id, submittedAt, requests: requests.length, withoutImage });
     await store.writeState(state);
   }
 
   const submitted = unfinished.map((model): SubmittedBatch => {
+    const batch = state.batches[model]!;
     // Set for every model: a stored null throws above, and a new submission saves its id or throws.
-    const id = state.batches[model]!.id!;
-    if (toSubmit.includes(model)) return { model, id, withImage: sentWithImage };
-    log(`Resuming the ${model} batch ${id}`);
-    // Thumbnails are stored only before a submission, so an earlier batch carried those stored before this run.
-    return { model, id, withImage: thumbnails?.storedBefore ?? new Set() };
+    const id = batch.id!;
+    if (!toSubmit.includes(model)) log(`Resuming the ${model} batch ${id}`);
+    return { model, id, withoutImage: new Set(batch.withoutImage) };
   });
   const pending = await pollUntilEnded(submitted, dependencies, {
     pollIntervalMs: options.pollIntervalMs ?? CLASSIFICATION_CONFIG.batchPollIntervalMs,
@@ -180,36 +183,33 @@ function unsavedSubmission(model: string, submittedAt: string): string {
   );
 }
 
-// Reads every stored thumbnail and, when `download` is set, downloads and stores the missing ones. A game whose
-// thumbnail is neither stored nor downloadable is classified from its text.
+// Reads every stored thumbnail and downloads and stores the missing ones. A game whose thumbnail is neither stored nor
+// downloadable is classified from its text.
 async function loadThumbnails(
   inputs: ClassificationInput[],
   { store, downloadThumbnail, log }: TrialDependencies,
-  download: boolean,
-): Promise<{ images: Map<number, ThumbnailImage>; storedBefore: Set<number> }> {
+): Promise<Map<number, ThumbnailImage>> {
   const images = new Map<number, ThumbnailImage>();
-  const storedBefore = new Set<number>();
+  let stored = 0;
   let downloaded = 0;
   for (const group of chunk(inputs, CLASSIFICATION_CONFIG.thumbnailDownloadConcurrency)) {
     await Promise.all(
       group.map(async ({ universeId, thumbnailUrl }) => {
         let jpeg = await store.readThumbnail(universeId);
         if (jpeg !== null) {
-          storedBefore.add(universeId);
-        } else if (download) {
+          stored += 1;
+        } else {
           jpeg = await downloadThumbnail(thumbnailUrl);
           if (jpeg === null) return;
           await store.writeThumbnail(universeId, jpeg);
           downloaded += 1;
         }
-        if (jpeg !== null) images.set(universeId, { mediaType: "image/jpeg", data: jpeg.toString("base64") });
+        images.set(universeId, { mediaType: "image/jpeg", data: jpeg.toString("base64") });
       }),
     );
   }
-  if (download) {
-    log(`Thumbnails: ${storedBefore.size} stored, ${downloaded} downloaded, ${inputs.length - images.size} without one`);
-  }
-  return { images, storedBefore };
+  log(`Thumbnails: ${stored} stored, ${downloaded} downloaded, ${inputs.length - images.size} without one`);
+  return images;
 }
 
 // Polls every waiting batch each round until all have ended or the maximum wait has passed; returns those still
@@ -253,7 +253,7 @@ async function collectResults(batch: SubmittedBatch, { batches, store, log }: Tr
     results.push({
       universeId: read.universeId,
       model: batch.model,
-      hadThumbnail: batch.withImage.has(read.universeId),
+      hadThumbnail: !batch.withoutImage.has(read.universeId),
       outcome: read.outcome,
     });
   }
