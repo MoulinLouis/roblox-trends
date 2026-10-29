@@ -199,6 +199,26 @@ export const JOB_CONFIG = {
     // Every answer counts, including "no custom thumbnail", "pending" and "error"; only unanswered games are missing.
     minimumAnsweredShare: 0.9,
   },
+  // The classify job (docs/plans/2026-10-29-radar-v2-classification-job.md). The owner chose Sonnet 5.5 and prompt v3 on
+  // 2026-10-29: $0.0022 a game in batches, with the cached prompt read in 99 of 100 requests in every run.
+  classify: {
+    intervalMinutes: 60,
+    timeoutMs: 30 * 60_000,
+    model: "claude-sonnet-5-5",
+    // 1,000 requests with their JPEG thumbnails weigh about 70 MB, under the 256 MB limit of a batch. One open batch at a
+    // time, so at most one per hourly run.
+    maximumGamesPerBatch: 1_000,
+    // Over the last 24 hours of submissions: the backfill of about 13,650 games takes about 2.5 days, and a runaway costs
+    // at most about $13 a day.
+    maximumRequestsPerDay: 6_000,
+    // Classifications from an older prompt count as outdated. Raising it reclassifies them at the caps above.
+    minimumPromptVersion: 3,
+    // A failed game waits this long, and is given up after this many failures with the same title.
+    retryFailedAfterHours: 24,
+    maximumFailedAttempts: 3,
+    // A collected batch with a larger share of failed games degrades the run.
+    maximumFailedShare: 0.05,
+  },
 } as const;
 
 // The database sessions of the scripts and the dashboard, and how they end. A job's statement timeout is its own
