@@ -21,7 +21,7 @@ export function titleKey(name: string): string {
 
 // The algorithm behind contentFingerprint. Bump it whenever normalizeTitle or normalizeText returns something else:
 // `npm run db:migrate` recomputes the stored fingerprints of earlier versions, and a classification records the
-// version it compared, so a normalizer change does not read as a change of every game. Version 2 (2026-10-26) ignores
+// title it classified, so a normalizer change does not read as a change of every game. Version 2 (2026-10-26) ignores
 // bracketed text in titles, and update versions and trailing markers.
 export const CONTENT_FINGERPRINT_VERSION = 2;
 

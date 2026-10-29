@@ -12,6 +12,8 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import type { ClassificationModel } from "@/lib/classify/types";
+import type { ClassificationOverride } from "@/lib/classify/overrides";
 import type { DiscoverySource, JobName, JobStatus } from "@/lib/jobs/types";
 
 const timestamptz = (name: string) => timestamp(name, { withTimezone: true });
@@ -217,4 +219,75 @@ export const jobRuns = pgTable(
     index("job_runs_job_started_idx").on(table.job, table.startedAt),
     index("job_runs_job_slot_idx").on(table.job, table.slot),
   ],
+);
+
+export type ClassificationStatus = "pending" | "classified" | "failed";
+
+// One row per batch, written before the batch is submitted: anthropic_id stays null until the API returns it, and a row
+// left without one blocks later submissions (docs/operations.md, "Classification").
+export const classificationBatches = pgTable(
+  "classification_batches",
+  {
+    id: uuid("id").primaryKey(),
+    anthropicId: text("anthropic_id").unique(),
+    model: text("model").$type<ClassificationModel>().notNull(),
+    promptVersion: integer("prompt_version").notNull(),
+    requests: integer("requests").notNull(),
+    submittedAt: timestamptz("submitted_at").notNull(),
+    collectedAt: timestamptz("collected_at"),
+    costUsd: real("cost_usd"),
+    stats: jsonb("stats").$type<Record<string, unknown>>().notNull().default({}),
+  },
+  (table) => [index("classification_batches_submitted_idx").on(table.submittedAt)],
+);
+
+// One row per game and batch. The fields are null until the batch is collected, and stay null on a failure.
+export const classifications = pgTable(
+  "classifications",
+  {
+    batchId: uuid("batch_id")
+      .notNull()
+      .references(() => classificationBatches.id, { onDelete: "cascade" }),
+    universeId: id64("universe_id")
+      .notNull()
+      .references(() => games.universeId, { onDelete: "cascade" }),
+    // The title sent: reclassification compares its titleKey with the game's current one.
+    name: text("name").notNull(),
+    hadThumbnail: boolean("had_thumbnail").notNull(),
+    status: text("status").$type<ClassificationStatus>().notNull(),
+    error: text("error"),
+    reason: text("reason"),
+    family: text("family"),
+    template: text("template"),
+    rewardLoop: text("reward_loop"),
+    coreAction: text("core_action"),
+    theme: text("theme"),
+    setting: text("setting"),
+    progression: text("progression"),
+    social: text("social"),
+    confidence: text("confidence"),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    cacheReadTokens: integer("cache_read_tokens"),
+    cacheWriteTokens: integer("cache_write_tokens"),
+    finishedAt: timestamptz("finished_at"),
+  },
+  (table) => [
+    primaryKey({ columns: [table.batchId, table.universeId] }),
+    index("classifications_game_idx").on(table.universeId, table.finishedAt),
+  ],
+);
+
+// A copy of src/lib/classify/overrides.ts, rewritten by every classify run. No foreign key: a correction must survive
+// whatever happens to the game row.
+export const classificationOverrides = pgTable(
+  "classification_overrides",
+  {
+    universeId: id64("universe_id").notNull(),
+    field: text("field").$type<ClassificationOverride["field"]>().notNull(),
+    value: text("value").notNull(),
+    reason: text("reason").notNull(),
+    decidedAt: text("decided_at").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.universeId, table.field] })],
 );

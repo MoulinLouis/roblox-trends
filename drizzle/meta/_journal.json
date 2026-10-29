@@ -78,6 +78,20 @@
       "when": 1793026185007,
       "tag": "0010_content_fingerprint_version",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1793240921479,
+      "tag": "0011_classifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1793240922127,
+      "tag": "0012_game_classifications",
+      "breakpoints": true
     }
   ]
 }
