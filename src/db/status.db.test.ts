@@ -244,6 +244,13 @@ describe.skipIf(!hasTestDatabase)("status queries", () => {
         recent: { runs: 2, degraded: 0, failed: 1, rateLimitedRuns: null, http: { rateLimitedResponses: 0, attempts: 10 } },
         lastError: { startedAt: new Date("2026-10-20T12:00:00Z"), message: "thumbnails failed" },
       },
+      {
+        job: "classify",
+        latest: null,
+        lastCompleted: null,
+        recent: { runs: 0, degraded: 0, failed: 0, rateLimitedRuns: null, http: null },
+        lastError: null,
+      },
     ]);
   });
 });

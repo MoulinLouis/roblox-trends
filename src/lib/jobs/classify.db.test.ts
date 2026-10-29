@@ -3,7 +3,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { upsertGameDetails } from "@/db/games";
-import { classificationBatches, classificationOverrides, classifications, jobRuns } from "@/db/schema";
+import { classificationBatches, classificationOverrides, classifications, games, jobRuns } from "@/db/schema";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/test-database";
 import type { BatchApi } from "@/lib/classify/batches";
 import type { ClassificationOverride } from "@/lib/classify/overrides";
@@ -105,6 +105,8 @@ describe.skipIf(!hasTestDatabase)("classify job", () => {
   beforeEach(async () => {
     api = new FakeBatches();
     overrides = [];
+    // Deleting the games cascades to their classifications.
+    await database.db.delete(games);
     await database.db.delete(classificationBatches);
     await database.db.delete(classificationOverrides);
     await database.db.delete(jobRuns);
