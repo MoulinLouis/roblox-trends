@@ -732,3 +732,10 @@ In `ops/bin/deploy.sh`, add `radar-classify.timer` to `job_timers`, so a migrati
 ## Execution notes
 
 (Record decisions and surprises here as tasks complete; committed code is authoritative over the code blocks above.)
+
+- **Late submission.** The runner's timeout is a bare `Promise.race` and does not stop a run. So the job refuses to submit more than `latestSubmissionMs` (20 min) after its start: a create cut by the process exit would lose a paid batch's id.
+- **Short result streams.** Collection compares the responses read with the batch's `request_counts` and throws when fewer arrive. Otherwise a stream cut short would release, and pay again for, games already answered.
+- **Duplicate answers.** The first answer per game wins.
+- **Collection pass.** `npm run collect` leaves classify out on purpose (`LEFT_OUT` in `scripts/collect.ts`): it is paid and needs a key that script never loads. `orderJobs` still refuses a job that is neither ordered nor left out.
+- **SDK credentials.** The installed SDK does not throw without `ANTHROPIC_API_KEY`. It falls back to a credentials profile (`~/.config/anthropic/credentials/default.json`) and fails at the first request. On the server, the drop-in has no `-`, so a missing key file fails the unit first.
+- **Test isolation.** The job's DB tests initially leaked games between tests. `beforeEach` now deletes `games`, and the deletion cascades.
