@@ -4,7 +4,7 @@ Roblox Trend Radar tracks Roblox games to answer three questions: which Roblox f
 
 ## Architecture
 
-One Next.js 16 application and one PostgreSQL 18 database with TimescaleDB 2.30, accessed through Drizzle ORM and `pg` on Node.js 24 (`.nvmrc` and CI). `package.json` declares Node.js 22.12 or newer and npm 11 or newer (`engines` only warns). In this phase the web application is only a shell. The work is done by seven jobs in `src/lib/jobs` (six collectors and the paid `classify` job), started by `npm run job <name>` (one job) or `npm run collect` (all of them). In production each job runs from its own systemd timer (phase 1b).
+One Next.js 16 application and one PostgreSQL 18 database with TimescaleDB 2.30, accessed through Drizzle ORM and `pg` on Node.js 24 (`.nvmrc` and CI). `package.json` declares Node.js 22.12 or newer and npm 11 or newer (`engines` only warns). In this phase the web application is only a shell. The work is done by seven jobs in `src/lib/jobs` (six collectors and the paid `classify` job), started by `npm run job <name>` (one job) or `npm run collect` (the six collectors). In production each job runs from its own systemd timer (phase 1b).
 
 `executeJob` (`src/lib/jobs/runner.ts`) runs every job the same way:
 
