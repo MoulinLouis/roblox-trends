@@ -9,6 +9,7 @@ import type { BatchApi } from "@/lib/classify/batches";
 import type { ClassificationOverride } from "@/lib/classify/overrides";
 import { CLASSIFICATION_PROMPT_VERSION } from "@/lib/classify/prompt";
 import { JOB_CONFIG } from "@/lib/config";
+import { hasStat, WATCHED_STATS } from "@/lib/status-report";
 import { gameDetail } from "@/test/fixtures";
 import { type ClassifyDependencies, createClassifyJob } from "./classify";
 import { executeJob } from "./runner";
@@ -200,6 +201,7 @@ describe.skipIf(!hasTestDatabase)("classify job", () => {
       { universeId: 3, status: "pending", hadThumbnail: false },
     ]);
     expect(stats).toMatchObject({ submitted: 3, withoutThumbnail: 1, waitingBatches: 0, blockedBatch: null });
+    expect(WATCHED_STATS.classify?.values.filter((path) => !hasStat(stats, path))).toEqual([]);
   });
 
   it("copies the given overrides into classification_overrides", async () => {

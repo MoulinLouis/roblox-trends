@@ -43,6 +43,12 @@ export const WATCHED_STATS: Partial<Record<JobName, { values: readonly string[];
       "http.endpointIntervalMs",
     ],
   },
+  // released counts games handed back for a later batch (expired, canceled or unanswered); costUsd and cacheReads
+  // come from the batches collected in the run; waitingBatches counts those still processing, and blockedBatch (an
+  // object, or null) names a submission whose answer was lost: no batch is submitted until the owner resolves it.
+  classify: {
+    values: ["submitted", "classified", "failed", "released", "costUsd", "cacheReads", "waitingBatches", "blockedBatch"],
+  },
 };
 
 // Every line fits a 120-column terminal: watched stats wrap, and a message preview takes the room its line leaves.
