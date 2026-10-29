@@ -207,6 +207,8 @@ export const JOB_CONFIG = {
     // The runner's timeout does not stop a run, so a submission must finish well before it: uploading 1,000 requests with
     // images takes tens of MB. A run past this point does not submit; the next run submits the same games.
     latestSubmissionMs: 20 * 60_000,
+    // The SDK's default of 10 minutes would let a create started at the latest moment outlast the runner's timeout.
+    createTimeoutMs: 5 * 60_000,
     model: "claude-sonnet-5-5",
     // 1,000 requests with their JPEG thumbnails weigh about 70 MB, under the 256 MB limit of a batch. One open batch at a
     // time, so at most one per hourly run.

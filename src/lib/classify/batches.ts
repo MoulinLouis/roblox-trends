@@ -4,7 +4,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 export interface BatchApi {
   create(
     params: { requests: { custom_id: string; params: Anthropic.Messages.MessageCreateParamsNonStreaming }[] },
-    options: { maxRetries: number },
+    options: { maxRetries: number; timeout?: number },
   ): Promise<{ id: string }>;
   retrieve(id: string): Promise<{
     processing_status: Anthropic.Messages.MessageBatch["processing_status"];

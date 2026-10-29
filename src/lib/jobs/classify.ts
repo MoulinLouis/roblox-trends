@@ -158,8 +158,8 @@ async function submitBatch(
   let anthropicId: string;
   try {
     // The SDK retries a timed-out or failed request, and a batch has no idempotency key: a retry after a lost
-    // response would pay for a second batch whose id nobody saved.
-    ({ id: anthropicId } = await api.create({ requests }, { maxRetries: 0 }));
+    // response would pay for a second batch whose id nobody saved. The timeout keeps the call inside the runner's.
+    ({ id: anthropicId } = await api.create({ requests }, { maxRetries: 0, timeout: JOB_CONFIG.classify.createTimeoutMs }));
   } catch (error) {
     if (rejectedByApi(error)) await deleteBatch(db, id);
     throw error;
