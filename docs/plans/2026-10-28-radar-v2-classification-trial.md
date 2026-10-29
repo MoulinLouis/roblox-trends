@@ -857,3 +857,39 @@ These steps spend money and need the owner. Claude runs the commands from the wo
   - **Templates:** a theme before a genre word is a template.
   - **New families:** a new genre beats `other`, and a known family beats a narrower new one.
   - **Examples:** they come from review-1, which review-2 excludes.
+- **S4–S5 again, review-2 on 2026-10-29** (`.data/classification/review-2`, prompt v3, 100 games excluding comparison-1
+  and review-1, 3 without thumbnail):
+  - **Cost and cache:**
+    - Opus cost $1.34 ($0.0134 a game), with only 34 of 100 cache reads at 5 minutes, against 99 in review-1. Across
+      three batches its cache worked once: Opus in batches costs about $21 to $80 a month, or about $41 when requests
+      go one at a time with a reliable cache but no batch discount.
+    - Sonnet cost $0.22, with 99 reads, as in every run.
+  - **Agreement:** family 89%, template 85%, reward loop 89%, core action 64%, format 71% (61% with prompt v2).
+  - **New templates:** Opus wrote 18 and Sonnet 9. The owner accepted 10 of the 11 that Opus alone proposed.
+  - **Lighter review** (https://claude.ai/artifact/8BNtVVZmsa765L1qLarbw5): only the 29 games where the models
+    differed on the format, 37 fields, without core action. Shared values were accepted without review.
+  - **Accuracy:**
+
+    | Field | Opus | Sonnet |
+    |---|---|---|
+    | Family | 93% | 96% |
+    | Template | 97% | 88% |
+    | Reward loop | 95% | 94% |
+    | Family × reward loop | 88% | 91% |
+    | **Format** | **85%** | **81%** |
+
+  - **Opus against Sonnet on the format:** Opus alone right on 14 games, Sonnet alone on 10, both wrong on 5.
+  - **Unreviewed shared values:** in review-1, 4 of the 61 games where both models agreed on the whole format were
+    wrong, so the true format accuracy is about 4 points lower (Opus about 81%, Sonnet about 77%), and each field 1 to
+    2 points lower.
+  - **Remaining errors:** mostly one-off calls (`simulator` for a tower defense, `RNG` for a `{verb} a {thing}`). One
+    came from a v3 rule: `catches` for Steal A Fish, where the owner wanted `pets`.
+  - **Overrides** (`8841595`): 37 more entries, 129 in all.
+- **Decision on 2026-10-29:**
+  - **Stop at prompt v3.** The gate is read per field, the way `format_stats` groups games (per family, template,
+    reward loop, and family × reward loop), rather than on the whole format, which no statistic uses. A prompt v4
+    would gain a few points at the cost of another review.
+  - **Sonnet 5.5 classifies in production, in batches.** With prompt v3 it matches or beats Opus on the family and on
+    family × reward loop, and its cache holds, at about $13 a month and $30 for the backfill.
+  - **What Sonnet costs in accuracy:** it names fewer new title patterns (template 88% against 97%).
+  - **If that hurts later:** a second pass with Opus on the games Sonnet leaves at template `none`.
