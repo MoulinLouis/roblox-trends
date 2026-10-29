@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
@@ -238,7 +239,13 @@ export const classificationBatches = pgTable(
     costUsd: real("cost_usd"),
     stats: jsonb("stats").$type<Record<string, unknown>>().notNull().default({}),
   },
-  (table) => [index("classification_batches_submitted_idx").on(table.submittedAt)],
+  (table) => [
+    index("classification_batches_submitted_idx").on(table.submittedAt),
+    // At most one batch is open (not collected), so a second submission fails before it calls the API.
+    uniqueIndex("classification_batches_one_open_idx")
+      .on(sql`(true)`)
+      .where(sql`${table.collectedAt} is null`),
+  ],
 );
 
 // One row per game and batch. The fields are null until the batch is collected, and stay null on a failure.

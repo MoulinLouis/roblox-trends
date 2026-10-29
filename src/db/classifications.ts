@@ -130,7 +130,7 @@ export async function deleteBatch(db: Database, id: string): Promise<void> {
   await db.delete(classificationBatches).where(eq(classificationBatches.id, id));
 }
 
-// Batches not collected yet, oldest first, including one still without an Anthropic id.
+// The batches not collected yet, including one still without an Anthropic id. A unique index allows at most one.
 export async function readOpenBatches(db: Database): Promise<ClassificationBatchRow[]> {
   return db
     .select({

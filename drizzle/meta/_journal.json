@@ -92,6 +92,13 @@
       "when": 1793240922127,
       "tag": "0012_game_classifications",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1793242751319,
+      "tag": "0013_classification_one_open_batch",
+      "breakpoints": true
     }
   ]
 }

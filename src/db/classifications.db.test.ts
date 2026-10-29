@@ -167,22 +167,35 @@ describe.skipIf(!hasTestDatabase)("classification persistence", () => {
 
   it("deletes a batch with its rows", async () => {
     await submit(batchOne, 2, [item(1, "Steal a Fish")]);
-    await submit(batchTwo, 3, [item(2, "Obby")]);
+    await storeBatchResults(database.db, batchOne, [classified(1)], collected(3));
+    await submit(batchTwo, 4, [item(2, "Obby")]);
     await deleteBatch(database.db, batchOne);
     expect((await readOpenBatches(database.db)).map((batch) => batch.id)).toEqual([batchTwo]);
     expect((await database.db.select().from(classifications)).map((row) => row.universeId)).toEqual([2]);
   });
 
-  it("lists the batches not collected, oldest first", async () => {
-    await submit(batchTwo, 4, [item(2, "Obby")]);
-    await insertSubmittingBatch(database.db, { id: batchThree, model: "claude-opus-5-5", promptVersion: 3, submittedAt: at(5) }, [item(3, "Game 3")]);
+  it("lists the batch not collected, even one without an Anthropic id", async () => {
     await submit(batchOne, 2, [item(1, "Steal a Fish")]);
     await storeBatchResults(database.db, batchOne, [classified(1)], collected(3));
+    expect(await readOpenBatches(database.db)).toEqual([]);
+    await insertSubmittingBatch(database.db, { id: batchTwo, model: "claude-opus-5-5", promptVersion: 3, submittedAt: at(5) }, [item(3, "Game 3")]);
     const open = await readOpenBatches(database.db);
-    expect(open.map((batch) => [batch.id, batch.anthropicId === null])).toEqual([
-      [batchTwo, false],
-      [batchThree, true],
-    ]);
+    expect(open.map((batch) => [batch.id, batch.anthropicId === null])).toEqual([[batchTwo, true]]);
+  });
+
+  it("refuses a second batch while one is open, and allows it once the first is collected", async () => {
+    await insertSubmittingBatch(database.db, { id: batchOne, model: "claude-sonnet-5-5", promptVersion: 3, submittedAt: at(2) }, [item(1, "Steal a Fish")]);
+    await expect(
+      insertSubmittingBatch(database.db, { id: batchTwo, model: "claude-sonnet-5-5", promptVersion: 3, submittedAt: at(3) }, [item(2, "Obby")]),
+    ).rejects.toThrow();
+    // The refused batch left nothing behind, and the open one is untouched.
+    expect((await database.db.select().from(classificationBatches)).map((row) => row.id)).toEqual([batchOne]);
+    expect((await database.db.select().from(classifications)).map((row) => row.universeId)).toEqual([1]);
+
+    await markBatchSubmitted(database.db, batchOne, "msgbatch_1");
+    await storeBatchResults(database.db, batchOne, [classified(1)], collected(4));
+    await insertSubmittingBatch(database.db, { id: batchTwo, model: "claude-sonnet-5-5", promptVersion: 3, submittedAt: at(5) }, [item(2, "Obby")]);
+    expect((await readOpenBatches(database.db)).map((batch) => batch.id)).toEqual([batchTwo]);
   });
 
   it("stores results, releases the rest and marks the batch collected", async () => {
@@ -228,8 +241,11 @@ describe.skipIf(!hasTestDatabase)("classification persistence", () => {
 
   it("sums the requests submitted after a time", async () => {
     expect(await requestsSubmittedSince(database.db, at(1))).toBe(0);
+    // One open batch at a time: each is collected, with no result, before the next.
     await submit(batchOne, 2, [item(1, "Steal a Fish")]);
+    await storeBatchResults(database.db, batchOne, [], collected(3));
     await submit(batchTwo, 4, [item(1, "Steal a Fish"), item(2, "Obby")]);
+    await storeBatchResults(database.db, batchTwo, [], collected(5));
     await submit(batchThree, 6, [item(1, "Steal a Fish"), item(2, "Obby"), item(3, "Game 3")]);
     expect(await requestsSubmittedSince(database.db, at(3))).toBe(5);
     expect(await requestsSubmittedSince(database.db, at(4))).toBe(3);

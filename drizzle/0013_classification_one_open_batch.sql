@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "classification_batches_one_open_idx" ON "classification_batches" USING btree ((true)) WHERE "classification_batches"."collected_at" is null;
