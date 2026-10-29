@@ -10,7 +10,7 @@ import type { ClassificationOverride } from "@/lib/classify/overrides";
 import { CLASSIFICATION_PROMPT_VERSION } from "@/lib/classify/prompt";
 import { JOB_CONFIG } from "@/lib/config";
 import { gameDetail } from "@/test/fixtures";
-import { createClassifyJob } from "./classify";
+import { type ClassifyDependencies, createClassifyJob } from "./classify";
 import { executeJob } from "./runner";
 
 const config = JOB_CONFIG.classify;
@@ -55,26 +55,31 @@ function ended(universeId: number, type: "expired" | "canceled"): Anthropic.Mess
 
 type CreateParams = Parameters<BatchApi["create"]>[0];
 
+type RequestCounts = Awaited<ReturnType<BatchApi["retrieve"]>>["request_counts"];
+
 class FakeBatches implements BatchApi {
   created: CreateParams[] = [];
+  // The ids of the batches create answered for, in order: a failed create is in `created` but not here.
+  ids: string[] = [];
   createError: unknown = null;
-  private batches = new Map<string, { ended: boolean; responses: Anthropic.Messages.MessageBatchIndividualResponse[] }>();
+  private batches = new Map<
+    string,
+    { ended: boolean; responses: Anthropic.Messages.MessageBatchIndividualResponse[]; counts: RequestCounts }
+  >();
 
   async create(params: CreateParams) {
     this.created.push(params);
     if (this.createError) throw this.createError;
-    const id = `msgbatch_${this.created.length}`;
-    this.batches.set(id, { ended: false, responses: [] });
+    const id = `msgbatch_${this.ids.length + 1}`;
+    this.ids.push(id);
+    this.batches.set(id, { ended: false, responses: [], counts: countsOf([]) });
     return { id };
   }
 
   async retrieve(id: string) {
     const batch = this.batches.get(id);
     if (!batch) throw new Error(`Unknown batch ${id}`);
-    return {
-      processing_status: batch.ended ? ("ended" as const) : ("in_progress" as const),
-      request_counts: { processing: 0, succeeded: 0, errored: 0, canceled: 0, expired: 0 },
-    };
+    return { processing_status: batch.ended ? ("ended" as const) : ("in_progress" as const), request_counts: batch.counts };
   }
 
   async results(id: string) {
@@ -84,15 +89,24 @@ class FakeBatches implements BatchApi {
     })();
   }
 
-  end(id: string, responses: Anthropic.Messages.MessageBatchIndividualResponse[]) {
-    this.batches.set(id, { ended: true, responses });
+  // Ends the last batch created by default. The reported counts come from the responses unless the test gives others.
+  end(responses: Anthropic.Messages.MessageBatchIndividualResponse[], counts: RequestCounts = countsOf(responses), id = this.ids.at(-1)) {
+    if (id === undefined) throw new Error("No batch to end");
+    this.batches.set(id, { ended: true, responses, counts });
   }
+}
+
+function countsOf(responses: Anthropic.Messages.MessageBatchIndividualResponse[]): RequestCounts {
+  const counts = { processing: 0, succeeded: 0, errored: 0, canceled: 0, expired: 0 };
+  for (const response of responses) counts[response.result.type] += 1;
+  return counts;
 }
 
 describe.skipIf(!hasTestDatabase)("classify job", () => {
   let database: TestDatabase;
   let api: FakeBatches;
   let overrides: ClassificationOverride[];
+  let clockMs: number;
 
   beforeAll(async () => {
     database = await createTestDatabase();
@@ -105,6 +119,7 @@ describe.skipIf(!hasTestDatabase)("classify job", () => {
   beforeEach(async () => {
     api = new FakeBatches();
     overrides = [];
+    clockMs = 0;
     // Deleting the games cascades to their classifications.
     await database.db.delete(games);
     await database.db.delete(classificationBatches);
@@ -113,11 +128,13 @@ describe.skipIf(!hasTestDatabase)("classify job", () => {
   });
 
   // Thumbnails exist for every game but 3.
-  function job() {
+  function job(extra: Partial<ClassifyDependencies> = {}) {
     return createClassifyJob({
       batches: () => api,
       downloadThumbnail: async (url) => (url === null || url.endsWith("/3") ? null : Buffer.from("jpeg")),
       overrides,
+      clock: () => clockMs,
+      ...extra,
     });
   }
 
@@ -131,9 +148,11 @@ describe.skipIf(!hasTestDatabase)("classify job", () => {
     }
   }
 
-  async function run(at: Date) {
-    const status = await executeJob(job(), database.db, at);
-    const [row] = (await database.db.select().from(jobRuns).orderBy(jobRuns.startedAt)).slice(-1);
+  async function run(at: Date, extra: Partial<ClassifyDependencies> = {}) {
+    // One row afterwards, whatever the wall-clock start times of earlier runs.
+    await database.db.delete(jobRuns);
+    const status = await executeJob(job(extra), database.db, at);
+    const [row] = await database.db.select().from(jobRuns);
     return { status, stats: row.stats as Record<string, unknown>, row };
   }
 
@@ -148,8 +167,10 @@ describe.skipIf(!hasTestDatabase)("classify job", () => {
   }
 
   async function submitAndEnd(responses: Anthropic.Messages.MessageBatchIndividualResponse[], at = start) {
+    const before = api.ids.length;
     await run(at);
-    api.end(`msgbatch_${api.created.length}`, responses);
+    expect(api.ids).toHaveLength(before + 1);
+    api.end(responses);
   }
 
   it("submits the never-classified games, busiest first, with Sonnet, custom ids and thumbnails", async () => {
@@ -159,7 +180,7 @@ describe.skipIf(!hasTestDatabase)("classify job", () => {
     expect(api.created).toHaveLength(1);
     const requests = api.created[0].requests;
     expect(requests.map((request) => request.custom_id)).toEqual(["u3", "u2", "u1"]);
-    expect(requests.every((request) => request.params.model === "claude-sonnet-5-5")).toBe(true);
+    expect(requests.every((request) => request.params.model === config.model)).toBe(true);
     const hasImage = (index: number) =>
       Array.isArray(requests[index].params.messages[0].content) &&
       requests[index].params.messages[0].content.some((block) => block.type === "image");
@@ -167,7 +188,7 @@ describe.skipIf(!hasTestDatabase)("classify job", () => {
     const stored = await batch();
     expect(stored).toMatchObject({
       anthropicId: "msgbatch_1",
-      model: "claude-sonnet-5-5",
+      model: config.model,
       promptVersion: CLASSIFICATION_PROMPT_VERSION,
       requests: 3,
       submittedAt: start,
@@ -237,6 +258,8 @@ describe.skipIf(!hasTestDatabase)("classify job", () => {
     await submitAndEnd([succeeded(1), ended(2, "expired"), ended(3, "canceled")]);
     const { stats } = await run(new Date(start.getTime() + hourMs));
     expect(stats).toMatchObject({ classified: 1, failed: 0, released: 3, submitted: 3 });
+    const [first] = await database.db.select().from(classificationBatches).where(eq(classificationBatches.anthropicId, "msgbatch_1"));
+    expect(first.stats).toEqual({ classified: 1, failed: 0, released: 3, cacheReads: 1 });
     expect(api.created[1].requests.map((request) => request.custom_id).sort()).toEqual(["u2", "u3", "u4"]);
     expect((await rows()).filter((row) => row.status === "classified").map((row) => row.universeId)).toEqual([1]);
   });
@@ -259,7 +282,7 @@ describe.skipIf(!hasTestDatabase)("classify job", () => {
     await database.db.insert(classificationBatches).values({
       id: randomUUID(),
       anthropicId: "msgbatch_old",
-      model: "claude-sonnet-5-5",
+      model: config.model,
       promptVersion: CLASSIFICATION_PROMPT_VERSION,
       requests: config.maximumRequestsPerDay - 2,
       submittedAt: new Date(start.getTime() - 23 * hourMs),
@@ -275,7 +298,7 @@ describe.skipIf(!hasTestDatabase)("classify job", () => {
     await database.db.insert(classificationBatches).values({
       id: randomUUID(),
       anthropicId: "msgbatch_old",
-      model: "claude-sonnet-5-5",
+      model: config.model,
       promptVersion: CLASSIFICATION_PROMPT_VERSION,
       requests: config.maximumRequestsPerDay,
       submittedAt: new Date(start.getTime() - 25 * hourMs),
@@ -309,5 +332,64 @@ describe.skipIf(!hasTestDatabase)("classify job", () => {
     expect(status).toBe("degraded");
     expect(api.created).toHaveLength(1);
     expect(stats).toMatchObject({ submitted: 0, blockedBatch: { id: stored.id, submittedAt: start.toISOString() } });
+  });
+
+  it("submits nothing when the daily cap is used up, and reports the games still waiting", async () => {
+    await addGames([1, 2]);
+    await database.db.insert(classificationBatches).values({
+      id: randomUUID(),
+      anthropicId: "msgbatch_old",
+      model: config.model,
+      promptVersion: CLASSIFICATION_PROMPT_VERSION,
+      requests: config.maximumRequestsPerDay,
+      submittedAt: new Date(start.getTime() - hourMs),
+      collectedAt: new Date(start.getTime() - hourMs / 2),
+      costUsd: 1,
+    });
+    const { status, stats } = await run(start);
+    expect(status).toBe("success");
+    expect(api.created).toEqual([]);
+    expect(stats).toMatchObject({ submitted: 0, selection: { new: 2 } });
+  });
+
+  it("does not submit when the run is too late, and the next run submits the games", async () => {
+    await addGames([1, 2]);
+    const slow = {
+      downloadThumbnail: async () => {
+        clockMs += config.latestSubmissionMs + 1;
+        return null;
+      },
+    };
+    const { status } = await run(start, slow);
+    expect(status).toBe("failed");
+    expect(api.created).toEqual([]);
+    expect(await database.db.select().from(classificationBatches)).toEqual([]);
+    expect(await rows()).toEqual([]);
+
+    clockMs = 0;
+    expect((await run(new Date(start.getTime() + hourMs))).status).toBe("success");
+    expect(api.created[0].requests).toHaveLength(2);
+  });
+
+  it("keeps a batch open when its results hold fewer answers than it reports", async () => {
+    await addGames([1, 2]);
+    const before = api.ids.length;
+    await run(start);
+    expect(api.ids).toHaveLength(before + 1);
+    api.end([succeeded(1)], { processing: 0, succeeded: 2, errored: 0, canceled: 0, expired: 0 });
+    const { status } = await run(new Date(start.getTime() + hourMs));
+    expect(status).toBe("failed");
+    const stored = await batch();
+    expect(stored.collectedAt).toBeNull();
+    expect(await rows(stored.id)).toMatchObject([{ status: "pending" }, { status: "pending" }]);
+    expect(api.created).toHaveLength(1);
+  });
+
+  it("keeps the first answer of a game answered twice", async () => {
+    await addGames([1, 2]);
+    await submitAndEnd([succeeded(1), succeeded(1, { stop_reason: "refusal", content: [] }), succeeded(2)]);
+    const { stats } = await run(new Date(start.getTime() + hourMs));
+    expect(stats).toMatchObject({ classified: 2, failed: 0, released: 0, cacheReads: 2 });
+    expect((await rows()).map((row) => row.status)).toEqual(["classified", "classified"]);
   });
 });
