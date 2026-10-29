@@ -25,7 +25,7 @@ import { logger } from "@/lib/logger";
 import type { JobDefinition } from "./runner";
 
 export interface ClassifyDependencies {
-  // Built inside the run: the SDK client throws without ANTHROPIC_API_KEY, which only the classify unit loads.
+  // Built inside the run, so building every job needs no Anthropic credentials: only the classify unit loads the key.
   batches: () => BatchApi;
   downloadThumbnail: (url: string | null) => Promise<Buffer | null>;
   overrides?: readonly ClassificationOverride[];
