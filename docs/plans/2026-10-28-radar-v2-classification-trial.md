@@ -809,3 +809,51 @@ These steps spend money and need the owner. Claude runs the commands from the wo
   - **Comparison page:** https://claude.ai/artifact/4BvzHUpJ5aKbYanYATQFDY.
   - **The owner's call:** $55–60 a month for Opus is too much (2026-10-29). Proposed next: prompt v2, then the
     100-game review sample classified by both Opus (to measure its cache at 5 minutes) and Sonnet.
+- **Prompt v2** (`839dd90`): the shared genres both models had invented (puzzle, party, job simulator, evolution, board
+  game, drawing, wave survival, creature collecting, destruction), seven templates, the cards and vehicles reward loops,
+  and a rule that a new value names a shared genre or pattern, never a single game.
+- **S4, review run on 2026-10-29** (`.data/classification/review-1`, prompt v2, 100 games excluding comparison-1, 1
+  without thumbnail), classified by both Opus and Sonnet:
+  - **Cost and cache:** Opus $0.35 ($0.0035 a game) and Sonnet $0.21 ($0.0021), each with 99 of 100 cache reads at
+    5 minutes. The Opus cache works at 5 minutes, so Opus costs about $21 a month and $48 for the backfill; Sonnet about
+    $13 and $29.
+  - **Agreement:** family 75%, template 91%, reward loop 83%, core action 60%, format 61%.
+  - **New values:** 5 families each, instead of about 30 with prompt v1.
+- **S5, owner review on 2026-10-29** (https://claude.ai/artifact/TqqENcc5hC5C4CR2mpyoDA):
+  - **Page:** fields both models agreed on were confirmed or corrected; differing fields were chosen blind between A
+    and B, in random order, or rewritten. Answers were saved in the page's database and read back.
+  - **Claude's doubts:** four Sonnet agents checked the 309 agreed values against the thumbnails and raised 2 doubts;
+    Claude added 1 from the titles. The owner took all three, so the checkers miss errors.
+  - **Agreed values are reliable:** the owner corrected 5 of 309.
+  - **Accuracy:**
+
+    | Field | Opus | Sonnet |
+    |---|---|---|
+    | Family | 89% | 87% |
+    | Template | 97% | 94% |
+    | Reward loop | 90% | 86% |
+    | **Format** | **77%** | **70%** |
+    | Core action | 76% | 83% |
+
+  - **Opus against Sonnet on the format:** Opus alone right on 20 games, Sonnet alone on 13, both wrong on 10. Alone,
+    this sample does not separate them (exact McNemar p ≈ 0.3), but it points the same way as the comparison.
+  - **Decision:** the owner chose Opus (2026-10-29).
+  - **Gate:** neither model reaches 90%, so the plan's revision loop applies.
+  - **Noise:** part of the gap is boundary calls the reference itself does not settle consistently, such as `none`
+    for DONT SPLASH but `progress` for It Hears The Water [DONT SPLASH].
+  - **Overrides** (`ef47a01`): 92 entries, one for every field where the owner chose between differing answers or
+    wrote a value; core action choices are often wording.
+  - **The owner's per-game values:** for three `Steal a` games whose stolen units are not brainrots, the owner wrote
+    per-game values (`peru`, `badr`, `verities`). At the owner's call they are recorded as the shared value
+    `characters`.
+- **Prompt v3** (`3cc7bc4`), from the errors of review-1:
+  - **New values:** `hidden object`, `Find the {thing}`, `characters` and `collectibles`.
+  - **Boundaries:**
+    - `brainrots` only for the brainrot meme cast;
+    - creature collecting under `catches`;
+    - the markers of a `modded copy`;
+    - `{verb} a {thing}` (one object) against `simulator` (many objects, a counter);
+    - a title starting with Steal a makes a `Steal a` game.
+  - **Templates:** a theme before a genre word is a template.
+  - **New families:** a new genre beats `other`, and a known family beats a narrower new one.
+  - **Examples:** they come from review-1, which review-2 excludes.
