@@ -22,4 +22,19 @@ describe("orderJobs", () => {
       "The job order leaves out votes, charts",
     );
   });
+
+  it("accepts a registered job the pass leaves out on purpose, and runs only the ordered ones", () => {
+    const ordered = orderJobs([job("census"), job("classify")], ["census"], ["classify"]);
+    expect(ordered.map((definition) => definition.name)).toEqual(["census"]);
+  });
+
+  it("still refuses a registered job that is neither ordered nor left out", () => {
+    expect(() => orderJobs([job("census"), job("votes"), job("classify")], ["census"], ["classify"])).toThrow(
+      "The job order leaves out votes",
+    );
+  });
+
+  it("refuses a job that is both ordered and left out", () => {
+    expect(() => orderJobs([job("census")], ["census"], ["census"])).toThrow("The job order also leaves out census");
+  });
 });
