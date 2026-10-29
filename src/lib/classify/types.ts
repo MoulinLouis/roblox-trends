@@ -3,12 +3,17 @@ import type { GameClassification } from "./schema";
 export const CLASSIFICATION_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] as const;
 export type ClassificationModel = (typeof CLASSIFICATION_MODELS)[number];
 
-export interface ClassificationInput {
+// What the model is shown of a game.
+export interface ClassifiedGame {
   universeId: number;
   name: string;
   description: string;
   genre: string | null;
   thumbnailUrl: string | null;
+}
+
+// A game of a trial sample: the classified game, plus what the sample drew it by.
+export interface ClassificationInput extends ClassifiedGame {
   robloxCreatedAt: string; // ISO 8601
   peakCcu: number; // all-time daily peak in game_daily_all, 0 when the radar has none
   stratum: string; // the sample stratum that selected the game

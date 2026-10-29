@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type Anthropic from "@anthropic-ai/sdk";
 import { CLASSIFICATION_CONFIG } from "@/lib/config";
 import { classificationJsonSchema } from "./schema";
-import type { ClassificationInput, ClassificationVocabulary, ThumbnailImage, VocabularyEntry } from "./types";
+import type { ClassifiedGame, ClassificationVocabulary, ThumbnailImage, VocabularyEntry } from "./types";
 import { CLASSIFICATION_VOCABULARY } from "./vocabulary";
 
 // Bump it with every change to the prompt or to the user content: answers are comparable only within one version.
@@ -49,7 +49,7 @@ export function classificationPromptHash(
   return createHash("sha256").update(system).update("\u0000").update(JSON.stringify(schema)).digest("hex");
 }
 
-export function classificationUserContent(input: ClassificationInput, image: ThumbnailImage | null): Anthropic.ContentBlockParam[] {
+export function classificationUserContent(input: ClassifiedGame, image: ThumbnailImage | null): Anthropic.ContentBlockParam[] {
   const lines = [
     ...(image ? [] : ["Thumbnail: none"]),
     `Title: ${input.name}`,

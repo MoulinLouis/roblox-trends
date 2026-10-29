@@ -1,11 +1,11 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { CLASSIFICATION_CONFIG } from "@/lib/config";
+import type { BatchApi } from "./batches";
 import { CLASSIFICATION_PROMPT_VERSION, classificationPromptHash } from "./prompt";
 import { classificationCustomId } from "./request";
 import type { GameClassification } from "./schema";
 import {
-  type BatchApi,
   runClassificationTrial,
   type TrialBatch,
   type TrialDependencies,

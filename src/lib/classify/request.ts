@@ -3,7 +3,7 @@ import { describeIssue } from "@/lib/api/schema-issues";
 import { CLASSIFICATION_CONFIG } from "@/lib/config";
 import { classificationSystemPrompt, classificationUserContent } from "./prompt";
 import { classificationJsonSchema, gameClassificationSchema, type GameClassification } from "./schema";
-import type { ClassificationInput, ClassificationModel, ClassificationOutcome, ClassificationUsage, ThumbnailImage } from "./types";
+import type { ClassificationModel, ClassificationOutcome, ClassificationUsage, ThumbnailImage, ClassifiedGame } from "./types";
 
 // Batch results come back in any order; the custom id names the game each one belongs to.
 export function classificationCustomId(universeId: number): string {
@@ -19,7 +19,7 @@ export function universeIdFromCustomId(customId: string): number | null {
 // the Batches API rejects them, so a refusal stays a refusal.
 export function classificationRequest(
   model: ClassificationModel,
-  input: ClassificationInput,
+  input: ClassifiedGame,
   image: ThumbnailImage | null,
   system: string = classificationSystemPrompt(),
 ): Anthropic.Messages.MessageCreateParamsNonStreaming {

@@ -1,6 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { chunk, compareText } from "@/lib/arrays";
 import { CLASSIFICATION_CONFIG } from "@/lib/config";
+import { type BatchApi, rejectedByApi } from "./batches";
 import { CLASSIFICATION_PROMPT_VERSION, classificationPromptHash, classificationSystemPrompt } from "./prompt";
 import { classificationCustomId, classificationRequest, readBatchResult } from "./request";
 import type { ClassificationInput, ClassificationModel, ThumbnailImage, TrialResult } from "./types";
@@ -33,19 +34,6 @@ export interface TrialStore {
   writeResults(model: ClassificationModel, results: TrialResult[]): Promise<void>;
   // One JSON line per batch answer, as the API returned it.
   writeRawResults(model: ClassificationModel, lines: string[]): Promise<void>;
-}
-
-// The subset of client.messages.batches the runner uses.
-export interface BatchApi {
-  create(
-    params: { requests: { custom_id: string; params: Anthropic.Messages.MessageCreateParamsNonStreaming }[] },
-    options: { maxRetries: number },
-  ): Promise<{ id: string }>;
-  retrieve(id: string): Promise<{
-    processing_status: Anthropic.Messages.MessageBatch["processing_status"];
-    request_counts: { processing: number; succeeded: number; errored: number; canceled: number; expired: number };
-  }>;
-  results(id: string): Promise<AsyncIterable<Anthropic.Messages.MessageBatchIndividualResponse>>;
 }
 
 export interface TrialDependencies {
@@ -171,13 +159,6 @@ function withBatch(state: TrialState, model: ClassificationModel, batch: TrialBa
   if (batch === null) delete batches[model];
   else batches[model] = batch;
   return { ...state, batches };
-}
-
-// A 4xx answer means the API refused the request, so no batch exists. A timeout, a lost connection or a 5xx answer may
-// come after the batch was created.
-function rejectedByApi(error: unknown): boolean {
-  const status = typeof error === "object" && error !== null && "status" in error ? error.status : undefined;
-  return typeof status === "number" && status >= 400 && status <= 499;
 }
 
 // The runner does not know the directory, so it names the state file alone.

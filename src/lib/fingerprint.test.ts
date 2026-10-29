@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { contentFingerprint, rawFingerprint, urlFingerprint } from "./fingerprint";
+import { contentFingerprint, rawFingerprint, titleKey, urlFingerprint } from "./fingerprint";
 
 describe("fingerprints", () => {
   it("changes the raw fingerprint when only a promotional marker changes", () => {
@@ -44,5 +44,15 @@ describe("fingerprints", () => {
     expect(contentFingerprint("+1 Stone Skipping", "Skip stones")).toBe("f52b742d46d5d0fdd4da1893313c9c03a6210d47");
     expect(contentFingerprint("[⏳ 2H] +1 Stone Skipping", "Skip stones")).toBe("f52b742d46d5d0fdd4da1893313c9c03a6210d47");
     expect(urlFingerprint("https://tr.rbxcdn.com/a")).toBe("fbfe1d0b88393007bea8c86d66dd83499d9b98ea");
+  });
+});
+
+describe("titleKey", () => {
+  it("ignores markers and brackets", () => {
+    expect(titleKey("[🎃] Steal a Brainrot [UPD 3]")).toBe(titleKey("Steal a Brainrot"));
+  });
+
+  it("tells two concepts apart", () => {
+    expect(titleKey("Steal a Brainrot")).not.toBe(titleKey("Steal an Egg"));
   });
 });

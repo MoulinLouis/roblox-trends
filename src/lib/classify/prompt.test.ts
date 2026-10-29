@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classificationPromptHash, classificationSystemPrompt, classificationUserContent } from "./prompt";
+import { CLASSIFICATION_PROMPT_VERSION, classificationPromptHash, classificationSystemPrompt, classificationUserContent } from "./prompt";
 import { classificationJsonSchema } from "./schema";
 import type { ClassificationInput, ClassificationVocabulary, ThumbnailImage } from "./types";
 import { CLASSIFICATION_VOCABULARY } from "./vocabulary";
@@ -56,6 +56,13 @@ describe("classificationSystemPrompt", () => {
   // Batch requests share the system prompt as a cached prefix, which only hits when it is byte-identical.
   it("is identical across calls", () => {
     expect(classificationSystemPrompt()).toBe(prompt);
+  });
+
+  // Changing the prompt or the schema changes this hash: bump CLASSIFICATION_PROMPT_VERSION in the same commit, then update
+  // the hash and the version here.
+  it("is the text of the current prompt version", () => {
+    expect(CLASSIFICATION_PROMPT_VERSION).toBe(3);
+    expect(classificationPromptHash()).toBe("388643e191396df936a981cbbee5bcdc87f7d1958e6fe13e60c2e33febec3282");
   });
 });
 
