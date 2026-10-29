@@ -59,7 +59,7 @@ Users: `radar` (application, PostgreSQL role `radar` by peer authentication), `a
 
 | Unit | Runs |
 | --- | --- |
-| `radar-job@<job>.service` | `scripts/job.ts <job>` as `radar`. `TimeoutStartSec` from its drop-in (census and poll 570 s, the hourly jobs 1830 s); on a unit failure, `radar-job-failed@<job>.service` sends the `/fail` ping |
+| `radar-job@<job>.service` | `scripts/job.ts <job>` as `radar`. `TimeoutStartSec` from its drop-in (census and poll 570 s, the hourly jobs 1830 s); `classify` also loads `/etc/radar/anthropic.env` through its `anthropic.conf` drop-in; on a unit failure, `radar-job-failed@<job>.service` sends the `/fail` ping |
 | `radar-web.service` | `next start` on `127.0.0.1:3000` as `radar`, restarted on failure; writes only `.next/cache` |
 | `radar-deploy.service` | `ops/bin/deploy.sh` as root |
 | `radar-system-check.service` | `scripts/system-check.ts` as `radar` |
@@ -78,22 +78,23 @@ Jobs sharing Roblox hosts never start in the same minute (HTTP spacing is per pr
 | `radar-charts.timer` | `*:16:30` | +16:30 |
 | `radar-explore.timer` | `*:26:30` | +26:30 |
 | `radar-thumbnails.timer` | `*:36:30` | +36:30 |
+| `radar-classify.timer` | `*:46:30` | +46:30 |
 | `radar-system-check.timer` | `*:4/15:00` | every 15 minutes |
 | `radar-deploy.timer` | `*:1/5:30` | every 5 minutes |
 | `radar-backup-diff.timer` | `Mon..Sat *-*-* 03:10:00` | daily differential |
 | `radar-backup-full.timer` | `Sun *-*-* 03:10:00` | weekly full |
 | `radar-restore-test.timer` | `Sun *-*-* 05:30:00` | weekly restore test |
 
-Job timers are not persistent: a slot missed while the server was down is not caught up. The backup and restore-test timers are persistent: a missed run starts at boot.
+Job timers are not persistent: a slot missed while the server was down is not caught up. The deploy starts only the job timers that are enabled, and never enables `radar-classify.timer`: the owner enables it after a first manual run (section 4, Classification). The backup and restore-test timers are persistent: a missed run starts at boot.
 
-### Healthchecks checks (16 of the 20 free checks)
+### Healthchecks checks (18 of the 20 free checks)
 
 Project `radar` on Healthchecks.io; every check notifies every integration of the project (email, and Telegram if added).
 
 | Slug | Period | Grace | Pinged by |
 | --- | --- | --- | --- |
-| `radar-<job>` (6) | job interval | `timeoutMs` + 5 min | every completed run (degraded included); `/fail` from the job or from `radar-job-failed@` |
-| `radar-<job>-quality` (6) | job interval | 60 min | fully successful runs only |
+| `radar-<job>` (7) | job interval | `timeoutMs` + 5 min | every completed run (degraded included); `/fail` from the job or from `radar-job-failed@` |
+| `radar-<job>-quality` (7) | job interval | 60 min | fully successful runs only |
 | `radar-deploy` | 5 min | 30 min | every deploy timer run |
 | `radar-system` | 15 min | 15 min | `scripts/system-check.ts` (disk, WAL archiving, TimescaleDB policies) |
 | `radar-backup` | 1 day | 3 h | `ops/bin/backup.sh` |
@@ -173,6 +174,21 @@ A batch usually ends within an hour; after 2 hours the command prints the models
 
 `state.json` records each batch submission before it is sent. When a submission fails without an answer from the API (a timeout, a lost connection, a server error), the batch may still have been created and billed, so every later run refuses until the entry is settled: find the batch in the Anthropic Console's batch list and write its id into the model's entry, or, if no batch was created, delete that entry to submit again.
 
+The view `game_classifications` (`drizzle/0012_game_classifications.sql`) gives each game's current classification with the owner's overrides applied; read it, never the `classifications` table. `overridden` marks a game with an override. A game's format, the games of a family, and the share of tracked games classified:
+
+```sql
+select universe_id, family, template, reward_loop, core_action, theme, setting, progression, social, confidence, reason, classified_name, prompt_version, classified_at, overridden
+from game_classifications where universe_id = <universe id>;
+
+select g.universe_id, g.name, c.template, c.reward_loop, c.core_action, g.last_ccu
+from game_classifications c join games g using (universe_id)
+where c.family = '<family>' order by g.last_ccu desc limit 25;
+
+select count(*) filter (where c.family is not null) as classified, count(*) as tracked,
+  round(100.0 * count(*) filter (where c.family is not null) / count(*), 1) as classified_percent
+from games g left join game_classifications c using (universe_id);
+```
+
 `rising_games` computes the Radar page's metrics for any `as_of`. A session calls it with the values of `RADAR_CONFIG` in `src/lib/config.ts`; `sort_by` is `growth`, `acceleration`, `ccu` or `age`, and `row_limit` null returns every game (about 1 s for 90 days):
 
 ```sql
@@ -216,6 +232,7 @@ Rules:
 | --- | --- | --- | --- |
 | `/etc/radar/radar.env` | `root:radar 640` | `DATABASE_URL` (peer authentication over the local socket, no password), `NEXT_TELEMETRY_DISABLED=1`; not a secret | `configure-database.sh` |
 | `/etc/radar/healthchecks.env` | `root 600` | `HEALTHCHECKS_PING_BASE=https://hc-ping.com/<ping-key>` | owner |
+| `/etc/radar/anthropic.env` | `root 600` | `ANTHROPIC_API_KEY=...`, one line: the same key the owner uses on their machine (`~/.config/radar/anthropic.env`). Only the classify unit loads it, through its `anthropic.conf` drop-in, without a `-` prefix: a missing file fails the unit, and `radar-job-failed@classify` alerts | owner, with `install -m 600 -o root -g root /dev/null /etc/radar/anthropic.env && nano /etc/radar/anthropic.env` |
 | `/etc/radar/r2.env` | `root 600` | `R2_ENDPOINT` (the host only, `<account-id>.r2.cloudflarestorage.com`, with or without `https://`), `R2_BUCKET` (`radar-backups`), `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | owner |
 | `/etc/radar/pgbackrest-cipher` | `root 600` | The backup encryption passphrase | generated once by `configure-backups.sh`; restored by the owner on a rebuild |
 | `/etc/radar/deploy.env` | `root` | Optional `RADAR_DEPLOY_BRANCH` (default `main`), only to deploy another branch; absent; not a secret | owner |
@@ -227,6 +244,7 @@ The read-write Healthchecks API key is never stored on the server: it is used on
 The owner's password manager holds what the repository and the server cannot give back:
 
 - the R2 access key ID, secret access key, endpoint host and bucket name;
+- the Anthropic API key;
 - the pgBackRest cipher passphrase (without it and the R2 keys, no backup can be restored);
 - the Healthchecks ping key and read-write API key;
 - the Hetzner, Tailscale, Cloudflare, Healthchecks.io and GitHub account credentials.
@@ -247,14 +265,62 @@ radar system-check                         # the system check, printed without p
 
 `radar <script> [arguments]` runs an npm script of the live release as `radar` with `radar.env`. Run collection jobs through systemd (`systemctl start radar-job@<job>`), never `radar job <job>`: the unit never overlaps a run with the timer's, enforces the timeout and reports to Healthchecks.
 
-Pause collection by disabling the six job timers, and resume by enabling them:
+Pause collection by disabling the seven job timers, and resume by enabling them:
 
 ```bash
-systemctl disable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer
-systemctl enable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer
+systemctl disable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer
+systemctl enable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer
 ```
 
-Stopping a timer is not enough: every deploy run (every 5 minutes) starts the job timers that are enabled, on purpose, so a deploy killed while the timers were paused for a migration heals on the next run. Disabling does not stop a running job; `systemctl list-units 'radar-job@*'` shows the ones still running. Pause the job checks in Healthchecks during a long pause (tags `job` and `quality`); a paused check resumes on its next ping.
+Stopping a timer is not enough: every deploy run (every 5 minutes) starts the job timers that are enabled, on purpose, so a deploy killed while the timers were paused for a migration heals on the next run. Resuming also enables `radar-classify.timer`: leave it out of the enable command while the classify job is not meant to run (section 4, Classification). Disabling does not stop a running job; `systemctl list-units 'radar-job@*'` shows the ones still running. Pause the job checks in Healthchecks during a long pause (tags `job` and `quality`); a paused check resumes on its next ping.
+
+### Classification
+
+The `classify` job (`src/lib/jobs/classify.ts`) classifies every tracked game with Claude Sonnet 5.5 through the Message Batches API, hourly at `*:46:30`. `npm run collect` leaves it out: it is paid and needs the key (section 3).
+
+What a run does:
+
+1. Copies `src/lib/classify/overrides.ts` into `classification_overrides`.
+2. Collects every ended batch. Games a batch left expired, canceled or unanswered are released and submitted again. A refusal or an error becomes a failed row: it is retried after 24 hours, and given up after 3 failures under the same title.
+3. When no batch is open or blocked, submits up to 1,000 games, and at most 6,000 requests in any 24 hours. Order: never classified, then retitled, then classified with an older prompt version; within each group the highest last CCU first. A failed game rejoins its group once its 24 hours have passed.
+
+A run's stats (`radar status`, or `job_runs.stats`) hold `selection` (games due by reason, `waitingRetry`, `givenUp`), `submitted`, `classified`, `failed`, `released`, `waitingBatches` and `blockedBatch`. A batch ends within 24 hours, usually within an hour, so most runs only collect or wait.
+
+Cost: about $0.0022 a game, with batch pricing and the prompt cache. Read it per batch:
+
+```bash
+runuser -u radar -- psql -X -d radar -c "select submitted_at, requests, cost_usd, stats from classification_batches order by submitted_at desc limit 10"
+```
+
+`classification_batches.cost_usd` is the record of spend: a run that fails after collecting a batch keeps the batch's cost there, while its `job_runs.stats` are empty. `stats.cacheReads` should be about 99% of `requests`; well below that, the prompt cache is missing, so compare with the trial.
+
+Changing a classification: edit `src/lib/classify/overrides.ts` and deploy. The next run copies it, and the `game_classifications` view applies it field by field.
+
+Reclassifying after a prompt change: bump `CLASSIFICATION_PROMPT_VERSION` (`src/lib/classify/prompt.ts`), update the prompt hash test, and raise `JOB_CONFIG.classify.minimumPromptVersion`. The runs then reclassify the older games at the caps above. A retitled game is reclassified on its own; a change of its title's brackets only is not.
+
+A blocked submission: `blockedBatch` in the run's stats, a degraded run, and an alert from `radar-classify-quality`. A submission whose answer was lost may have created a paid batch, so nothing is submitted until the owner settles it. The Anthropic Console's batch list tells which:
+
+1. Look for a batch created around `submittedAt`.
+2. If one exists, record its id: `runuser -u radar -- psql -X -d radar -c "update classification_batches set anthropic_id = '<id>' where id = '<batch>'"`. The next run collects it.
+3. If none exists: `runuser -u radar -- psql -X -d radar -c "delete from classification_batches where id = '<batch>'"`. Its pending rows go with it, and the next run submits again.
+
+Other failures a run reports (`journalctl -u radar-job@classify -n 100 -o cat`):
+
+- `The run is too late to submit a batch safely`: the run spent more than 20 minutes before submitting, usually on slow thumbnail downloads. The next run submits these games. If it repeats, check the thumbnail CDN.
+- `The results of batch … hold N answers, fewer than …`: the results stream was cut short. The batch stays open and the next run collects it again.
+- A 4xx from the API on submission: no batch exists, so the batch row is deleted and the run fails. Read the error.
+- `retrieve` failing for a batch, for example one deleted in the Console: every run fails until the owner settles it. Check the batch in the Console; if it is gone, delete its row as in step 3 above.
+
+Pause it: `systemctl disable --now radar-classify.timer`. Deploys never re-enable a disabled timer.
+
+First start after deploying the job, once and in order:
+
+1. **Owner** writes the key (section 3).
+2. Provision the new checks (section 8, Healthchecks checks): expect 18 lines.
+3. Run it by hand, `systemctl start radar-job@classify.service`, then read its `job_runs` row: `runuser -u radar -- psql -X -d radar -c "select status, stats, error from job_runs where job = 'classify' order by started_at desc limit 1"`.
+4. `systemctl enable --now radar-classify.timer`.
+
+A check created by provisioning has not received a ping, and Healthchecks.io does not alert on a check that has never been pinged, so the gap between the deploy and step 3 should raise no alarm.
 
 ## 5. Deployments
 
@@ -309,7 +375,7 @@ A migration must stay compatible with the previous release, which may still be r
 
 ### What a deploy does not apply
 
-- New units: copied, but not enabled. Enable a new timer with `systemctl enable --now <unit>`.
+- New units: copied, but not enabled. Enable a new timer with `systemctl enable --now <unit>`. `radar-classify.timer` stays disabled until the owner's first start (section 4, Classification).
 - Removed units: the file stays in `/etc/systemd/system`. Run `systemctl disable --now <unit>`, delete the file, then `systemctl daemon-reload`.
 - `provision.sh` (packages, PostgreSQL configuration, sshd, firewall, system settings), `ops/postgresql/*.sql` (`configure-database.sh`) and the backup settings (`configure-backups.sh`): rerun the script from `/opt/radar/current/ops/bin` once the commit is live (section 8).
 - Healthchecks periods and graces: `provision:healthchecks` (section 8).
@@ -337,14 +403,14 @@ Everything written after the target is lost from the database (the WAL stays in 
 
 ```bash
 systemctl stop radar-deploy.timer radar-system-check.timer
-systemctl disable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer
+systemctl disable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer
 systemctl list-units 'radar-job@*'                        # wait until no job runs
 systemctl stop postgresql@18-main
 runuser -u postgres -- pgbackrest --stanza=radar --delta --type=time --target='2026-10-22 14:00:00+00' --target-action=promote restore
 systemctl start postgresql@18-main
 runuser -u postgres -- psql -XAtc 'select pg_is_in_recovery()'   # f once the target is reached and the cluster promoted
 systemctl start radar-backup@full                         # a first backup of the new timeline
-systemctl enable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer
+systemctl enable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer
 systemctl start radar-deploy.timer radar-system-check.timer
 ```
 
@@ -373,12 +439,12 @@ Power the old server off first: two servers must never archive into the same sta
 6. `/root/radar-bootstrap/ops/bin/configure-backups.sh` in full: its `stanza-create` is a no-op, then it turns archiving on and runs `pgbackrest check`.
 7. `/root/radar-bootstrap/ops/bin/configure-database.sh`: writes `radar.env`; the roles already came back with the restore, and the grants are idempotent.
 8. `/root/radar-bootstrap/ops/bin/deploy.sh`: clones the mirror, builds the branch head, runs any newer migration and installs the units. From now on, run the scripts from `/opt/radar/current/ops/bin`.
-9. **Owner** writes `/etc/radar/healthchecks.env`.
+9. **Owner** writes `/etc/radar/healthchecks.env` and `/etc/radar/anthropic.env` (section 3).
 10. Enable everything:
     ```bash
     systemctl enable --now radar-web && tailscale serve --bg 3000
     systemctl enable --now radar-system-check.timer radar-deploy.timer radar-backup-full.timer radar-backup-diff.timer radar-restore-test.timer
-    systemctl enable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer
+    systemctl enable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer
     systemctl start radar-backup@full
     ```
 
@@ -391,7 +457,7 @@ Healthchecks alerts when a check misses its period plus grace, or when it receiv
 | Check | What the alert means | First commands |
 | --- | --- | --- |
 | `radar-<job>` | No completed run within the period plus the job's timeout and 5 minutes, or a failed run: an error the job reported (database, abandoned run), a unit killed at `TimeoutStartSec`, crashed or unable to start, or a timer that is disabled or stopped | `systemctl list-timers 'radar-*'`, `systemctl status radar-job@<job>`, `journalctl -u radar-job@<job> -n 100 -o cat`, `radar status` |
-| `radar-<job>-quality` | No fully successful run for the job's interval plus an hour, while runs still complete degraded: 429s, a short, malformed or repeated Rolimon's list, too few games returned, stalled place resolution, failed promotions (README, quality gates) | `radar status` (degraded counts, watched stats, 429s, last error), `journalctl -u radar-job@<job> -n 100 -o cat` |
+| `radar-<job>-quality` | No fully successful run for the job's interval plus an hour, while runs still complete degraded: 429s, a short, malformed or repeated Rolimon's list, too few games returned, stalled place resolution, failed promotions, a blocked classification batch (README, quality gates; section 4, Classification) | `radar status` (degraded counts, watched stats, 429s, last error), `journalctl -u radar-job@<job> -n 100 -o cat` |
 | `radar-deploy` | No deploy run for 35 minutes (the timer is stopped, or a run hangs), or a `/fail`: a failed build (and every run after it until a new commit), a failed export, migrations failing 5 times, a dashboard that does not answer after the switch (retried every run), an unexpected error. A red or pending CI is not an alert | `journalctl -u radar-deploy -n 50 -o cat`, `readlink /opt/radar/current`, `ls -lt /opt/radar/releases`, `tail -n 50 /opt/radar/releases/<sha>.failed` |
 | `radar-system` | Disk above 70%; WAL archiving off, failing, or silent for 30 minutes (point-in-time recovery has stopped, and PostgreSQL keeps every unarchived segment, which fills the disk); a TimescaleDB policy paused or without success for 3 schedule intervals (at least 60 minutes); or the check could not run | `journalctl -u radar-system-check -n 20 -o cat`, `df -h /`, `runuser -u postgres -- pgbackrest --stanza=radar check`, the two queries below |
 | `radar-backup` | A backup failed, or none succeeded for a day plus 3 hours | `journalctl -u 'radar-backup@*' -n 50 -o cat`, `runuser -u postgres -- pgbackrest --stanza=radar info`, `ls -lt /var/log/pgbackrest/`; retry with `systemctl start radar-backup@diff` |
@@ -433,14 +499,14 @@ Before any maintenance that restarts PostgreSQL, quiet the server and pause the 
 
 ```bash
 systemctl stop radar-deploy.timer radar-system-check.timer
-systemctl disable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer
+systemctl disable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer
 systemctl list-units 'radar-job@*'      # wait until no job runs
 ```
 
 and afterwards:
 
 ```bash
-systemctl enable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer
+systemctl enable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer
 systemctl start radar-deploy.timer radar-system-check.timer
 ```
 
@@ -509,7 +575,7 @@ Or on the server, after the owner wrote the key alone into `/root/healthchecks-a
 HEALTHCHECKS_API_KEY="$(cat /root/healthchecks-api-key)" radar provision:healthchecks; status=$?; shred -u /root/healthchecks-api-key; exit $status
 ```
 
-Expected: 16 `Check created` or `Check updated` lines.
+Expected: 18 `Check created` or `Check updated` lines.
 
 ### Provisioning changes
 
