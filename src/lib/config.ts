@@ -218,6 +218,9 @@ export const JOB_CONFIG = {
     maximumRequestsPerDay: 6_000,
     // Classifications from an older prompt count as outdated. Raising it reclassifies them at the caps above.
     minimumPromptVersion: 3,
+    // A game never classified waits for its first thumbnail check, which the thumbnails job runs ten minutes before this
+    // job, for this long after its first observation: it is classified once from its text alone if the check never comes.
+    thumbnailWaitHours: 6,
     // A failed game waits this long, and is given up after this many failures with the same title.
     retryFailedAfterHours: 24,
     maximumFailedAttempts: 3,

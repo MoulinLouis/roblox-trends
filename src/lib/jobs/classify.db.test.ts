@@ -143,8 +143,8 @@ describe.skipIf(!hasTestDatabase)("classify job", () => {
     await upsertGameDetails(database.db, ids.map((id) => gameDetail(id, { playing: playing(id) })), at);
     for (const id of ids) {
       await database.db.execute(
-        // The thumbnail URL comes from the thumbnails job, not from game details.
-        sql`update games set thumbnail_url = ${`https://tr.rbxcdn.com/thumbnail/${id}`} where universe_id = ${id}`,
+        // The thumbnail URL and its check come from the thumbnails job, not from game details.
+        sql`update games set thumbnail_url = ${`https://tr.rbxcdn.com/thumbnail/${id}`}, thumbnails_checked_at = ${at.toISOString()}::timestamptz where universe_id = ${id}`,
       );
     }
   }
@@ -202,6 +202,24 @@ describe.skipIf(!hasTestDatabase)("classify job", () => {
     ]);
     expect(stats).toMatchObject({ submitted: 3, withoutThumbnail: 1, waitingBatches: 0, blockedBatch: null });
     expect(WATCHED_STATS.classify?.values.filter((path) => !hasStat(stats, path))).toEqual([]);
+  });
+
+  it("holds back a fresh game whose thumbnail is not checked yet, and not an older one", async () => {
+    await addGames([1, 2]);
+    // Game 1 was first observed just now and is unchecked; game 2 was first observed a day ago and is unchecked.
+    await database.db.execute(sql`update games set thumbnails_checked_at = null where universe_id in (1, 2)`);
+    await database.db.execute(
+      sql`update games set first_observed_at = ${new Date(start.getTime() - 24 * hourMs).toISOString()}::timestamptz where universe_id = 2`,
+    );
+    const { stats } = await run(start);
+    expect(api.created[0].requests.map((request) => request.custom_id)).toEqual(["u2"]);
+    expect(stats).toMatchObject({ submitted: 1, selection: { new: 1, waitingThumbnail: 1 } });
+
+    // Once the thumbnails job has checked it, the held game is submitted.
+    api.end([succeeded(2)]);
+    await database.db.execute(sql`update games set thumbnails_checked_at = ${start.toISOString()}::timestamptz where universe_id = 1`);
+    await run(new Date(start.getTime() + hourMs));
+    expect(api.created[1].requests.map((request) => request.custom_id)).toEqual(["u1"]);
   });
 
   it("copies the given overrides into classification_overrides", async () => {

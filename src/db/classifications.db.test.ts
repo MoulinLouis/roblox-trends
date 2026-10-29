@@ -109,6 +109,8 @@ describe.skipIf(!hasTestDatabase)("classification persistence", () => {
     expect(candidates.get(1)).toMatchObject({
       name: "Steal a Fish",
       lastCcu: 100,
+      firstObservedAt: at(1),
+      thumbnailsCheckedAt: null,
       pending: false,
       classified: { name: "Steal a Fish!", promptVersion: 3 },
       failures: [],

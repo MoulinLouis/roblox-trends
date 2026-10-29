@@ -53,12 +53,15 @@ export async function readClassificationCandidates(db: Database): Promise<Classi
     genre: string | null;
     thumbnail_url: string | null;
     last_ccu: number;
+    first_observed_at: Date | string;
+    thumbnails_checked_at: Date | string | null;
     pending: boolean;
     classified_name: string | null;
     classified_prompt_version: number | null;
     failures: { name: string; finishedAt: string }[];
   }>(sql`
     select g.universe_id, g.name, g.description, g.genre, g.thumbnail_url, g.last_ccu,
+      g.first_observed_at, g.thumbnails_checked_at,
       exists (select 1 from classifications p where p.universe_id = g.universe_id and p.status = 'pending') as pending,
       latest.name as classified_name, latest.prompt_version as classified_prompt_version,
       coalesce(failures.items, '[]'::jsonb) as failures
@@ -85,6 +88,8 @@ export async function readClassificationCandidates(db: Database): Promise<Classi
     genre: row.genre,
     thumbnailUrl: row.thumbnail_url,
     lastCcu: Number(row.last_ccu),
+    firstObservedAt: new Date(row.first_observed_at),
+    thumbnailsCheckedAt: row.thumbnails_checked_at === null ? null : new Date(row.thumbnails_checked_at),
     pending: row.pending,
     classified:
       row.classified_name === null || row.classified_prompt_version === null

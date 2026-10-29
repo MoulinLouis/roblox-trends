@@ -5,6 +5,9 @@ import type { ClassifiedGame } from "./types";
 export interface ClassificationCandidate extends ClassifiedGame {
   lastCcu: number;
   pending: boolean;
+  // When the radar first saw the game, and when the thumbnails job last checked it (null: never).
+  firstObservedAt: Date;
+  thumbnailsCheckedAt: Date | null;
   // The latest successful classification, or null.
   classified: { name: string; promptVersion: number } | null;
   // Failures since the latest success, oldest first.
@@ -19,23 +22,30 @@ export interface SelectionOptions {
   minimumPromptVersion: number;
   retryFailedAfterHours: number;
   maximumFailedAttempts: number;
+  thumbnailWaitHours: number;
 }
 
 export interface Selection {
   games: ClassifiedGame[];
-  // Every game due, before the limit, by reason; and the games held back by their failures.
-  counts: Record<SelectionReason | "waitingRetry" | "givenUp", number>;
+  // Every game due, before the limit, by reason; and the games held back by a missing thumbnail or by their failures.
+  counts: Record<SelectionReason | "waitingThumbnail" | "waitingRetry" | "givenUp", number>;
 }
 
 const order: Record<SelectionReason, number> = { new: 0, retitled: 1, outdated: 2 };
 
 export function selectGamesToClassify(candidates: readonly ClassificationCandidate[], options: SelectionOptions): Selection {
-  const counts: Selection["counts"] = { new: 0, retitled: 0, outdated: 0, waitingRetry: 0, givenUp: 0 };
+  const counts: Selection["counts"] = { new: 0, retitled: 0, outdated: 0, waitingThumbnail: 0, waitingRetry: 0, givenUp: 0 };
   const due: { candidate: ClassificationCandidate; reason: SelectionReason }[] = [];
   for (const candidate of candidates) {
     if (candidate.pending) continue;
     const reason = dueReason(candidate, options.minimumPromptVersion);
     if (reason === null) continue;
+    // Only a game never classified waits: a retitled or outdated one was classified once, with its thumbnail if it had one,
+    // and the thumbnail is not what made it due again.
+    if (reason === "new" && waitsForThumbnail(candidate, options)) {
+      counts.waitingThumbnail += 1;
+      continue;
+    }
     // Only failures under the current title count: a new title deserves a fresh try.
     const key = titleKey(candidate.name);
     const failures = candidate.failures.filter((failure) => titleKey(failure.name) === key);
@@ -65,6 +75,13 @@ export function selectGamesToClassify(candidates: readonly ClassificationCandida
     thumbnailUrl: candidate.thumbnailUrl,
   }));
   return { games, counts };
+}
+
+function waitsForThumbnail(candidate: ClassificationCandidate, options: SelectionOptions): boolean {
+  return (
+    candidate.thumbnailsCheckedAt === null &&
+    options.now.getTime() - candidate.firstObservedAt.getTime() < options.thumbnailWaitHours * 3_600_000
+  );
 }
 
 function dueReason(candidate: ClassificationCandidate, minimumPromptVersion: number): SelectionReason | null {

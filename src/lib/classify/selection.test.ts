@@ -9,6 +9,7 @@ const options: SelectionOptions = {
   minimumPromptVersion: JOB_CONFIG.classify.minimumPromptVersion,
   retryFailedAfterHours: JOB_CONFIG.classify.retryFailedAfterHours,
   maximumFailedAttempts: JOB_CONFIG.classify.maximumFailedAttempts,
+  thumbnailWaitHours: JOB_CONFIG.classify.thumbnailWaitHours,
 };
 
 function candidate(values: Partial<ClassificationCandidate> & { universeId: number }): ClassificationCandidate {
@@ -19,6 +20,9 @@ function candidate(values: Partial<ClassificationCandidate> & { universeId: numb
     thumbnailUrl: null,
     lastCcu: 0,
     pending: false,
+    // Seen long ago and checked, unless a test says otherwise.
+    firstObservedAt: hoursAgo(1_000),
+    thumbnailsCheckedAt: hoursAgo(900),
     classified: null,
     failures: [],
     ...values,
@@ -72,7 +76,35 @@ describe("selectGamesToClassify", () => {
       { ...options, limit: 2 },
     );
     expect(selection.games.map((game) => game.universeId)).toEqual([2, 1]);
-    expect(selection.counts).toEqual({ new: 2, retitled: 1, outdated: 1, waitingRetry: 0, givenUp: 0 });
+    expect(selection.counts).toEqual({ new: 2, retitled: 1, outdated: 1, waitingThumbnail: 0, waitingRetry: 0, givenUp: 0 });
+  });
+
+  it("holds back a new game whose thumbnail was never checked until the wait is over", () => {
+    const wait = options.thumbnailWaitHours;
+    const fresh = candidate({ universeId: 1, firstObservedAt: hoursAgo(wait - 1), thumbnailsCheckedAt: null });
+    const selection = selectGamesToClassify([fresh], options);
+    expect(selection.games).toEqual([]);
+    expect(selection.counts).toMatchObject({ new: 0, waitingThumbnail: 1 });
+    const waited = candidate({ universeId: 2, firstObservedAt: hoursAgo(wait + 1), thumbnailsCheckedAt: null });
+    expect(ids([waited])).toEqual([2]);
+  });
+
+  it("does not hold back a new game whose thumbnail was checked, even just now", () => {
+    expect(ids([candidate({ universeId: 1, firstObservedAt: hoursAgo(1), thumbnailsCheckedAt: hoursAgo(0.5) })])).toEqual([1]);
+  });
+
+  it("does not make a retitled or outdated game wait for a thumbnail", () => {
+    const current = options.minimumPromptVersion;
+    const unchecked = { firstObservedAt: hoursAgo(1), thumbnailsCheckedAt: null };
+    const selection = selectGamesToClassify(
+      [
+        candidate({ universeId: 1, ...unchecked, classified: { name: "Old name", promptVersion: current } }),
+        candidate({ universeId: 2, ...unchecked, classified: { name: "Game 2", promptVersion: current - 1 } }),
+      ],
+      options,
+    );
+    expect(selection.games.map((game) => game.universeId)).toEqual([1, 2]);
+    expect(selection.counts).toMatchObject({ retitled: 1, outdated: 1, waitingThumbnail: 0 });
   });
 
   it("makes a game wait when its last failure under the current title is younger than the retry delay", () => {

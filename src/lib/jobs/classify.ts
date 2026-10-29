@@ -92,6 +92,7 @@ export function createClassifyJob(dependencies: ClassifyDependencies): JobDefini
           minimumPromptVersion: config.minimumPromptVersion,
           retryFailedAfterHours: config.retryFailedAfterHours,
           maximumFailedAttempts: config.maximumFailedAttempts,
+          thumbnailWaitHours: config.thumbnailWaitHours,
         });
         selection = chosen.counts;
         if (chosen.games.length > 0) submitted = await submitBatch(db, api, chosen.games, now, { ...dependencies, clock, startedMs });
