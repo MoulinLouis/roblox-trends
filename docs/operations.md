@@ -282,9 +282,9 @@ What a run does:
 
 1. Copies `src/lib/classify/overrides.ts` into `classification_overrides`.
 2. Collects every ended batch. Games a batch left expired, canceled or unanswered are released and submitted again. A refusal or an error becomes a failed row: it is retried after 24 hours, and given up after 3 failures under the same title.
-3. When no batch is open or blocked, submits up to 1,000 games, and at most 6,000 requests in any 24 hours. Order: never classified, then retitled, then classified with an older prompt version; within each group the highest last CCU first. A failed game rejoins its group once its 24 hours have passed.
+3. When no batch is open or blocked, submits up to 1,000 games, and at most 6,000 requests in any 24 hours. Order: never classified, then retitled, then classified with an older prompt version; within each group the highest last CCU first. A failed game rejoins its group once its 24 hours have passed. A never classified game waits for its first thumbnail check (the thumbnails job runs at `*:36:30`), at most 6 hours after it was first observed, so it is classified with its thumbnail; a retitled or outdated game does not wait.
 
-A run's stats (`radar status`, or `job_runs.stats`) hold `selection` (games due by reason, `waitingRetry`, `givenUp`), `submitted`, `classified`, `failed`, `released`, `waitingBatches` and `blockedBatch`. A batch ends within 24 hours, usually within an hour, so most runs only collect or wait.
+A run's stats (`radar status`, or `job_runs.stats`) hold `selection` (games due by reason, `waitingThumbnail`, `waitingRetry`, `givenUp`), `submitted`, `classified`, `failed`, `released`, `waitingBatches` and `blockedBatch`. A batch ends within 24 hours, usually within an hour, so most runs only collect or wait.
 
 Cost: about $0.0022 a game, with batch pricing and the prompt cache. Read it per batch:
 
@@ -294,9 +294,19 @@ runuser -u radar -- psql -X -d radar -c "select submitted_at, requests, cost_usd
 
 `classification_batches.cost_usd` is the record of spend: a run that fails after collecting a batch keeps the batch's cost there, while its `job_runs.stats` are empty. `stats.cacheReads` should be about 99% of `requests`; well below that, the prompt cache is missing, so compare with the trial.
 
+A given-up game (`selection.givenUp`, 3 failures under its current title) is never submitted again on its own. To make it eligible again, delete its failed rows, and the next run submits it as a never classified game:
+
+```bash
+runuser -u radar -- psql -X -d radar -c "delete from classifications where status = 'failed' and universe_id = <id>"
+```
+
+An `errored` result of a batch counts as a failure like a refusal. Read the errors first (`select name, error, finished_at from classifications where status = 'failed' and universe_id = <id>`): a given-up game usually fails the same way every time.
+
 Changing a classification: edit `src/lib/classify/overrides.ts` and deploy. The next run copies it, and the `game_classifications` view applies it field by field.
 
 Reclassifying after a prompt change: bump `CLASSIFICATION_PROMPT_VERSION` (`src/lib/classify/prompt.ts`), update the prompt hash test, and raise `JOB_CONFIG.classify.minimumPromptVersion`. The runs then reclassify the older games at the caps above. A retitled game is reclassified on its own; a change of its title's brackets only is not.
+
+At most one batch is open at a time, and a unique index on `classification_batches` (`collected_at is null`) enforces it: a second insert fails before the API is called. Settling a blocked batch (below) is what frees it.
 
 A blocked submission: `blockedBatch` in the run's stats, a degraded run, and an alert from `radar-classify-quality`. A submission whose answer was lost may have created a paid batch, so nothing is submitted until the owner settles it. The Anthropic Console's batch list tells which:
 
@@ -359,6 +369,8 @@ cp -r /opt/radar/current/ops/systemd/. /etc/systemd/system/ && systemctl daemon-
 systemctl restart radar-web
 ```
 
+Before rolling back to a release that predates the classify job, disable its timer: `systemctl disable --now radar-classify.timer`. Otherwise `scripts/job.ts` of that release exits with "Unknown job" every hour and alerts. Enable it again once a release with the job is live.
+
 Pause the `radar-deploy` check in Healthchecks while the timer is stopped. Migrations are forward only: the older release runs on the newer schema, which the compatibility rule below makes safe. Once a fix is pushed, `systemctl start radar-deploy.timer` (it is still enabled); the check resumes on the next ping.
 
 ### Failed build
@@ -371,6 +383,7 @@ A migration must stay compatible with the previous release, which may still be r
 
 - Add before you remove: new columns are nullable or have a default, and the code that needs them ships with or after them.
 - Drop a column or a table one release after the code stopped using it; rename in two releases (add and copy, then drop).
+- A migration that alters a column of `classifications` or `classification_batches` that the `game_classifications` view reads must drop and recreate the view in the same migration: Postgres refuses to change such a column under a view, and a view left behind keeps the old definition.
 - Migrations run with a 10-second `lock_timeout`, so one blocked behind a job fails and is retried (5 attempts, 30 s apart) instead of queueing every later query.
 
 ### What a deploy does not apply
