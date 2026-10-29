@@ -6,7 +6,7 @@ import type { ClassificationInput, ClassificationVocabulary, ThumbnailImage, Voc
 import { CLASSIFICATION_VOCABULARY } from "./vocabulary";
 
 // Bump it with every change to the prompt or to the user content: answers are comparable only within one version.
-export const CLASSIFICATION_PROMPT_VERSION = 2;
+export const CLASSIFICATION_PROMPT_VERSION = 3;
 
 // Every request of a batch shares this text as its cached prefix, so it holds nothing that varies between calls.
 export function classificationSystemPrompt(vocabulary: ClassificationVocabulary = CLASSIFICATION_VOCABULARY): string {
@@ -21,7 +21,7 @@ How to read a game:
 Fields:
 - reason: one sentence on what decided the family, the template and the reward loop.
 - family: the genre the developer would name for the game, such as \`+1\`, \`Steal a\` or \`obby\`. The family follows the gameplay and the template follows the title, so a title can match a template of another family: a drawing game titled "Draw a Cat" is a \`drawing\` game with the template \`{verb} a {thing}\`.
-- template: the title pattern several games share, with the variable parts in braces, such as \`+1 {thing} Escape\` or \`{verb} for {reward}\`. Use a known template when the title follows it with small variations (capitals, "an" for "a", an extra word). Use \`none\` when the title is a name rather than a pattern.
+- template: the title pattern several games share, with the variable parts in braces, such as \`+1 {thing} Escape\` or \`{verb} for {reward}\`. Use a known template when the title follows it with small variations (capitals, "an" for "a", an extra word). A theme before a genre word or a fixed phrase that other titles could reuse is a template even when it is not listed, such as \`{thing} Hatchers\` or \`{thing} Prison Run\`. Use \`none\` only when the title is a name rather than a pattern.
 - rewardLoop: what the player collects or grows in the core loop. \`eggs\` is its own value, apart from \`pets\`.
 - coreAction: what the player does most of the time, as a lowercase base-form verb and its object, one to three words: \`skip stones\`, \`ride pets\`, \`steal eggs\`.
 - theme: the main object or theme, one to three lowercase words.
@@ -29,7 +29,7 @@ Fields:
 - progression and social: one of the listed values. \`theft\` is for games where stealing from other players is the core loop.
 - confidence: \`high\` when the title and the thumbnail leave no doubt about the family, the template and the reward loop; \`low\` when you mostly guessed.
 
-Known values. Reuse a known value whenever one fits, written exactly as listed. When none fits, write a new value only for a genre or a title pattern that many games share, in one to three words and in the same style: a new format must appear as a new value, not be forced into an old one. Never describe a single game; that is what coreAction and theme are for. Use \`other\` as a family only when no genre stands out, and \`none\` as a template when the title follows no shared pattern.
+Known values. Reuse a known value whenever one fits, written exactly as listed. When none fits, write a new value only for a genre or a title pattern that many games share, in one to three words and in the same style: a new format must appear as a new value, not be forced into an old one. Never describe a single game; that is what coreAction and theme are for. Prefer a known family that fits over a narrower new one (a cultivation game is an \`anime RPG\`), and a new genre over \`other\` when one stands out (\`gladiator RPG\`). Use \`other\` as a family only when no genre stands out, and \`none\` as a template when the title follows no shared pattern.
 
 Families:
 ${vocabularyLines(vocabulary.families)}
