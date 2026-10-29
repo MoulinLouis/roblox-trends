@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { COMPARED_FIELDS } from "@/lib/classify/compare";
 import type { GameClassification } from "@/lib/classify/schema";
 import type { ClassificationUsage } from "@/lib/classify/types";
 import { gameDetail } from "@/test/fixtures";
@@ -294,6 +295,22 @@ describe.skipIf(!hasTestDatabase)("classification persistence", () => {
         { universeId: 1, field: "coreAction", value: "steal fish", reason: "Owner.", decidedAt: "2026-10-29" },
       ]);
       expect(await view()).toMatchObject([{ universe_id: 1, family: "Steal a", core_action: "steal fish", overridden: true }]);
+    });
+
+    // COMPARED_FIELDS is what ClassificationOverride["field"] allows: a field added there fails here until the view covers it.
+    it.each(COMPARED_FIELDS)("applies an override of %s to its own column only", async (field) => {
+      await submit(batchOne, 2, [item(1, "Steal a Fish")]);
+      await storeBatchResults(database.db, batchOne, [classified(1)], collected(3));
+      await syncClassificationOverrides(database.db, [
+        { universeId: 1, field, value: `owner ${field}`, reason: "Owner.", decidedAt: "2026-10-29" },
+      ]);
+      const result = await database.db.execute<Record<string, string | boolean>>(sql`select * from game_classifications where universe_id = 1`);
+      const row = result.rows[0];
+      const column = (name: string) => name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+      for (const other of COMPARED_FIELDS) {
+        expect(row?.[column(other)]).toBe(other === field ? `owner ${field}` : classification[other]);
+      }
+      expect(row?.overridden).toBe(true);
     });
 
     it("keeps a row for a game with an override and no classification", async () => {
