@@ -1,0 +1,11 @@
+[Unit]
+Description=Radar classification every hour
+
+[Timer]
+OnCalendar=*:46:30
+AccuracySec=1s
+Persistent=false
+Unit=radar-job@classify.service
+
+[Install]
+WantedBy=timers.target
