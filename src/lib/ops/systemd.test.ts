@@ -187,3 +187,28 @@ describe("unit references", () => {
     }
   });
 });
+
+describe("job timers and the deploy script", () => {
+  it("lists every job timer, so a migration pauses all of them", () => {
+    const deploy = readFileSync(new URL("ops/bin/deploy.sh", repository), "utf8");
+    const listed = /^readonly job_timers=\((.*)\)$/m.exec(deploy)?.[1].split(/\s+/);
+    expect([...(listed ?? [])].sort()).toEqual(JOB_NAMES.map((name) => `radar-${name}.timer`).sort());
+  });
+});
+
+describe("the Anthropic key", () => {
+  const keyFile = "/etc/radar/anthropic.env";
+  const dropIns = dropInDirectories.flatMap((directory) =>
+    readdirSync(new URL(`${directory}/`, units))
+      .filter((entry) => entry.endsWith(".conf"))
+      .map((entry) => `${directory}/${entry}`),
+  );
+  const environmentFiles = [...unitFiles, ...dropIns].flatMap((path) =>
+    (readUnit(path).get("EnvironmentFile") ?? []).map((value) => ({ path, value })),
+  );
+
+  it("is loaded by the classify job only, and its absence fails the unit", () => {
+    const loading = environmentFiles.filter(({ value }) => value.replace(/^-/, "") === keyFile);
+    expect(loading).toEqual([{ path: "radar-job@classify.service.d/anthropic.conf", value: keyFile }]);
+  });
+});

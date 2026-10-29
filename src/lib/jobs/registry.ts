@@ -1,8 +1,11 @@
+import Anthropic from "@anthropic-ai/sdk";
 import { RobloxClient } from "@/lib/api/roblox";
 import { getRolimonsGames } from "@/lib/api/rolimons";
+import { downloadThumbnailJpeg } from "@/lib/classify/thumbnails";
 import { ROBLOX_REGION } from "@/lib/config";
 import { createCensusJob } from "./census";
 import { createChartsJob } from "./charts";
+import { createClassifyJob } from "./classify";
 import { createExploreJob } from "./explore";
 import { createPollJob } from "./poll";
 import type { JobDefinition } from "./runner";
@@ -18,5 +21,9 @@ export function createJobs(): JobDefinition[] {
     createChartsJob({ roblox }),
     createExploreJob({ roblox }),
     createThumbnailsJob({ roblox }),
+    createClassifyJob({
+      batches: () => new Anthropic().messages.batches,
+      downloadThumbnail: (url) => downloadThumbnailJpeg(url),
+    }),
   ];
 }
