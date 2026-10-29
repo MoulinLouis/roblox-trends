@@ -17,7 +17,7 @@ import { type BatchApi, rejectedByApi } from "@/lib/classify/batches";
 import { classificationCostUsd } from "@/lib/classify/cost";
 import { CLASSIFICATION_OVERRIDES, type ClassificationOverride } from "@/lib/classify/overrides";
 import { CLASSIFICATION_PROMPT_VERSION } from "@/lib/classify/prompt";
-import { classificationCustomId, classificationRequest, readBatchResult } from "@/lib/classify/request";
+import { classificationCustomId, classificationRequest, readBatchResult, universeIdFromCustomId } from "@/lib/classify/request";
 import { selectGamesToClassify, type Selection } from "@/lib/classify/selection";
 import type { ClassifiedGame, ThumbnailImage } from "@/lib/classify/types";
 import { CLASSIFICATION_CONFIG, JOB_CONFIG } from "@/lib/config";
@@ -30,7 +30,11 @@ export interface ClassifyDependencies {
   downloadThumbnail: (url: string | null) => Promise<Buffer | null>;
   overrides?: readonly ClassificationOverride[];
   newId?: () => string;
+  // Measures the run's own wall-clock time, apart from the `now` of the slot.
+  clock?: () => number;
 }
+
+type RequestCounts = Awaited<ReturnType<BatchApi["retrieve"]>>["request_counts"];
 
 interface SubmittedBatch {
   requests: number;
@@ -46,7 +50,7 @@ interface CollectedBatch {
   cacheReads: number;
 }
 
-const hourMs = 3_600_000;
+const dayMs = 24 * 60 * 60 * 1000;
 
 // Every batch is paid for, so the submission follows the trial's: the batch row is written before the request, the SDK
 // does not retry, and only a 4xx answer (no batch exists) removes the row. Any other failure keeps the row without an
@@ -58,6 +62,8 @@ export function createClassifyJob(dependencies: ClassifyDependencies): JobDefini
     intervalMinutes: config.intervalMinutes,
     timeoutMs: config.timeoutMs,
     async run({ db, now }) {
+      const clock = dependencies.clock ?? Date.now;
+      const startedMs = clock();
       const overrides = await syncClassificationOverrides(db, dependencies.overrides ?? CLASSIFICATION_OVERRIDES);
       const api = dependencies.batches();
       const open = await readOpenBatches(db);
@@ -67,8 +73,8 @@ export function createClassifyJob(dependencies: ClassifyDependencies): JobDefini
       let waitingBatches = 0;
       for (const batch of open) {
         if (batch.anthropicId === null) continue;
-        const { processing_status: status } = await api.retrieve(batch.anthropicId);
-        if (status === "ended") collected.push(await collectBatch(db, api, batch, batch.anthropicId, now));
+        const { processing_status: status, request_counts: counts } = await api.retrieve(batch.anthropicId);
+        if (status === "ended") collected.push(await collectBatch(db, api, batch, batch.anthropicId, counts, now));
         else waitingBatches += 1;
       }
       if (blocked) {
@@ -78,7 +84,7 @@ export function createClassifyJob(dependencies: ClassifyDependencies): JobDefini
       let submitted: SubmittedBatch | null = null;
       let selection: Selection["counts"] | null = null;
       if (!blocked && waitingBatches === 0) {
-        const used = await requestsSubmittedSince(db, new Date(now.getTime() - 24 * hourMs));
+        const used = await requestsSubmittedSince(db, new Date(now.getTime() - dayMs));
         const limit = Math.min(config.maximumGamesPerBatch, config.maximumRequestsPerDay - used);
         const chosen = selectGamesToClassify(await readClassificationCandidates(db), {
           now,
@@ -88,7 +94,7 @@ export function createClassifyJob(dependencies: ClassifyDependencies): JobDefini
           maximumFailedAttempts: config.maximumFailedAttempts,
         });
         selection = chosen.counts;
-        if (chosen.games.length > 0) submitted = await submitBatch(db, api, chosen.games, now, dependencies);
+        if (chosen.games.length > 0) submitted = await submitBatch(db, api, chosen.games, now, { ...dependencies, clock, startedMs });
       }
 
       const failedShare = Math.max(0, ...collected.map((batch) => batch.failed / Math.max(batch.requests, 1)));
@@ -122,7 +128,7 @@ async function submitBatch(
   api: BatchApi,
   games: readonly ClassifiedGame[],
   now: Date,
-  dependencies: ClassifyDependencies,
+  dependencies: ClassifyDependencies & { clock: () => number; startedMs: number },
 ): Promise<SubmittedBatch> {
   const model = JOB_CONFIG.classify.model;
   const images = new Map<number, ThumbnailImage>();
@@ -138,6 +144,11 @@ async function submitBatch(
     custom_id: classificationCustomId(game.universeId),
     params: classificationRequest(model, game, images.get(game.universeId) ?? null),
   }));
+  // The runner's timeout does not stop this run, and the process exits when it fires: a submission started late could be
+  // killed mid-create, and the id of a paid batch would be lost.
+  if (dependencies.clock() - dependencies.startedMs > JOB_CONFIG.classify.latestSubmissionMs) {
+    throw new Error("The run is too late to submit a batch safely; the next run submits these games");
+  }
   const id = (dependencies.newId ?? randomUUID)();
   await insertSubmittingBatch(
     db,
@@ -164,36 +175,47 @@ async function collectBatch(
   api: BatchApi,
   batch: ClassificationBatchRow,
   anthropicId: string,
+  counts: RequestCounts,
   now: Date,
 ): Promise<CollectedBatch> {
-  const results: BatchItemResult[] = [];
+  // The first answer per game wins; cost and cache reads count only the answers kept.
+  const results = new Map<number, BatchItemResult>();
   let costUsd = 0;
   let cacheReads = 0;
+  let read = 0;
   for await (const response of await api.results(anthropicId)) {
+    read += 1;
     // Not answered: nothing was billed, and the game is submitted again.
     if (response.result.type === "expired" || response.result.type === "canceled") {
-      const universeId = readBatchResult(response)?.universeId;
-      if (universeId !== undefined) results.push({ universeId, status: "released" });
+      const universeId = universeIdFromCustomId(response.custom_id);
+      if (universeId !== null && !results.has(universeId)) results.set(universeId, { universeId, status: "released" });
       continue;
     }
-    const read = readBatchResult(response);
+    const answer = readBatchResult(response);
     // A custom id the job did not write names no game.
-    if (read === null) continue;
-    const { universeId, outcome } = read;
+    if (answer === null || results.has(answer.universeId)) continue;
+    const { universeId, outcome } = answer;
     if (outcome.usage) {
       costUsd += classificationCostUsd(batch.model, outcome.usage, { batch: true });
       if (outcome.usage.cacheReadInputTokens > 0) cacheReads += 1;
     }
-    results.push(
+    results.set(
+      universeId,
       outcome.ok
         ? { universeId, status: "classified", classification: outcome.classification, usage: outcome.usage }
         : { universeId, status: "failed", error: outcome.error, usage: outcome.usage },
     );
   }
-  const classified = results.filter((result) => result.status === "classified").length;
-  const failed = results.filter((result) => result.status === "failed").length;
+  // A stream cut short without an error would release games that were answered and billed, and pay for them again.
+  const expected = counts.succeeded + counts.errored + counts.canceled + counts.expired;
+  if (read < expected) {
+    throw new Error(`The results of batch ${batch.id} hold ${read} answers, fewer than the ${expected} it reports; the next run collects it again`);
+  }
+  const stored = [...results.values()];
+  const classified = stored.filter((result) => result.status === "classified").length;
+  const failed = stored.filter((result) => result.status === "failed").length;
   // Games without a response are released with the expired ones: storeBatchResults deletes their pending rows.
   const released = batch.requests - classified - failed;
-  await storeBatchResults(db, batch.id, results, { at: now, costUsd, stats: { classified, failed, released, cacheReads } });
+  await storeBatchResults(db, batch.id, stored, { at: now, costUsd, stats: { classified, failed, released, cacheReads } });
   return { requests: batch.requests, classified, failed, released, costUsd, cacheReads };
 }
