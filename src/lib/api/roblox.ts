@@ -53,9 +53,6 @@ const gameVoteSchema = z.object({
 });
 // Items are validated one by one so that a single malformed game cannot discard the whole batch.
 const itemsResponseSchema = z.object({ data: z.array(z.unknown()) });
-const recommendationSchema = chartGameSchema.omit({ rootPlaceId: true }).extend({ placeId: z.number() });
-// Items are validated one by one so that a single malformed game cannot discard the whole response.
-const recommendationResponseSchema = z.object({ games: z.array(z.unknown()).default([]) });
 // Other content types (avatars, for example) have other fields, so only the type is read before an item is validated.
 const searchContentTypeSchema = z.object({ contentType: z.string().nullish() });
 const searchResponseSchema = z.object({
@@ -177,11 +174,6 @@ function parseEachItem<T>(
   return { parsed, skipped: skippedUniverseIds.length };
 }
 
-export function parseRecommendationsResponse(value: unknown): RobloxChartGame[] {
-  const games = recommendationResponseSchema.parse(value).games;
-  return parseItems(games, recommendationSchema, "recommendations", "universeId").map(({ placeId, ...game }) => ({ ...game, rootPlaceId: placeId }));
-}
-
 export function parseSearchResponse(value: unknown): RobloxSearchPage {
   const response = searchResponseSchema.parse(value);
   const contents = response.searchResults
@@ -262,7 +254,6 @@ export interface RobloxApi {
   getSortContent(sortId: string, country?: string): Promise<RobloxSort>;
   getGameDetails(universeIds: string[]): Promise<RobloxGameDetail[]>;
   getGameVotes(universeIds: string[]): Promise<RobloxGameVote[]>;
-  getRecommendations(universeId: string, maximumRows?: number): Promise<RobloxChartGame[]>;
   // pageToken: the nextPageToken of the previous page of the same query; the first page when absent.
   searchGames(query: string, pageToken?: string): Promise<RobloxSearchPage>;
   // null: Roblox knows no universe for this place. The endpoint answers a missing place with HTTP 200 and
@@ -317,12 +308,6 @@ export class RobloxClient implements RobloxApi {
       results.push(...parseGameVotesResponse(await fetchJson(url.toString(), { cacheTtlMs: 2 * 60 * 1000 })));
     }
     return results;
-  }
-
-  async getRecommendations(universeId: string, maximumRows = 20): Promise<RobloxChartGame[]> {
-    const url = new URL(`https://games.roblox.com/v1/games/recommendations/game/${encodeURIComponent(universeId)}`);
-    url.searchParams.set("maxRows", String(maximumRows));
-    return parseRecommendationsResponse(await fetchJson(url.toString(), { cacheTtlMs: 30 * 60 * 1000 }));
   }
 
   async searchGames(query: string, pageToken?: string): Promise<RobloxSearchPage> {

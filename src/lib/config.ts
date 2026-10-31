@@ -46,10 +46,6 @@ export const EXTERNAL_REQUEST_CONFIG = {
     // x-ratelimit-* headers kept reporting "300;w=60" with 287–290 remaining, so they do not describe this limit, and
     // /v1/games/votes on the same host is not affected. 50 ids every 7 s is about 430 ids per minute.
     "games.roblox.com/v1/games": 7_000,
-    // Recommendations, one path per universe. They advertise 200 requests per minute (x-ratelimit-limit "200;w=60",
-    // also from production on 2026-10-22), but the game details endpoint on the same host proved to hide a stricter
-    // limit: explore spreads them over its hour at 24 per minute, beside its searches, which wait a minute each.
-    "games.roblox.com/v1/games/recommendations/game/*": 2_500,
   } satisfies Record<string, number>,
   // A 429 from an endpoint above multiplies its spacing by this for the rest of the process, up to the maximum.
   rateLimitSlowdownFactor: 1.5,
@@ -141,16 +137,14 @@ export const JOB_CONFIG = {
     timeoutMs: 55 * 60_000,
     // No request starts after this. Leaves time for the wait of a search that started just before it, and for writes.
     deadlineMs: 45 * 60_000,
-    // Seeds: the young games with at least this average hourly CCU over the window, busiest first. Their
-    // recommendations are expanded and their titles make the search vocabulary.
+    // Seeds: the young games with at least this average hourly CCU over the window, busiest first. Their titles make
+    // the search vocabulary.
     seedMaximumAgeDays: 60,
     seedWindowHours: 6,
     seedMinimumCcu: 50,
-    // At the recommendations' 2.5 s spacing (EXTERNAL_REQUEST_CONFIG.minimumIntervalByEndpoint), 1,000 seeds take about
-    // 42 minutes, within the deadline: the quietest seeds are the ones it sheds.
+    // Sized for the recommendations explore expanded until 2026-10-27, when Roblox started answering them only to
+    // signed-in sessions; kept, since it shapes the vocabulary (398 words on 2026-10-31).
     seedCount: 1_000,
-    // Roblox returns at most 6 recommendations whatever maxRows asks for, and its next pages repeat them (2026-10-22).
-    recommendationsPerSeed: 6,
     // A word becomes a search term once this many seed titles share it; with fewer titles available, every one of them.
     minimumTermTitles: 2,
     // Page 2 lists smaller games than page 1: on 2026-10-22 it found more untracked games than page 1 did.
@@ -167,7 +161,7 @@ export const JOB_CONFIG = {
     // others listed 114 more untracked games at 50+ CCU, 28 of them above 1,000; +1 Paper Plane (3.3k) was in
     // Up-and-Coming for Egypt, Lebanon, Palestine, Uzbekistan and Armenia only. The sort endpoint allows 50 requests a
     // minute from the production IP (x-ratelimit-limit "50;w=60", measured the same day) and apis.roblox.com's 1.3 s
-    // spacing keeps a run under 47: the 218 sorts take about 5 minutes, beside the recommendations, before the search.
+    // spacing keeps a run under 47: the 218 sorts take about 5 minutes, before the search.
     countries: [
       "us", "br", "ph", "id", "mx", "gb", "de", "fr", "ca", "au", "th", "sa", "vn", "tr",
       "ae", "al", "am", "ar", "at", "az", "ba", "bd", "be", "bg", "bh", "bo", "by", "ch", "cl", "co", "cr", "cy",

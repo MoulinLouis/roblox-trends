@@ -15,9 +15,8 @@ export interface ExplorationSeedOptions {
   minimumCcu: number;
 }
 
-// Young games read in the window with at least `minimumCcu` average hourly CCU, busiest first: explore expands their
-// recommendations and searches the words their titles share. The window ends at `now`, so a replay of an earlier hour
-// sees only what existed then.
+// Young games read in the window with at least `minimumCcu` average hourly CCU, busiest first: explore searches the
+// words their titles share. The window ends at `now`, so a replay of an earlier hour sees only what existed then.
 export async function selectExplorationSeeds(db: Database, now: Date, options: ExplorationSeedOptions): Promise<ExplorationSeed[]> {
   const at = now.toISOString();
   const result = await db.execute<{ universe_id: string; name: string; ccu: number }>(sql`
