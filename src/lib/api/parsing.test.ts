@@ -4,7 +4,6 @@ import {
   parseGameIconsResponse,
   parseGameThumbnailsResponse,
   parseGameVotesResponse,
-  parseRecommendationsResponse,
   parseSearchResponse,
   parseSortContentResponse,
   parseSortsResponse,
@@ -126,32 +125,6 @@ describe("Roblox API response parsing", () => {
 
   it("rejects a malformed votes envelope", () => {
     expect(() => parseGameVotesResponse({ games: [] })).toThrow();
-  });
-
-  it("maps recommendation place IDs into chart discoveries", () => {
-    expect(parseRecommendationsResponse({ games: [{ universeId: 101, placeId: 202, name: "Recommended", playerCount: 50, totalUpVotes: 12, totalDownVotes: 2, isSponsored: false }] })[0]).toEqual({
-      universeId: 101,
-      rootPlaceId: 202,
-      name: "Recommended",
-      playerCount: 50,
-      totalUpVotes: 12,
-      totalDownVotes: 2,
-      isSponsored: false,
-    });
-  });
-
-  it("skips a malformed recommendation without dropping the others", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const games = parseRecommendationsResponse({ games: [
-      { universeId: 101, placeId: "x", name: "Broken" },
-      { universeId: 102, placeId: 203, name: "Recommended", playerCount: 5, totalUpVotes: null, isSponsored: null },
-    ] });
-    expect(games.map((game) => game.universeId)).toEqual([102]);
-    expect(loggedDetails(warn)).toEqual({ skipped: 1, universeIds: [101], issues: [expect.stringContaining("placeId")] });
-  });
-
-  it("rejects a malformed recommendations envelope", () => {
-    expect(() => parseRecommendationsResponse({ games: "x" })).toThrow();
   });
 
   it("flattens game contents from omni-search and ignores other content", () => {

@@ -81,7 +81,7 @@ function commonestForm(forms: Map<string, number>): string {
 }
 
 export interface ExploreDependencies {
-  roblox: Pick<RobloxApi, "getSortContent" | "getRecommendations" | "searchGames">;
+  roblox: Pick<RobloxApi, "getSortContent" | "searchGames">;
   // Measures the deadline only.
   clock?: () => number;
   // Tests read fewer countries; production takes JOB_CONFIG.explore.
@@ -161,8 +161,9 @@ async function recordSightings(db: Database, sightings: Sighting[], seenAt: Date
   return { discoveries, queued: unknown.map((sighting) => sighting.universeId) };
 }
 
-// Until the deadline, expands the recommendations of the young games and, beside them, reads Up-and-Coming and Top
-// Trending by country, then searches the words the young games' titles share.
+// Until the deadline, reads Up-and-Coming and Top Trending by country, then searches the words the young games' titles
+// share. Roblox's recommendations (games.roblox.com/v1/games/recommendations/game/{id}) answer an empty list to every
+// request without a signed-in session since 2026-10-27, so explore no longer asks for them.
 export function createExploreJob(dependencies: ExploreDependencies): JobDefinition {
   const config = JOB_CONFIG.explore;
   const clock = dependencies.clock ?? Date.now;
@@ -221,24 +222,11 @@ export function createExploreJob(dependencies: ExploreDependencies): JobDefiniti
         }
       };
 
-      // Recommendations run beside the sorts and the search, each paced on its own endpoint (recommendations every
-      // 2.5 s, search once a minute), so none waits for another. Sorts and search share apis.roblox.com, whose client
-      // waits out each search's one-minute window: the search starts once the sorts are read. Every answer is recorded
-      // at once, so poll promotes what the run finds while it goes on, and a run that times out keeps it.
-      const recommendation = new Endpoint("recommendation", config.minimumDiscoveryCcu);
+      // Sorts and search share apis.roblox.com, whose client waits out each search's one-minute window: the search
+      // starts once the sorts are read. Every answer is recorded at once, so poll promotes what the run finds while it
+      // goes on, and a run that times out keeps it.
       const search = new Endpoint("search", config.minimumDiscoveryCcu);
       const terms: string[] = [];
-      const recommend = async () => {
-        for (const seed of seeds) {
-          if (!mayRequest(recommendation)) break;
-          const answer = await recommendation.request(
-            String(seed.universeId),
-            () => dependencies.roblox.getRecommendations(String(seed.universeId), config.recommendationsPerSeed),
-            (games) => games,
-          );
-          if (answer) await record(answer.sightings);
-        }
-      };
       const searchTerms = async () => {
         for (const { term } of ranked) {
           let pageToken: string | undefined;
@@ -257,10 +245,11 @@ export function createExploreJob(dependencies: ExploreDependencies): JobDefiniti
           }
         }
       };
-      await Promise.all([recommend(), readSorts().then(searchTerms)]);
+      await readSorts();
+      await searchTerms();
 
-      const rateLimited = chart.outcome.rateLimited || recommendation.outcome.rateLimited || search.outcome.rateLimited;
-      const degraded = chart.failed || recommendation.failed || search.failed || rateLimited;
+      const rateLimited = chart.outcome.rateLimited || search.outcome.rateLimited;
+      const degraded = chart.failed || search.failed || rateLimited;
       return {
         status: degraded ? "degraded" : "success",
         stats: {
@@ -269,7 +258,6 @@ export function createExploreJob(dependencies: ExploreDependencies): JobDefiniti
           // The terms whose first page answered this run: the next runs rank the terms by when they were searched.
           terms,
           chart: chart.outcome,
-          recommendation: recommendation.outcome,
           search: search.outcome,
           rateLimited,
           stoppedBy: stoppedByDeadline ? "deadline" : null,

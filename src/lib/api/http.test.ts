@@ -26,15 +26,8 @@ describe("pacedEndpoint", () => {
     expect(pacedEndpoint(new URL("https://games.roblox.com/v1/games"))).toBe(detailsEndpoint);
   });
 
-  it("paces every path under a key ending in /* as one endpoint", () => {
-    const recommendations = "games.roblox.com/v1/games/recommendations/game/*";
-    expect(pacedEndpoint(new URL("https://games.roblox.com/v1/games/recommendations/game/1?maxRows=6"))).toBe(recommendations);
-    expect(pacedEndpoint(new URL("https://games.roblox.com/v1/games/recommendations/game/10769903740"))).toBe(recommendations);
-  });
-
   it.each([
     "https://games.roblox.com/v1/games/votes?universeIds=1,2,3",
-    "https://games.roblox.com/v1/games/recommendations/algorithm?x=1",
     "https://games.roblox.com/v1/gamesx?universeIds=1",
     "https://apis.roblox.com/v1/games?universeIds=1",
   ])("leaves %s to its host's spacing", (url) => {

@@ -7,7 +7,6 @@ import { discoveryCandidates, discoverySources, gameObservations, games, jobRuns
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/test-database";
 import { HttpError } from "@/lib/api/http";
 import { RobloxClient, type RobloxChartGame, type RobloxSearchPage, type RobloxSort } from "@/lib/api/roblox";
-import { JOB_CONFIG } from "@/lib/config";
 import { gameDetail } from "@/test/fixtures";
 import { createExploreJob, type ExploreDependencies } from "./explore";
 import { executeJob } from "./runner";
@@ -33,7 +32,6 @@ function exploreJob(roblox: Partial<Roblox>, options: Omit<ExploreDependencies, 
   return createExploreJob({
     roblox: {
       getSortContent: async (sortId) => sort(sortId, [tiny]),
-      getRecommendations: async () => [tiny],
       searchGames: async () => page([tiny]),
       ...roblox,
     },
@@ -89,25 +87,20 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
     return run;
   }
 
-  it("queues the untracked games of country sorts, recommendations and two search pages, and records the tracked ones", async () => {
+  it("queues the untracked games of country sorts and two search pages, and records the tracked ones", async () => {
     await youngGame(1, "+1 Slinky Escape", 5_000);
     await youngGame(2, "[W4] +1 Paper Plane", 3_000);
     const getSortContent = vi.fn<Roblox["getSortContent"]>(async (sortId, country) =>
       sort(sortId, sortId === "up-and-coming" && country === "us" ? [listed(30, 2_400), listed(2, 3_000)] : [tiny]),
     );
-    const getRecommendations = vi.fn<Roblox["getRecommendations"]>(async (seed) => (seed === "1" ? [listed(2, 3_000), listed(40, 380)] : [tiny]));
     const searchGames = vi.fn<Roblox["searchGames"]>(async (_term, pageToken) =>
       pageToken === undefined ? page([listed(1, 5_000), listed(50, 8_000), tiny], "page-2") : page([listed(51, 600)], "page-3"),
     );
-    expect(await executeJob(exploreJob({ getSortContent, getRecommendations, searchGames }), database.db, now)).toBe("success");
+    expect(await executeJob(exploreJob({ getSortContent, searchGames }), database.db, now)).toBe("success");
 
     expect(getSortContent.mock.calls).toEqual([
       ["up-and-coming", "us"],
       ["top-trending", "us"],
-    ]);
-    expect(getRecommendations.mock.calls).toEqual([
-      ["1", JOB_CONFIG.explore.recommendationsPerSeed],
-      ["2", JOB_CONFIG.explore.recommendationsPerSeed],
     ]);
     // "+1" is the only word both titles share; its third page is beyond the pages read per term.
     expect(searchGames.mock.calls).toEqual([
@@ -117,7 +110,6 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
     // Poll promotes the untracked games: explore only queues them.
     expect(await queued()).toEqual([
       [30, "chart", "up-and-coming:us", 2_400],
-      [40, "recommendation", "1", 380],
       [50, "search", "+1", 8_000],
       [51, "search", "+1", 600],
     ]);
@@ -126,34 +118,32 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
     expect(await discoveries()).toEqual([
       [1, "search", "+1"],
       [2, "chart", "up-and-coming:us"],
-      [2, "recommendation", "1"],
     ]);
-    expect((await lastRun()).stats).toMatchObject({
+    const { stats } = await lastRun();
+    expect(stats).toMatchObject({
       seeds: 2,
       vocabulary: 1,
       terms: ["+1"],
       chart: { requests: 2, failures: 0, emptyResponses: 0, sightings: 2, rateLimited: false },
-      recommendation: { requests: 2, failures: 0, emptyResponses: 0, sightings: 2, rateLimited: false },
       search: { requests: 2, failures: 0, emptyResponses: 0, sightings: 3, rateLimited: false },
       rateLimited: false,
       stoppedBy: null,
-      queued: 4,
-      discoveries: 3,
+      queued: 3,
+      discoveries: 2,
     });
+    // Roblox answers recommendations only to signed-in sessions since 2026-10-27: explore no longer asks for them.
+    expect(stats).not.toHaveProperty("recommendation");
   });
 
   it("succeeds with only the country sorts when no young game is active", async () => {
-    const getRecommendations = vi.fn<Roblox["getRecommendations"]>(async () => [tiny]);
     const searchGames = vi.fn<Roblox["searchGames"]>(async () => page([tiny]));
-    expect(await executeJob(exploreJob({ getRecommendations, searchGames }), database.db, now)).toBe("success");
-    expect(getRecommendations).not.toHaveBeenCalled();
+    expect(await executeJob(exploreJob({ searchGames }), database.db, now)).toBe("success");
     expect(searchGames).not.toHaveBeenCalled();
     expect((await lastRun()).stats).toMatchObject({
       seeds: 0,
       vocabulary: 0,
       terms: [],
       chart: { requests: 2 },
-      recommendation: { requests: 0 },
       search: { requests: 0 },
       queued: 0,
     });
@@ -225,21 +215,21 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
     await youngGame(1, "Steal An Egg", 5_000);
     await youngGame(4, "Egg Obby", 3_000);
     const job = exploreJob({
-      getRecommendations: async (seed) => {
-        if (seed === "1") throw new HttpError(503, "Service Unavailable", "https://games.roblox.com/v1/games/recommendations/game/1");
-        return [listed(8, 600)];
+      getSortContent: async (sortId) => {
+        if (sortId === "up-and-coming") throw new HttpError(503, "Service Unavailable", "https://apis.roblox.com/explore-api/v1/get-sort-content");
+        return sort(sortId, [listed(8, 600)]);
       },
       searchGames: async () => page([listed(9, 800)]),
     });
     expect(await executeJob(job, database.db, now)).toBe("success");
     expect(await queued()).toEqual([
-      [8, "recommendation", "4", 600],
+      [8, "chart", "top-trending:us", 600],
       [9, "search", "egg", 800],
     ]);
     // Both titles share "egg"; "steal" is in one of the two.
     expect((await lastRun()).stats).toMatchObject({
       terms: ["egg"],
-      recommendation: { requests: 2, failures: 1, emptyResponses: 0 },
+      chart: { requests: 2, failures: 1, emptyResponses: 0 },
       search: { requests: 1, failures: 0, emptyResponses: 0 },
     });
   });
@@ -248,7 +238,7 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
     await youngGame(1, "Steal An Egg", 5_000);
     await youngGame(4, "Steal Egg Obby", 3_000);
     const job = exploreJob({
-      getRecommendations: async () => [listed(8, 600)],
+      getSortContent: async (sortId) => sort(sortId, [listed(8, 600)]),
       searchGames: async (term) => {
         if (term === "egg") throw new Error("unavailable");
         return page([]);
@@ -256,8 +246,8 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
     });
     expect(await executeJob(job, database.db, now)).toBe("degraded");
     expect(await queued()).toEqual([
-      [8, "recommendation", "1", 600],
-      [8, "recommendation", "4", 600],
+      [8, "chart", "top-trending:us", 600],
+      [8, "chart", "up-and-coming:us", 600],
     ]);
     // A term whose first page failed is not counted as searched: the next run tries it first again.
     expect((await lastRun()).stats).toMatchObject({
@@ -270,45 +260,36 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
   it("stops an endpoint after a rate limit that outlasted the retries, and the others carry on", async () => {
     await youngGame(1, "Steal An Egg", 5_000);
     await youngGame(4, "Steal Egg Obby", 4_000);
-    const getRecommendations = vi.fn<Roblox["getRecommendations"]>(async () => {
-      throw new HttpError(429, "Too Many Requests", "https://games.roblox.com/v1/games/recommendations/game/1");
+    const getSortContent = vi.fn<Roblox["getSortContent"]>(async () => {
+      throw new HttpError(429, "Too Many Requests", "https://apis.roblox.com/explore-api/v1/get-sort-content");
     });
     const searchGames = vi.fn<Roblox["searchGames"]>(async (term) => {
       if (term === "steal") throw new HttpError(429, "Too Many Requests", "https://apis.roblox.com/search-api/omni-search");
       return page([listed(9, 800)]);
     });
-    const job = exploreJob({ getRecommendations, searchGames });
+    const job = exploreJob({ getSortContent, searchGames });
     expect(await executeJob(job, database.db, now)).toBe("degraded");
-    expect(getRecommendations.mock.calls).toEqual([["1", JOB_CONFIG.explore.recommendationsPerSeed]]);
+    expect(getSortContent.mock.calls).toEqual([["up-and-coming", "us"]]);
     expect(searchGames.mock.calls.map(([term]) => term)).toEqual(["egg", "steal"]);
     expect(await queued()).toEqual([[9, "search", "egg", 800]]);
     expect((await lastRun()).stats).toMatchObject({
       terms: ["egg"],
-      recommendation: { requests: 1, failures: 1, rateLimited: true },
+      chart: { requests: 1, failures: 1, rateLimited: true },
       search: { requests: 2, failures: 1, rateLimited: true },
       rateLimited: true,
     });
   });
 
-  it("expands the recommendations while it reads the sorts, and searches once the sorts are read", async () => {
+  it("searches once the sorts are read", async () => {
     await youngGame(1, "Steal An Egg", 5_000);
     await youngGame(4, "Egg Obby", 3_000);
     const events: string[] = [];
-    let recommendationsDone = () => {};
-    const recommended = new Promise<void>((resolve) => {
-      recommendationsDone = resolve;
-    });
     const job = exploreJob({
-      // Each sort answers once the recommendations are done, or after a second if they have not started.
+      // Each sort takes a moment: the search still waits for both.
       getSortContent: async (sortId, country) => {
-        await Promise.race([recommended, new Promise((resolve) => setTimeout(resolve, 1_000))]);
+        await new Promise((resolve) => setTimeout(resolve, 50));
         events.push(`sort ${sortId}:${country}`);
         return sort(sortId, [tiny]);
-      },
-      getRecommendations: async (seed) => {
-        events.push(`recommendation ${seed}`);
-        if (seed === "4") recommendationsDone();
-        return [tiny];
       },
       searchGames: async (term) => {
         events.push(`search ${term}`);
@@ -316,20 +297,14 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
       },
     });
     expect(await executeJob(job, database.db, now)).toBe("success");
-    expect(events).toEqual([
-      "recommendation 1",
-      "recommendation 4",
-      "sort up-and-coming:us",
-      "sort top-trending:us",
-      "search egg",
-    ]);
+    expect(events).toEqual(["sort up-and-coming:us", "sort top-trending:us", "search egg"]);
   });
 
   it("fails the run when the database fails while recording", async () => {
     await youngGame(1, "Steal An Egg", 5_000);
     await database.db.execute(sql`alter table discovery_candidates rename to discovery_candidates_hidden`);
     try {
-      const job = exploreJob({ getRecommendations: async () => [listed(2, 3_000)] });
+      const job = exploreJob({ getSortContent: async (sortId) => sort(sortId, [listed(2, 3_000)]) });
       expect(await executeJob(job, database.db, now)).toBe("failed");
     } finally {
       await database.db.execute(sql`alter table discovery_candidates_hidden rename to discovery_candidates`);
@@ -337,7 +312,7 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
     expect((await lastRun()).error).toContain("discovery_candidates");
   });
 
-  it("reads sorts, recommendations and search pages through the Roblox client", async () => {
+  it("reads sorts and search pages through the Roblox client, and nothing from games.roblox.com", async () => {
     await youngGame(1, "Steal An Egg", 5_000);
     await youngGame(4, "Egg Obby", 3_000);
     const requested: string[] = [];
@@ -350,9 +325,7 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
           const sortId = url.searchParams.get("sortId");
           return Response.json({ sortId, games: [{ universeId: 30, rootPlaceId: 300, name: "Rising Here", playerCount: 2_400 }] });
         }
-        if (url.pathname.startsWith("/v1/games/recommendations/")) {
-          return Response.json({ games: [{ universeId: 2, placeId: 20, name: "Break and Steal an Egg", playerCount: 3_000 }] });
-        }
+        if (url.hostname === "games.roblox.com") return Response.json({ games: [] });
         const next = url.searchParams.get("pageToken") ? null : "page-2";
         return Response.json({
           searchResults: [{ contents: [{ contentType: "Game", universeId: next ? 3 : 5, rootPlaceId: 30, name: "Egg", playerCount: 900 }] }],
@@ -365,33 +338,22 @@ describe.skipIf(!hasTestDatabase)("explore job", () => {
     } finally {
       vi.unstubAllGlobals();
     }
-    // On apis.roblox.com the sorts come before the search; recommendations run beside them, each at its own pace.
-    expect(requested.filter((request) => request.startsWith("apis.roblox.com"))).toEqual([
+    // The sorts come before the search, both on apis.roblox.com.
+    expect(requested).toEqual([
       "apis.roblox.com/explore-api/v1/get-sort-content?us",
       "apis.roblox.com/explore-api/v1/get-sort-content?us",
       "apis.roblox.com/search-api/omni-search?",
       "apis.roblox.com/search-api/omni-search?page-2",
     ]);
-    expect(requested.filter((request) => request.startsWith("games.roblox.com"))).toEqual([
-      "games.roblox.com/v1/games/recommendations/game/1?",
-      "games.roblox.com/v1/games/recommendations/game/4?",
-    ]);
     expect(await queued()).toEqual([
-      [2, "recommendation", "1", 3_000],
-      [2, "recommendation", "4", 3_000],
       [3, "search", "egg", 900],
       [5, "search", "egg", 900],
       [30, "chart", "top-trending:us", 2_400],
       [30, "chart", "up-and-coming:us", 2_400],
     ]);
     expect((await lastRun()).stats).toMatchObject({
-      queued: 4,
-      http: {
-        attempts: 6,
-        retries: 0,
-        rateLimitedResponses: 0,
-        endpointIntervalMs: { "games.roblox.com/v1/games/recommendations/game/*": 2_500 },
-      },
+      queued: 3,
+      http: { attempts: 4, retries: 0, rateLimitedResponses: 0 },
     });
   });
 });
