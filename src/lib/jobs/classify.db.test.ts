@@ -3,9 +3,10 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { upsertGameDetails } from "@/db/games";
-import { classificationBatches, classificationOverrides, classifications, games, jobRuns } from "@/db/schema";
+import { classificationBatches, classificationMerges, classificationOverrides, classifications, games, jobRuns } from "@/db/schema";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "@/db/test-database";
 import type { BatchApi } from "@/lib/classify/batches";
+import type { ClassificationMerge } from "@/lib/classify/merges";
 import type { ClassificationOverride } from "@/lib/classify/overrides";
 import { CLASSIFICATION_PROMPT_VERSION } from "@/lib/classify/prompt";
 import { JOB_CONFIG } from "@/lib/config";
@@ -125,6 +126,7 @@ describe.skipIf(!hasTestDatabase)("classify job", () => {
     await database.db.delete(games);
     await database.db.delete(classificationBatches);
     await database.db.delete(classificationOverrides);
+    await database.db.delete(classificationMerges);
     await database.db.delete(jobRuns);
   });
 
@@ -230,6 +232,13 @@ describe.skipIf(!hasTestDatabase)("classify job", () => {
     const { stats } = await run(start);
     expect(stats.overrides).toBe(2);
     expect(await database.db.select().from(classificationOverrides)).toHaveLength(2);
+  });
+
+  it("copies the given merges into classification_merges", async () => {
+    const merges: ClassificationMerge[] = [{ field: "family", from: "rhythm game", to: "rhythm", reason: "Owner.", decidedAt: "2026-11-11" }];
+    const { stats } = await run(start, { merges });
+    expect(stats.merges).toBe(1);
+    expect(await database.db.select().from(classificationMerges)).toHaveLength(1);
   });
 
   it("submits nothing while a batch is processing", async () => {

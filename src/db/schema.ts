@@ -14,6 +14,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import type { ClassificationModel } from "@/lib/classify/types";
+import type { ClassificationMerge } from "@/lib/classify/merges";
 import type { ClassificationOverride } from "@/lib/classify/overrides";
 import type { DiscoverySource, JobName, JobStatus } from "@/lib/jobs/types";
 
@@ -297,4 +298,19 @@ export const classificationOverrides = pgTable(
     decidedAt: text("decided_at").notNull(),
   },
   (table) => [primaryKey({ columns: [table.universeId, table.field] })],
+);
+
+// A copy of src/lib/classify/merges.ts, rewritten by every classify run. from_key is mergeKey(from_value): the
+// game_formats view joins on it.
+export const classificationMerges = pgTable(
+  "classification_merges",
+  {
+    field: text("field").$type<ClassificationMerge["field"]>().notNull(),
+    fromKey: text("from_key").notNull(),
+    fromValue: text("from_value").notNull(),
+    toValue: text("to_value").notNull(),
+    reason: text("reason").notNull(),
+    decidedAt: text("decided_at").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.field, table.fromKey] })],
 );
