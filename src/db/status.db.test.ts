@@ -251,6 +251,13 @@ describe.skipIf(!hasTestDatabase)("status queries", () => {
         recent: { runs: 0, degraded: 0, failed: 0, rateLimitedRuns: null, http: null },
         lastError: null,
       },
+      {
+        job: "alerts",
+        latest: null,
+        lastCompleted: null,
+        recent: { runs: 0, degraded: 0, failed: 0, rateLimitedRuns: null, http: null },
+        lastError: null,
+      },
     ]);
   });
 });
