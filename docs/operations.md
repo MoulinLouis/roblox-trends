@@ -371,9 +371,9 @@ A check created by provisioning has not received a ping, and Healthchecks.io doe
 
 ### Alerts
 
-The `alerts` job (`radar-alerts.timer`, `*:56:30`) tells the owner on Discord about a game early in its breakout. Each run reads only the database: it finds the games created within `ALERT_CONFIG.maximumAgeDays` that crossed `crossingCcu` in the last `candidateWindowHours`, decides which alerts they call for, records them in `alerts`, then posts them to the webhook. An alert is recorded before it is sent and marked sent (`sent_at`) only after its post succeeded, so a failed post stays unsent and the next run retries it.
+The `alerts` job (`radar-alerts.timer`, `*:56:30`) tells the owner on Discord about a game early in its breakout. Each run reads only the database. A breakout is a game that crossed `crossingCcu` at most `maximumAgeDays` (30) after its creation; priors and first-breakout checks see all of them. An alert is decided only for a game that crossed within `candidateMaximumAgeDays` (12) of its creation, in the last `candidateWindowHours`: older breakouts count as priors but never alert. The run decides which alerts the candidates call for, records them in `alerts`, then posts them to the webhook. An alert is recorded before it is sent and marked sent (`sent_at`) only after its post succeeded, so a failed post stays unsent and the next run retries it. Delivery is at least once: a run that posted but crashed before marking the alert sent posts it again on the next run. After the first failed post of a run, the run stops posting; the remaining alerts stay unsent for the next run.
 
-- A `wave` alert (the 3rd game of one pattern key to cross, within `waveWindowDays` of the first) is posted on its own right away.
+- A `wave` alert is the 3rd young game of one pattern key to cross within `waveWindowDays` (5) (`waveRanks`), when the key had at most `waveMaximumOlderBreakouts` (2) other breakouts in the last `lookbackDays` (60), outside that window. It is posted on its own right away, and the key then stays silent for `waveCooldownDays`. The card says "Wave forming" and the digest "Daily digest".
 - `first_breakout` alerts wait for the daily digest, one message. It goes out at the first run at or after 08:00 Europe/Paris (daylight saving follows Paris) when no digest of first breakouts went out since 08:00 that day. A day whose first run after 08:00 had nothing to send can still send a later run's first breakouts the same day; once a digest went out, the day is closed.
 - A run is `degraded` when a post failed or, without `/etc/radar/discord.env`, when any alert is left unsent: the alerts are still recorded and go out on the first run after the file exists. With a webhook, first breakouts waiting for the digest hour are not degraded. Its stats are `candidates`, `firstBreakouts`, `waves`, `sent` and `unsent`.
 
@@ -387,6 +387,13 @@ journalctl -u radar-job@alerts -n 100 -o cat
 
 A row with `sent_at` null is waiting for the digest hour, or its post failed (the journal line `A Discord alert was not sent` gives the kind of failure, never the URL). A webhook Discord rejects (deleted, wrong URL) makes every run degraded: the owner writes `/etc/radar/discord.env` again (section 3) and the unsent alerts go out on the next run.
 
+An alert Discord rejects for good (a non-429 4xx in the journal on every run) blocks the runs behind it. Read its row, then, after checking that the card cannot be sent, mark it sent by hand on the server, as the owner. This skips that alert for good:
+
+```bash
+runuser -u radar -- psql -X -d radar -c "select id, kind, universe_id, created_at from alerts where sent_at is null"
+runuser -u radar -- psql -X -d radar -c "update alerts set sent_at = now() where id = '<id>'"
+```
+
 The thresholds, windows, digest hour and card limits are in `ALERT_CONFIG` (`src/lib/config.ts`). To tune them, replay the decision over the radar's history from the owner's machine, through the analysis tunnel (section 2, Analysis sessions). The backtest is read-only and never posts:
 
 ```bash
@@ -394,7 +401,7 @@ ssh -N -L 15432:/var/run/postgresql/.s.PGSQL.5432 radar-analysis
 DATABASE_URL=postgresql://radar_analysis@localhost:15432/radar npm run alerts:backtest -- --from 2026-08-25 --to 2026-11-10
 ```
 
-`--words-only` keeps only the title-word keys (no classified format), `--coverage-from <date>` sets the day the classification coverage starts (default 2026-10-19), and the replay never runs past now. It prints each push and the weekly counts; aim for about 3 to 5 pushes a week and 10 digest games a day on average. Change `ALERT_CONFIG` in the repository, rerun the backtest, then deploy.
+`--words-only` keeps only the title-word keys (no classified format), `--coverage-from <date>` is the first day of the radar's full tracking coverage (default 2026-10-19, when it went from about 3,800 to 11,000 tracked games), not a classification date; the report averages the full weeks from it. The replay treats every candidate as classified, and never runs past now. It prints each push and the weekly counts; aim for about 3 to 5 pushes a week and 10 digest games a day on average. Change `ALERT_CONFIG` in the repository, rerun the backtest, then deploy.
 
 Pause it: `systemctl disable --now radar-alerts.timer`. Deploys never re-enable a disabled timer. Pausing collection (above) pauses it too.
 
@@ -526,7 +533,7 @@ Power the old server off first: two servers must never archive into the same sta
 6. `/root/radar-bootstrap/ops/bin/configure-backups.sh` in full: its `stanza-create` is a no-op, then it turns archiving on and runs `pgbackrest check`.
 7. `/root/radar-bootstrap/ops/bin/configure-database.sh`: writes `radar.env`; the roles already came back with the restore, and the grants are idempotent.
 8. `/root/radar-bootstrap/ops/bin/deploy.sh`: clones the mirror, builds the branch head, runs any newer migration and installs the units. From now on, run the scripts from `/opt/radar/current/ops/bin`.
-9. **Owner** writes `/etc/radar/healthchecks.env` and `/etc/radar/anthropic.env` (section 3).
+9. **Owner** writes `/etc/radar/healthchecks.env`, `/etc/radar/anthropic.env` and `/etc/radar/discord.env` (section 3).
 10. Enable everything:
     ```bash
     systemctl enable --now radar-web && tailscale serve --bg 3000
