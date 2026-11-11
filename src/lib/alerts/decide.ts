@@ -6,7 +6,13 @@ const DAY_MS = 24 * HOUR_MS;
 
 type DecideConfig = Pick<
   typeof ALERT_CONFIG,
-  "candidateWindowHours" | "unclassifiedWaitHours" | "lookbackDays" | "waveWindowDays" | "waveCooldownDays"
+  | "candidateWindowHours"
+  | "candidateMaximumAgeDays"
+  | "unclassifiedWaitHours"
+  | "lookbackDays"
+  | "waveWindowDays"
+  | "waveMaximumOlderBreakouts"
+  | "waveCooldownDays"
 > & { waveRanks: readonly number[] };
 
 function byCrossing(a: Breakout, b: Breakout): number {
@@ -48,12 +54,15 @@ export function decideAlerts(
 
   const windowStart = nowMs - config.candidateWindowHours * HOUR_MS;
   const lookbackMs = config.lookbackDays * DAY_MS;
+  const candidateMaximumAgeMs = config.candidateMaximumAgeDays * DAY_MS;
   const waveWindowMs = config.waveWindowDays * DAY_MS;
   const decisions: AlertDecision[] = [];
 
   for (const candidate of sorted) {
     const crossedMs = candidate.crossedAt.getTime();
     if (crossedMs <= windowStart || crossedMs > nowMs) continue;
+    // An older breakout still counts as a prior, but it is not news.
+    if (crossedMs - candidate.createdAt.getTime() > candidateMaximumAgeMs) continue;
 
     let keys = candidate.keys;
     if (!candidate.classified) {
@@ -73,12 +82,15 @@ export function decideAlerts(
       priors[key] = earlier.map((prior) => prior.universeId);
 
       if (earlier.length === 0) firstKeys.push(key);
-      else if (
-        config.waveRanks.includes(earlier.length + 1) &&
-        crossedMs - earlier[0].crossedAt.getTime() <= waveWindowMs &&
-        !silencedKeys.has(key)
-      ) {
-        waveKeys.push(key);
+      else {
+        const inWindow = earlier.filter((prior) => crossedMs - prior.crossedAt.getTime() <= waveWindowMs).length;
+        if (
+          config.waveRanks.includes(inWindow + 1) &&
+          earlier.length - inWindow <= config.waveMaximumOlderBreakouts &&
+          !silencedKeys.has(key)
+        ) {
+          waveKeys.push(key);
+        }
       }
     }
 
