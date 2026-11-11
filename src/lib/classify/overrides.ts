@@ -14,6 +14,8 @@ export interface ClassificationOverride {
 // review-2 (prompt v3, only the format fields where the models differed), under .data/classification/. Every field
 // where the owner chose between two differing answers or wrote a value has an entry; confirmed shared answers, and
 // fields where both answers were accepted, have none. Core action choices are often a wording preference.
+// The owner's spot check of 20 production classifications on 2026-11-11 (S6 of
+// docs/plans/2026-10-29-radar-v2-classification-job.md) adds the fields they corrected.
 export const CLASSIFICATION_OVERRIDES: readonly ClassificationOverride[] = [
   { universeId: 2278167893, field: "template", value: "Falling {thing} Block", reason: "Owner review of review-2: chosen over \"none\".", decidedAt: "2026-10-29" }, // Falling Color Block
   { universeId: 6862377948, field: "coreAction", value: "hide from killer", reason: "Owner review of review-1: chosen over \"hide from killers\".", decidedAt: "2026-10-29" }, // Sprunki Killer
@@ -28,6 +30,7 @@ export const CLASSIFICATION_OVERRIDES: readonly ClassificationOverride[] = [
   { universeId: 9194711658, field: "template", value: "Steal a {thing}", reason: "Owner review of review-2: chosen over \"{thing} RP\".", decidedAt: "2026-10-29" }, // (CRAFT)Steal A Brainrot Roleplay and Trading
   { universeId: 9449734205, field: "coreAction", value: "ride skateboard", reason: "Owner review of review-1: chosen over \"ride skateboards\".", decidedAt: "2026-10-29" }, // +1 Speed Skateboard Escape
   { universeId: 9491545867, field: "rewardLoop", value: "brainrots", reason: "Owner review of review-2: chosen over \"eggs\".", decidedAt: "2026-10-29" }, // Break a Brainrot Egg!
+  { universeId: 9607467202, field: "template", value: "Mount {name}", reason: "Owner spot check of the classify job (S6): corrected from \"none\".", decidedAt: "2026-11-11" }, // [UPD] Mount Highland [EXPEDITION]
   { universeId: 9679187246, field: "family", value: "{verb} for {reward}", reason: "Owner review of review-1: chosen over \"escape\".", decidedAt: "2026-10-29" }, // Escape Phones For Brainrot!
   { universeId: 9679187246, field: "template", value: "{verb} for {reward}", reason: "Owner review of review-1: chosen over \"Escape {danger}\".", decidedAt: "2026-10-29" }, // Escape Phones For Brainrot!
   { universeId: 9679772435, field: "template", value: "Steal a {thing}", reason: "Owner review of review-2: chosen over \"Steal From {thing}\".", decidedAt: "2026-10-29" }, // Steal From Animes
@@ -49,6 +52,7 @@ export const CLASSIFICATION_OVERRIDES: readonly ClassificationOverride[] = [
   { universeId: 10602518983, field: "rewardLoop", value: "eggs", reason: "Owner review of review-1: chosen over \"brainrots\".", decidedAt: "2026-10-29" }, // Don’t Break the Bobo Egg
   { universeId: 10620000247, field: "rewardLoop", value: "powers", reason: "Owner review of review-1: chosen over \"units\".", decidedAt: "2026-10-29" }, // +1 Wings For Anime!
   { universeId: 10620000247, field: "coreAction", value: "fly for fighters", reason: "Owner review of review-1: chosen over \"fly over lava\".", decidedAt: "2026-10-29" }, // +1 Wings For Anime!
+  { universeId: 10640957718, field: "family", value: "modded copy", reason: "Owner spot check of the classify job (S6): corrected from \"shooter\".", decidedAt: "2026-11-11" }, // ADMIN PANELZ GAME
   { universeId: 10714697542, field: "family", value: "RNG", reason: "Owner review of review-2: chosen over \"{verb} a {thing}\".", decidedAt: "2026-10-29" }, // Spin a Car And Race!
   { universeId: 10762757054, field: "family", value: "killers vs survivors", reason: "Owner review of review-1: chosen over \"party\".", decidedAt: "2026-10-29" }, // WHO FARTED?
   { universeId: 10764105376, field: "rewardLoop", value: "collectibles", reason: "Owner review of review-2: chosen over \"money\".", decidedAt: "2026-10-29" }, // Junkyard Simulator
@@ -57,6 +61,8 @@ export const CLASSIFICATION_OVERRIDES: readonly ClassificationOverride[] = [
   { universeId: 10764693801, field: "family", value: "sales sim", reason: "Owner review of review-2: chosen over \"AI chat\".", decidedAt: "2026-10-29" }, // AI Salesman
   { universeId: 10764820667, field: "coreAction", value: "swing on ropes", reason: "Owner review of review-1: chosen over \"swing ropes\".", decidedAt: "2026-10-29" }, // Swing Obby for Eggs
   { universeId: 10764926550, field: "coreAction", value: "survive", reason: "Owner review of review-1: chosen over \"survive rounds\".", decidedAt: "2026-10-29" }, // survive simulator
+  { universeId: 10764947385, field: "family", value: "auto battler", reason: "Owner spot check of the classify job (S6): corrected from \"other\".", decidedAt: "2026-11-11" }, // Spinner Battles
+  { universeId: 10764947385, field: "template", value: "{thing} Battles", reason: "Owner spot check of the classify job (S6): corrected from \"none\".", decidedAt: "2026-11-11" }, // Spinner Battles
   { universeId: 10764977990, field: "template", value: "{thing} Practice", reason: "Owner review of review-2: chosen over \"none\".", decidedAt: "2026-10-29" }, // Bomb Jump Practice (MM2)
   { universeId: 10765012427, field: "family", value: "{verb} a {thing}", reason: "Owner review of review-1: chosen over \"simulator\".", decidedAt: "2026-10-29" }, // Build the Pyramid!
   { universeId: 10765121931, field: "coreAction", value: "survive monster", reason: "Owner review of review-1: chosen over \"survive killer\".", decidedAt: "2026-10-29" }, // MM2 of The Locust
@@ -96,6 +102,7 @@ export const CLASSIFICATION_OVERRIDES: readonly ClassificationOverride[] = [
   { universeId: 10768052675, field: "family", value: "roleplay", reason: "Owner review of review-2: chosen over \"horror\".", decidedAt: "2026-10-29" }, // قريه الجنوب
   { universeId: 10768069442, field: "coreAction", value: "hatch eggs", reason: "Owner review of review-1: chosen over \"hatch troops\".", decidedAt: "2026-10-29" }, // Egg Tower Defense
   { universeId: 10768105757, field: "family", value: "gladiator RPG", reason: "Owner review of review-1: chosen over \"other\".", decidedAt: "2026-10-29" }, // Gladiator Life
+  { universeId: 10768153910, field: "family", value: "other", reason: "Owner spot check of the classify job (S6): corrected from \"physics sandbox\".", decidedAt: "2026-11-11" }, // [2X COINS] An Odd Game About Sausage
   { universeId: 10768214226, field: "rewardLoop", value: "money", reason: "Owner review of review-1: chosen over \"pets\".", decidedAt: "2026-10-29" }, // Lolcat Clicker
   { universeId: 10768422548, field: "rewardLoop", value: "progress", reason: "Owner review of review-1: chosen over \"none\".", decidedAt: "2026-10-29" }, // PIPES
   { universeId: 10768422548, field: "coreAction", value: "hide from monsters", reason: "Owner review of review-1: chosen over \"fix pipes\".", decidedAt: "2026-10-29" }, // PIPES
@@ -144,4 +151,5 @@ export const CLASSIFICATION_OVERRIDES: readonly ClassificationOverride[] = [
   { universeId: 10771509918, field: "template", value: "{thing} Simulator", reason: "Owner review of review-2: chosen over \"{hit} X{multiplier} MODDED\".", decidedAt: "2026-10-29" }, // Egg Farm Simulator
   { universeId: 10772372510, field: "family", value: "escape", reason: "Owner review of review-2: chosen over \"obby\".", decidedAt: "2026-10-29" }, // DON'T SPLASHMonster Escape
   { universeId: 10772415078, field: "rewardLoop", value: "none", reason: "Owner review of review-1: chosen over \"powers\".", decidedAt: "2026-10-29" }, // PANEL BUT ADMIN
+  { universeId: 10774110332, field: "family", value: "other", reason: "Owner spot check of the classify job (S6): corrected from \"sports\".", decidedAt: "2026-11-11" }, // Banorte Stadium
 ];
