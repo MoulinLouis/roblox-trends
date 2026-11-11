@@ -338,26 +338,35 @@ export const FORMAT_CONFIG = {
 export const ALERT_CONFIG = {
   // A game crossing this CCU is a breakout candidate.
   crossingCcu: 1_000,
-  // Only games created within this many days of the crossing count as early. The digest falls under about 10 games a
-  // day only below 14 days (14 gives about 12 a day). The design measured a median of 13.5 days from creation to
-  // 1,000 CCU, so this ignores about half of the breakouts.
-  maximumAgeDays: 12,
+  // A breakout is a game that crossed the threshold at most this many days after its creation (the design's value).
+  // Priors and first-breakout checks see all of them.
+  maximumAgeDays: 30,
+  // An alert is decided only for a candidate that crossed within this many days of its creation; older breakouts
+  // still count as priors. The design's median is 13.5 days to 1,000 CCU, and candidates under 12 days keep the
+  // digest under 10 games a day (backtest of 2026-11-12 over 2026-08-25 to 2026-11-11, full-coverage weeks from
+  // 2026-10-19: the start values gave 35 digest games a day, these about 8).
+  candidateMaximumAgeDays: 12,
   // How far back a key's prior breakouts count before a candidate's crossing.
   lookbackDays: 60,
   // A crossing older than this is no longer news.
   candidateWindowHours: 48,
   // A candidate not yet classified waits this long for its format before it is judged without it.
   unclassifiedWaitHours: 12,
-  // A wave alert fires for the game of a pattern ranked 3rd to cross, in order of crossing: the owner's "second (or
-  // third)", the third. Rank 2 gave 13 pushes a week.
+  // A wave alert fires for the game that is the 3rd breakout of a pattern key within waveWindowDays (the owner's
+  // "second (or third)", the third). Backtest of 2026-11-12: the start values pushed 74 a week, these about 4 a
+  // week, and the realistic ragdoll wave was pushed on 2026-10-22.
   waveRanks: [3],
-  // The crossings of a wave must fall within this many days of each other: three breakouts within a week of the first.
-  waveWindowDays: 7,
+  // The breakouts counted for a wave must cross within this many days of the candidate (4 days gives about 3 pushes
+  // a week, 6 about 4).
+  waveWindowDays: 5,
+  // A wave tolerates this many older breakouts of the key (in the lookback, outside the window). Ragdoll had two
+  // (10-12, 10-15) before its burst of three on 10-22, so 1 would miss it.
+  waveMaximumOlderBreakouts: 2,
   // A pattern that alerted a wave stays silent this long.
   waveCooldownDays: 30,
-  // A title word is a pattern key only when at least this many titles carry it: generic words (eat, ride, become...)
-  // and one-off names stopped forming waves once a new word counts only with 30 tracked titles...
-  minimumWordGames: 30,
+  // A title word is a pattern key only when at least this many titles carry it: 50 stops generic and one-off words
+  // from forming waves...
+  minimumWordGames: 50,
   // ...and at most this share of all titles does: a word in more is too generic to point to one trend.
   maximumWordShare: 0.01,
   // The daily digest goes out at this hour of this time zone.
@@ -369,8 +378,9 @@ export const ALERT_CONFIG = {
   recentGamesDays: 14,
   // A Discord webhook call is abandoned after this long.
   discordTimeoutMs: 10_000,
-  // Discord's limits on one webhook message: title, description, field name and value, fields per embed, embeds per
-  // message, and the characters of all embed texts of a message together.
+  // Discord's limits on one webhook message, all counted in UTF-16 code units (`string.length`): content, title,
+  // description, field name and value, fields per embed, embeds per message, and all embed texts of a message together.
+  discordContentCharacters: 2_000,
   discordTitleCharacters: 256,
   discordDescriptionCharacters: 4_096,
   discordFieldNameCharacters: 256,

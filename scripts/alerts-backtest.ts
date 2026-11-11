@@ -13,6 +13,7 @@ import { errorMessage, logger } from "@/lib/logger";
 const USAGE =
   "Usage: npm run alerts:backtest -- --from YYYY-MM-DD --to YYYY-MM-DD [--words-only] [--coverage-from YYYY-MM-DD]";
 const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
 
 function parseDay(name: string, value: string | undefined): Date {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(value))) throw new Error(`${name} needs a date like 2026-10-19`);
@@ -55,7 +56,11 @@ try {
       );
       const keysOf = trackedGameKeys(tracked, formats, { wordsOnly: options.wordsOnly });
       const found = await readBreakouts(db, {
-        createdSince: new Date(options.from.getTime() - (ALERT_CONFIG.lookbackDays + ALERT_CONFIG.maximumAgeDays) * DAY_MS),
+        createdSince: new Date(
+          options.from.getTime() -
+            (ALERT_CONFIG.lookbackDays + ALERT_CONFIG.maximumAgeDays) * DAY_MS -
+            ALERT_CONFIG.candidateWindowHours * HOUR_MS,
+        ),
         until: options.to,
       });
       const breakouts = found.map((breakout) => ({ ...breakout, keys: keysOf.get(breakout.universeId) ?? [], classified: true }));

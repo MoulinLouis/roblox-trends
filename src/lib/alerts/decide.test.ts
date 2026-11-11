@@ -22,8 +22,14 @@ function pastAlert(kind: PastAlert["kind"], universeId: number, keys: string[], 
 const KEY = "word:ragdoll";
 
 // These tests are about the decision rules (a wave for the 2nd and 3rd breakout within 14 days), not the values
-// ALERT_CONFIG is tuned to, so they pin the ranks and the window.
-const PINNED = { ...ALERT_CONFIG, waveRanks: [2, 3], waveWindowDays: 14 } as unknown as typeof ALERT_CONFIG;
+// ALERT_CONFIG is tuned to, so they pin the ranks, the window and the ages.
+const PINNED = {
+  ...ALERT_CONFIG,
+  waveRanks: [2, 3],
+  waveWindowDays: 14,
+  waveMaximumOlderBreakouts: 2,
+  candidateMaximumAgeDays: 12,
+} as unknown as typeof ALERT_CONFIG;
 const decideAlerts = (input: Parameters<typeof decide>[0]) => decide(input, PINNED);
 
 describe("decideAlerts", () => {
@@ -48,7 +54,7 @@ describe("decideAlerts", () => {
     ]);
   });
 
-  it("gives no wave to a 2nd breakout 15 days after the first", () => {
+  it("gives no wave to a 2nd breakout 15 days after the first (it is an older breakout, not one in the window)", () => {
     const breakouts = [breakout(1, at(15, 1), [KEY]), breakout(2, at(0, 1), [KEY])];
     expect(decideAlerts({ breakouts, pastAlerts: [], now: NOW })).toEqual([]);
   });
@@ -93,7 +99,7 @@ describe("decideAlerts", () => {
 
   it("orders by crossing, not by creation", () => {
     const a = breakout(1, at(0, 1), [KEY]);
-    const b = { ...breakout(2, at(0, 5), [KEY]), createdAt: new Date(a.createdAt.getTime() - 10 * DAY) };
+    const b = { ...breakout(2, at(0, 5), [KEY]), createdAt: new Date(a.createdAt.getTime() - 5 * DAY) };
     const decisions = decideAlerts({ breakouts: [a, b], pastAlerts: [], now: NOW });
     expect(decisions).toEqual([
       { kind: "first_breakout", universeId: 2, keys: [KEY], priors: { [KEY]: [] } },
@@ -162,14 +168,57 @@ describe("decideAlerts", () => {
     expect(decision.priors).toEqual({ "word:a": [10, 30], "word:b": [10, 20] });
   });
 
-  it("follows the tuned ranks and window by default: a wave for the 3rd breakout within a week only", () => {
-    const within = [breakout(1, at(6), [KEY]), breakout(2, at(3), [KEY]), breakout(3, at(0, 1), [KEY])];
+  it("counts a breakout 20 days after creation as a prior but gives it no decision (candidateMaximumAgeDays 12)", () => {
+    const old = { ...breakout(1, at(0, 2), [KEY]), createdAt: at(20, 2) };
+    expect(decideAlerts({ breakouts: [old], pastAlerts: [], now: NOW })).toEqual([]);
+
+    const prior = { ...breakout(1, at(5), [KEY]), createdAt: at(25) };
+    const decisions = decideAlerts({ breakouts: [prior, breakout(2, at(0, 1), [KEY])], pastAlerts: [], now: NOW });
+    expect(decisions).toEqual([{ kind: "wave", universeId: 2, keys: [KEY], priors: { [KEY]: [1] } }]);
+    expect(decisions.map((d) => d.kind)).not.toContain("first_breakout");
+  });
+
+  it("forms a wave from a burst of three after a stray breakout 40 days earlier, and lists all priors", () => {
+    const breakouts = [
+      breakout(1, at(40), [KEY]),
+      breakout(2, at(2), [KEY]),
+      breakout(3, at(1), [KEY]),
+      breakout(4, at(0, 1), [KEY]),
+    ];
+    const config = { ...PINNED, waveRanks: [3], waveWindowDays: 5, waveMaximumOlderBreakouts: 1 } as unknown as typeof ALERT_CONFIG;
+    const decisions = decide({ breakouts, pastAlerts: [], now: NOW }, config);
+    expect(decisions).toEqual([{ kind: "wave", universeId: 4, keys: [KEY], priors: { [KEY]: [1, 2, 3] } }]);
+  });
+
+  it("forms no wave when three older breakouts precede the burst of three and only 2 are tolerated", () => {
+    const breakouts = [
+      breakout(1, at(30), [KEY]),
+      breakout(2, at(28), [KEY]),
+      breakout(3, at(26), [KEY]),
+      breakout(4, at(2), [KEY]),
+      breakout(5, at(1), [KEY]),
+      breakout(6, at(0, 1), [KEY]),
+    ];
+    const config = { ...PINNED, waveRanks: [3], waveWindowDays: 5, waveMaximumOlderBreakouts: 2 } as unknown as typeof ALERT_CONFIG;
+    expect(decide({ breakouts, pastAlerts: [], now: NOW }, config)).toEqual([]);
+    const tolerant = { ...config, waveMaximumOlderBreakouts: 3 } as unknown as typeof ALERT_CONFIG;
+    expect(decide({ breakouts, pastAlerts: [], now: NOW }, tolerant).map((d) => d.universeId)).toEqual([6]);
+  });
+
+  it("counts the window by crossing time: a burst spread over 6 days gives no wave with a 5-day window", () => {
+    const breakouts = [breakout(1, at(6), [KEY]), breakout(2, at(3), [KEY]), breakout(3, at(0, 1), [KEY])];
+    const config = { ...PINNED, waveRanks: [3], waveWindowDays: 5 } as unknown as typeof ALERT_CONFIG;
+    expect(decide({ breakouts, pastAlerts: [], now: NOW }, config)).toEqual([]);
+  });
+
+  it("follows the tuned ranks and window by default: a wave for the 3rd breakout within 5 days only", () => {
+    const within = [breakout(1, at(4), [KEY]), breakout(2, at(2), [KEY]), breakout(3, at(0, 1), [KEY])];
     expect(decide({ breakouts: within, pastAlerts: [], now: NOW })).toEqual([
       { kind: "wave", universeId: 3, keys: [KEY], priors: { [KEY]: [1, 2] } },
     ]);
     const second = [breakout(1, at(3), [KEY]), breakout(2, at(0, 1), [KEY])];
     expect(decide({ breakouts: second, pastAlerts: [], now: NOW })).toEqual([]);
-    const slow = [breakout(1, at(9), [KEY]), breakout(2, at(5), [KEY]), breakout(3, at(0, 1), [KEY])];
+    const slow = [breakout(1, at(9), [KEY]), breakout(2, at(6), [KEY]), breakout(3, at(0, 1), [KEY])];
     expect(decide({ breakouts: slow, pastAlerts: [], now: NOW })).toEqual([]);
   });
 });

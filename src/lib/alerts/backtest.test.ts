@@ -7,7 +7,7 @@ import type { Breakout } from "./types";
 const at = (iso: string) => new Date(iso);
 const breakout = (universeId: number, crossedAt: string, keys: string[]): Breakout => ({
   universeId,
-  createdAt: at("2026-01-01T00:00:00Z"),
+  createdAt: new Date(at(crossedAt).getTime() - 3 * 24 * 3_600_000),
   crossedAt: at(crossedAt),
   keys,
   classified: true,
@@ -15,7 +15,13 @@ const breakout = (universeId: number, crossedAt: string, keys: string[]): Breako
 
 // The replay mechanics are tested with the first and second crossings of a key forming a wave within 14 days, not
 // with the values ALERT_CONFIG is tuned to.
-const PINNED = { ...ALERT_CONFIG, waveRanks: [2, 3], waveWindowDays: 14 } as unknown as typeof ALERT_CONFIG;
+const PINNED = {
+  ...ALERT_CONFIG,
+  waveRanks: [2, 3],
+  waveWindowDays: 14,
+  waveMaximumOlderBreakouts: 2,
+  candidateMaximumAgeDays: 12,
+} as unknown as typeof ALERT_CONFIG;
 const replayAlerts = (input: Parameters<typeof replay>[0]): ReplayResult => replay(input, PINNED);
 
 const from = at("2026-09-01T00:00:00Z");
