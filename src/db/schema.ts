@@ -13,6 +13,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import type { AlertKind } from "@/lib/alerts/types";
 import type { ClassificationModel } from "@/lib/classify/types";
 import type { ClassificationMerge } from "@/lib/classify/merges";
 import type { ClassificationOverride } from "@/lib/classify/overrides";
@@ -313,4 +314,25 @@ export const classificationMerges = pgTable(
     decidedAt: text("decided_at").notNull(),
   },
   (table) => [primaryKey({ columns: [table.field, table.fromKey] })],
+);
+
+// One row per alert decided, never rewritten: (kind, universe_id) is unique, so a game alerts at most once per kind.
+// sent_at stays null until the message went out, so a failed send is retried by the next run.
+export const alerts = pgTable(
+  "alerts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    kind: text("kind").$type<AlertKind>().notNull(),
+    universeId: id64("universe_id")
+      .notNull()
+      .references(() => games.universeId, { onDelete: "cascade" }),
+    keys: text("keys").array().notNull(),
+    evidence: jsonb("evidence").$type<unknown>().notNull(),
+    createdAt: timestamptz("created_at").notNull(),
+    sentAt: timestamptz("sent_at"),
+  },
+  (table) => [
+    uniqueIndex("alerts_kind_game_idx").on(table.kind, table.universeId),
+    index("alerts_created_idx").on(table.createdAt),
+  ],
 );
