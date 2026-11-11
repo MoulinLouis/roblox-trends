@@ -327,7 +327,7 @@ DATABASE_URL=postgresql://radar_analysis@localhost:15432/radar npm run alerts:ba
 
 ## Sessions
 
-- [ ] **S0, before merge: the backtest gate** (design, section 5). Through the tunnel:
+- [x] **S0, before merge: the backtest gate** (design, section 5). Through the tunnel:
   - run `npm run alerts:backtest -- --from 2026-08-25 --to <today>`, then the same with `--words-only`;
   - show the owner every push and the weekly counts.
 
@@ -348,3 +348,32 @@ DATABASE_URL=postgresql://radar_analysis@localhost:15432/radar npm run alerts:ba
 ## Execution notes
 
 (Record decisions and surprises here as tasks complete; committed code is authoritative over the code blocks above.)
+
+- **Execution, 2026-11-11 and 12.** The owner asked for autonomous subagent-driven execution through S0, with Claude settling every question and recording it here. Sonnet implemented and reviewed each task; Opus did the final review. Draft PR #26.
+  - **Rulings before Task 1** (the design is the authority, the plan its argument):
+    - Word keys come from `titleWords`, as the plan says, not `titleKey` as the design says: it already drops stop words, Roblox words and numbers.
+    - `decideAlerts` applies the wave cooldown and the one-alert-per-kind rule to its own earlier decisions in the same call, in crossing order. The design's "a key is pushed at most once within a cooldown" must hold when two candidates of a key share the 48-hour window. With a 30-day cooldown and a 14-day window, a 3rd breakout could then push only when the 2nd did not; the plan's tests that expected both were rewritten (Tasks 2 and 6).
+    - The card's "tracked games of the pattern" shows both counts the design names: all tracked games carrying the key, and those created in the last `recentGamesDays` (14). `readTrackedGames` returns the creation date; `CardFacts` carries `crossedAt`.
+    - `readLastSentAt(db, kind)` (Task 3) answers "has today's digest gone out". The digest is due at or after 08:00 Paris when no first-breakout alert was sent since 08:00 that day. A day whose 08:56 run had nothing to send can send a later run's first breakouts that day; the backtest replays the same rule.
+    - The job reads past alerts over `max(lookbackDays, waveCooldownDays)`.
+  - **Pattern keys** (`7d1ea51`) and **the decision** (`a128708`): as planned, with the rulings above. Output order is crossing hour, then universe id, a wave before a first breakout of the same game.
+  - **Table and reads** (`88f8444`, `171625d`, `eecc068`): migration 0019. CI caught a leak: the daily fallback read observed days after `until`. It now reads only v1 days (`origin = 'legacy'`); observed days come from the same observations as `game_hourly`, so nothing is lost. `peakCcu` is the game's highest `game_daily_all` peak; every row of `games` counts as tracked.
+    - **On production, read-only:** `readBreakouts` over 90 days took 1.55 s (1,422 games), from 2026-05-27 1.35 s (1,498); `readCardFacts` for 20 games 0.57 s. Young games crossing 1,000 CCU per week: 94, 64, 84 and 92 (weeks of 2026-09-21 to 10-12), then 347, 272 and 288 (10-19 to 11-02), as the design measured.
+  - **Discord messages** (`ded8237`, `a88c4d0`): evidence is plain JSON, so a later run renders it the same. Messages set `allowed_mentions: { parse: [] }` and keep Discord's limits, including 6,000 characters across a message's embeds. The review found that a creator's title could run commands in the pasted concept-check line, or plant a masked link in a card. Phrases now keep only letters, digits, spaces, hyphens and apostrophes, and card text escapes Discord markdown.
+  - **The job** (`073c231`, `db8defd`): as planned. Without a webhook URL a run is degraded whenever an alert is unsent; with one, when a post fails. A systemd test pins `/etc/radar/discord.env` to the alerts drop-in, optional (`-`).
+  - **Backtest** (`403b9ca`): the replay steps through the timer's run times (HH:56:30 UTC) and reuses the job's digest rule. Decisions about games that crossed before `--from` shape the cooldowns but are not reported. `trackedGameKeys` is shared with the job.
+  - **Runbook** (`efbc1e8`): section 4, "Alerts"; the timer joins every pause, resume, restore and rebuild list.
+- **S0, 2026-11-12**, `--from 2026-08-25 --to 2026-11-11`, through the analysis tunnel (about 4 s a run). "Full weeks" are those from 2026-10-19, when the radar went from about 3,800 to 11,000 tracked games; the averages below are over those three weeks. The pass thresholds are the design's (section 5): about 3 to 5 wave pushes a **week**, about 10 digest games a day.
+  - **Start values:** 348 pushes, 1,268 first breakouts out of 1,499 breakouts. Full weeks: 74 pushes a week, 35 digest games a day. `word:ragdoll` pushed 2026-10-15, `template:{verb} for {reward}` 2026-08-31. Volume fails.
+  - **What moves it**, measured offline on one read-only extract with the same replay:
+    - `minimumWordGames`, `maximumWordShare` and `lookbackDays` alone barely move it. Almost every breakout opens a key, because its `action:` key (a free-text core action) is nearly unique. Pushes come from common title words (eat, ride, become, own, fix…).
+    - Word counts taken as of each day instead of today's titles change nothing (74.7 against 74.3 pushes a week): "ragdoll" was common vocabulary before the wave, so no share cap separates it from "eat".
+    - The levers are the 3rd breakout instead of the 2nd, a shorter wave window, younger games and more titles per word. Raising `crossingCcu` to 3,000–5,000 also works but changes the owner's 1,000 CCU trigger, so it was left alone.
+  - **Retained values:** `waveRanks [3]`, `waveWindowDays 7`, `minimumWordGames 30`, `maximumAgeDays 12`; unchanged: 1,000 CCU, `lookbackDays 60`, `waveCooldownDays 30`, `maximumWordShare 0.01`, 48 hours, 12 hours, 08:00 Paris. Neighbours, in full-week pushes a week and digest games a day: 14 days old 4.0 and 11.7; 10 days 3.0 and 6.0; 2nd or 3rd breakout 13.0 and 11.7; a 10-day window with 40 titles a word 5.0 and 11.5.
+  - **Final run** (`176b7a1`): 374 breakouts, 14 pushes, 288 first breakouts. Full weeks: **3.67 pushes a week** (5, 6, 0) and **9.14 digest games a day**. `word:ragdoll` **pushed 2026-10-22 20:56 UTC** (Realistic Ragdoll Engine, after Ragdoll Reality and Ragdoll Physics). `template:{verb} for {reward}` **not pushed**: it first broke out on 2026-10-08 and never formed a 3-game wave within 7 days. The best-effort check fails; it passed with the start values.
+  - **Words only:** 8 pushes, 105 first breakouts. Full weeks: 2.33 pushes a week, 3.14 digest games a day, `word:ragdoll` on 2026-10-22. Waves rest mostly on title words; two thirds of the digest rests on the classification.
+  - **The 14 pushes:** Steal A Brainrot Egg (09-03, steal eggs), MM2 of The Locust (09-08, `mm2`), Escooter Life (10-15, ride scooters), Realistic Ragdoll Engine (10-22, `ragdoll`), Halloween Hatchers Divine (10-23, hatch eggs), Ragdoll Fight (10-24, `fight`), two Rivals mods (10-24, `mod` and `halloween`), Realistic Ragdoll Playground (10-26, `realistic`), Hatchers Go (10-27, `{thing} hatchers`), Punch Out Of Prison (10-28, punch walls), +1 Spider Arm (10-29, `+1 {thing}`), two modded admin panels (10-30, 10-31).
+  - **Caveats for S5:**
+    - The 60-day lookback still reaches into the thin weeks before 2026-10-19, so some keys look new only because the radar missed their earlier breakouts. The volume should fall as the lookback fills.
+    - The weeks of 11-02 and 11-09 had no push.
+    - Keeping games under 12 days old ignores about half the breakouts (the design's median is 13.5 days), including the first ragdoll breakouts (Ragdoll Football on 10-12, Ragdoll Engine on 10-15): the push came a week after the wave's first 10,000 CCU day.
