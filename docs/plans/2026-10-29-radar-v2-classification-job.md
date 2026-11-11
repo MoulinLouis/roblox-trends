@@ -712,7 +712,7 @@ In `ops/bin/deploy.sh`, add `radar-classify.timer` to `job_timers`, so a migrati
   - `classification_batches` exists, read through the analysis tunnel.
 - [x] **S2: The key.** The owner writes the key from their own terminal: `ssh radar-prod`, then
   `sudo install -m 600 -o root -g root /dev/null /etc/radar/anthropic.env && sudo nano /etc/radar/anthropic.env`. The file holds one line, `ANTHROPIC_API_KEY=...`, the same value as `~/.config/radar/anthropic.env`.
-- [ ] **S3: Checks.** The owner runs `npm run provision:healthchecks` (runbook, section 8). Expect 18 lines.
+- [x] **S3: Checks.** The owner runs `npm run provision:healthchecks` (runbook, section 8). Expect 18 lines.
 - [x] **S4: First run, by hand.** `sudo systemctl start radar-job@classify.service`, then read its `job_runs` row:
   - it submitted 1,000 games, with about 2 % without a thumbnail (3 of 100 in review-2).
   - Then `sudo systemctl enable --now radar-classify.timer`.
@@ -743,7 +743,7 @@ In `ops/bin/deploy.sh`, add `radar-classify.timer` to `job_timers`, so a migrati
 - **One open batch.** A unique partial index (`classification_batches_one_open_idx`, `((true)) where collected_at is null`, migration 0013) makes the invariant structural: a second `insertSubmittingBatch` fails before `api.create`. Tests that held two open batches now collect the first, or list a single one.
 - **Thumbnail wait.** A never classified game is held back while `thumbnails_checked_at` is null and its `first_observed_at` is under `thumbnailWaitHours` (6) old; `selection.waitingThumbnail` counts them. Retitled and outdated games do not wait: they were classified once already, a thumbnail was not what made them due, and the thumbnail URL is read fresh when they are submitted.
 - **S1–S5, read on the server on 2026-11-11** (`classification_batches`, `job_runs`, `game_classifications`):
-  - **Start:** the first run, on 2026-10-29 at 11:40 UTC, found 13,741 never classified games and submitted 1,000. The timer has run hourly since. The key file is `root:root 600`, and the job's log carries no missing-ping warning. S3 stays open: whether the checks were provisioned cannot be read from the server.
+  - **Start:** the first run, on 2026-10-29 at 11:40 UTC, found 13,741 never classified games and submitted 1,000. The timer has run hourly since. The key file is `root:root 600`, and the job's log carries no missing-ping warning. S3 came late: the two classify checks were created by their first ping with Healthchecks' defaults (a one-day period, so a stopped job would have alerted after about 25 hours), until the owner ran `npm run provision:healthchecks` on 2026-11-11.
   - **Backfill:** 14,367 requests in 23 batches, from 2026-10-29 11:40 to 2026-10-31 16:46 UTC, about 2 days and 5 hours. The daily cap held it to 6 batches of 1,000 a day. Each batch was collected at the next hourly run.
   - **Backfill cost:** $31.29, or $0.00218 a game, as the trial measured. Cache reads in 14,320 of 14,367 requests (99.7%).
   - **Since 2026-11-01:** 2,797 requests in 245 batches of about 11 games, $7.98, about $0.70 a day. A small batch writes the cache once, so cache reads fall to 91% and a game costs $0.00285.
