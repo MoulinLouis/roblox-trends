@@ -346,8 +346,8 @@ describe.skipIf(!hasTestDatabase)("format queries", () => {
       await readings(6, "2026-03-20", 1, 0, 10_000);
       const stat = await alphaStat();
       expect(stat).toMatchObject({ phase: "emerging", waveAgeDays: 10, waveBeforeHistory: false });
-      expect(stat.phaseRule).toContain("10");
-      expect(stat.phaseRule).toContain("28");
+      expect(stat.phaseRule).toContain("10 days ago");
+      expect(stat.phaseRule).toContain("under 28 days");
     });
 
     it("labels a format emerging, without dividing by zero, when W-3 and W-2 have no readings (step 3)", async () => {
