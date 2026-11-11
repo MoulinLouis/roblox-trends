@@ -59,7 +59,7 @@ Users: `radar` (application, PostgreSQL role `radar` by peer authentication), `a
 
 | Unit | Runs |
 | --- | --- |
-| `radar-job@<job>.service` | `scripts/job.ts <job>` as `radar`. `TimeoutStartSec` from its drop-in (census and poll 570 s, the hourly jobs 1830 s); `classify` also loads `/etc/radar/anthropic.env` through its `anthropic.conf` drop-in, and `alerts` loads `/etc/radar/discord.env` through its `discord.conf` drop-in; on a unit failure, `radar-job-failed@<job>.service` sends the `/fail` ping |
+| `radar-job@<job>.service` | `scripts/job.ts <job>` as `radar`. `TimeoutStartSec` from its drop-in, the job's `timeoutMs` plus 30 s (census and poll 570 s, alerts 630 s, charts, votes, thumbnails and classify 1830 s, explore 3330 s); `classify` also loads `/etc/radar/anthropic.env` through its `anthropic.conf` drop-in, and `alerts` loads `/etc/radar/discord.env` through its `discord.conf` drop-in; on a unit failure, `radar-job-failed@<job>.service` sends the `/fail` ping |
 | `radar-web.service` | `next start` on `127.0.0.1:3000` as `radar`, restarted on failure; writes only `.next/cache` |
 | `radar-deploy.service` | `ops/bin/deploy.sh` as root |
 | `radar-system-check.service` | `scripts/system-check.ts` as `radar` |
@@ -300,14 +300,14 @@ radar system-check                         # the system check, printed without p
 
 `radar <script> [arguments]` runs an npm script of the live release as `radar` with `radar.env`. Run collection jobs through systemd (`systemctl start radar-job@<job>`), never `radar job <job>`: the unit never overlaps a run with the timer's, enforces the timeout and reports to Healthchecks.
 
-Pause collection by disabling the seven job timers, and resume by enabling them:
+Pause collection by disabling the eight job timers, and resume by enabling them. `radar-alerts.timer` is in the list although the alerts job collects nothing: it only reads the database, so pausing it with the others keeps a paused radar from posting alerts about stale data:
 
 ```bash
-systemctl disable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer
-systemctl enable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer
+systemctl disable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer radar-alerts.timer
+systemctl enable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer radar-alerts.timer
 ```
 
-Stopping a timer is not enough: every deploy run (every 5 minutes) starts the job timers that are enabled, on purpose, so a deploy killed while the timers were paused for a migration heals on the next run. Resuming also enables `radar-classify.timer`: leave it out of the enable command while the classify job is not meant to run (section 4, Classification). Disabling does not stop a running job; `systemctl list-units 'radar-job@*'` shows the ones still running. Pause the job checks in Healthchecks during a long pause (tags `job` and `quality`); a paused check resumes on its next ping.
+Stopping a timer is not enough: every deploy run (every 5 minutes) starts the job timers that are enabled, on purpose, so a deploy killed while the timers were paused for a migration heals on the next run. Resuming also enables `radar-classify.timer`: leave it out of the enable command while the classify job is not meant to run (section 4, Classification); likewise leave out `radar-alerts.timer` until its first start is done (section 4, Alerts). Disabling does not stop a running job; `systemctl list-units 'radar-job@*'` shows the ones still running. Pause the job checks in Healthchecks during a long pause (tags `job` and `quality`); a paused check resumes on its next ping.
 
 ### Classification
 
@@ -369,6 +369,43 @@ First start after deploying the job, once and in order:
 
 A check created by provisioning has not received a ping, and Healthchecks.io does not alert on a check that has never been pinged, so the gap between the deploy and step 3 should raise no alarm.
 
+### Alerts
+
+The `alerts` job (`radar-alerts.timer`, `*:56:30`) tells the owner on Discord about a game early in its breakout. Each run reads only the database: it finds the games created within `ALERT_CONFIG.maximumAgeDays` that crossed `crossingCcu` in the last `candidateWindowHours`, decides which alerts they call for, records them in `alerts`, then posts them to the webhook. An alert is recorded before it is sent and marked sent (`sent_at`) only after its post succeeded, so a failed post stays unsent and the next run retries it.
+
+- A `wave` alert (the 2nd and 3rd games of one pattern key to cross within the wave window) is posted on its own right away.
+- `first_breakout` alerts wait for the daily digest, one message. It goes out at the first run at or after 08:00 Europe/Paris (daylight saving follows Paris) when no digest of first breakouts went out since 08:00 that day. A day whose first run after 08:00 had nothing to send can still send a later run's first breakouts the same day; once a digest went out, the day is closed.
+- A run is `degraded` when a post failed or, without `/etc/radar/discord.env`, when any alert is left unsent: the alerts are still recorded and go out on the first run after the file exists. With a webhook, first breakouts waiting for the digest hour are not degraded. Its stats are `candidates`, `firstBreakouts`, `waves`, `sent` and `unsent`.
+
+Read what it recorded:
+
+```bash
+runuser -u radar -- psql -X -d radar -c "select kind, universe_id, keys, created_at, sent_at from alerts order by created_at desc limit 20"
+runuser -u radar -- psql -X -d radar -c "select status, stats, error from job_runs where job = 'alerts' order by started_at desc limit 1"
+journalctl -u radar-job@alerts -n 100 -o cat
+```
+
+A row with `sent_at` null is waiting for the digest hour, or its post failed (the journal line `A Discord alert was not sent` gives the kind of failure, never the URL). A webhook Discord rejects (deleted, wrong URL) makes every run degraded: the owner writes `/etc/radar/discord.env` again (section 3) and the unsent alerts go out on the next run.
+
+The thresholds, windows, digest hour and card limits are in `ALERT_CONFIG` (`src/lib/config.ts`). To tune them, replay the decision over the radar's history from the owner's machine, through the analysis tunnel (section 2, Analysis sessions). The backtest is read-only and never posts:
+
+```bash
+ssh -N -L 15432:/var/run/postgresql/.s.PGSQL.5432 radar-analysis
+DATABASE_URL=postgresql://radar_analysis@localhost:15432/radar npm run alerts:backtest -- --from 2026-08-25 --to 2026-11-10
+```
+
+`--words-only` keeps only the title-word keys (no classified format), `--coverage-from <date>` sets the day the classification coverage starts (default 2026-10-19), and the replay never runs past now. It prints each push and the weekly counts; aim for about 3 to 5 pushes and 10 digest games a day on average. Change `ALERT_CONFIG` in the repository, rerun the backtest, then deploy.
+
+Pause it: `systemctl disable --now radar-alerts.timer`. Deploys never re-enable a disabled timer. Pausing collection (above) pauses it too.
+
+First start after deploying the job, once and in order:
+
+1. The deploy applies migration 0019 and installs the units; it does not start the timer, which is not enabled yet.
+2. **Owner** creates a webhook in their Discord server, then writes it from their own terminal (section 3): `ssh radar-prod`, `install -m 600 -o root -g root /dev/null /etc/radar/discord.env && nano /etc/radar/discord.env`, one line `DISCORD_WEBHOOK_URL=...`.
+3. **Owner** provisions the new checks (section 8, Healthchecks checks): expect 20 lines.
+4. Run it by hand, `systemctl start radar-job@alerts.service`, then read its `job_runs` row and the `alerts` rows above. If it posted, check the card in Discord.
+5. `systemctl enable --now radar-alerts.timer`.
+
 ## 5. Deployments
 
 ### How a commit is chosen
@@ -406,7 +443,7 @@ cp -r /opt/radar/current/ops/systemd/. /etc/systemd/system/ && systemctl daemon-
 systemctl restart radar-web
 ```
 
-Before rolling back to a release that predates the classify job, disable its timer: `systemctl disable --now radar-classify.timer`. Otherwise `scripts/job.ts` of that release exits with "Unknown job" every hour and alerts. Enable it again once a release with the job is live.
+Before rolling back to a release that predates the classify or alerts job, disable its timer: `systemctl disable --now radar-classify.timer` (or `radar-alerts.timer`). Otherwise `scripts/job.ts` of that release exits with "Unknown job" every hour and alerts. Enable it again once a release with the job is live.
 
 Pause the `radar-deploy` check in Healthchecks while the timer is stopped. Migrations are forward only: the older release runs on the newer schema, which the compatibility rule below makes safe. Once a fix is pushed, `systemctl start radar-deploy.timer` (it is still enabled); the check resumes on the next ping.
 
@@ -425,7 +462,7 @@ A migration must stay compatible with the previous release, which may still be r
 
 ### What a deploy does not apply
 
-- New units: copied, but not enabled. Enable a new timer with `systemctl enable --now <unit>`. `radar-classify.timer` stays disabled until the owner's first start (section 4, Classification).
+- New units: copied, but not enabled. Enable a new timer with `systemctl enable --now <unit>`. `radar-classify.timer` and `radar-alerts.timer` stay disabled until the owner's first start (section 4, Classification and Alerts).
 - Removed units: the file stays in `/etc/systemd/system`. Run `systemctl disable --now <unit>`, delete the file, then `systemctl daemon-reload`.
 - `provision.sh` (packages, PostgreSQL configuration, sshd, firewall, system settings), `ops/postgresql/*.sql` (`configure-database.sh`) and the backup settings (`configure-backups.sh`): rerun the script from `/opt/radar/current/ops/bin` once the commit is live (section 8).
 - Healthchecks periods and graces: `provision:healthchecks` (section 8).
@@ -453,14 +490,14 @@ Everything written after the target is lost from the database (the WAL stays in 
 
 ```bash
 systemctl stop radar-deploy.timer radar-system-check.timer
-systemctl disable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer
+systemctl disable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer radar-alerts.timer
 systemctl list-units 'radar-job@*'                        # wait until no job runs
 systemctl stop postgresql@18-main
 runuser -u postgres -- pgbackrest --stanza=radar --delta --type=time --target='2026-10-22 14:00:00+00' --target-action=promote restore
 systemctl start postgresql@18-main
 runuser -u postgres -- psql -XAtc 'select pg_is_in_recovery()'   # f once the target is reached and the cluster promoted
 systemctl start radar-backup@full                         # a first backup of the new timeline
-systemctl enable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer
+systemctl enable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer radar-alerts.timer
 systemctl start radar-deploy.timer radar-system-check.timer
 ```
 
@@ -494,7 +531,7 @@ Power the old server off first: two servers must never archive into the same sta
     ```bash
     systemctl enable --now radar-web && tailscale serve --bg 3000
     systemctl enable --now radar-system-check.timer radar-deploy.timer radar-backup-full.timer radar-backup-diff.timer radar-restore-test.timer
-    systemctl enable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer
+    systemctl enable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer radar-alerts.timer
     systemctl start radar-backup@full
     ```
 
@@ -549,14 +586,14 @@ Before any maintenance that restarts PostgreSQL, quiet the server and pause the 
 
 ```bash
 systemctl stop radar-deploy.timer radar-system-check.timer
-systemctl disable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer
+systemctl disable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer radar-alerts.timer
 systemctl list-units 'radar-job@*'      # wait until no job runs
 ```
 
 and afterwards:
 
 ```bash
-systemctl enable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer
+systemctl enable --now radar-census.timer radar-poll.timer radar-votes.timer radar-charts.timer radar-explore.timer radar-thumbnails.timer radar-classify.timer radar-alerts.timer
 systemctl start radar-deploy.timer radar-system-check.timer
 ```
 
@@ -625,7 +662,7 @@ Or on the server, after the owner wrote the key alone into `/root/healthchecks-a
 HEALTHCHECKS_API_KEY="$(cat /root/healthchecks-api-key)" radar provision:healthchecks; status=$?; shred -u /root/healthchecks-api-key; exit $status
 ```
 
-Expected: 18 `Check created` or `Check updated` lines.
+Expected: 20 `Check created` or `Check updated` lines (a heartbeat and a quality check for each of the 8 jobs, `alerts` included, plus `radar-deploy`, `radar-system`, `radar-backup` and `radar-restore-test`).
 
 ### Provisioning changes
 
