@@ -221,6 +221,8 @@ export const JOB_CONFIG = {
     // A collected batch with a larger share of failed games degrades the run.
     maximumFailedShare: 0.05,
   },
+  // The early breakout alerts job (docs/plans/2026-11-11-radar-v2-early-alerts-design.md).
+  alerts: { intervalMinutes: 60, timeoutMs: 10 * 60_000 },
 } as const;
 
 // The database sessions of the scripts and the dashboard, and how they end. A job's statement timeout is its own
@@ -324,6 +326,38 @@ export const FORMAT_CONFIG = {
   risingShareRatio: 1.25,
   decliningShareRatio: 0.8,
   leaderCarryShare: 0.5,
+} as const;
+
+// Early breakout alerts (docs/plans/2026-11-11-radar-v2-early-alerts-design.md). Measured on 2026-11-11: a median of
+// about 4 days from 1,000 to 10,000 CCU, and 270–350 games under 30 days old crossing 1,000 CCU a week.
+export const ALERT_CONFIG = {
+  // A game crossing this CCU is a breakout candidate.
+  crossingCcu: 1_000,
+  // Only games created within this many days of the crossing count as early.
+  maximumAgeDays: 30,
+  // How far back a game's history is read to decide whether it crossed.
+  lookbackDays: 60,
+  // A crossing older than this is no longer news.
+  candidateWindowHours: 48,
+  // A candidate not yet classified waits this long for its format before it is judged without it.
+  unclassifiedWaitHours: 12,
+  // A wave alert fires for the games of a pattern ranked 2nd and 3rd to cross, in order of crossing.
+  waveRanks: [2, 3],
+  // The crossings of a wave must fall within this many days of each other.
+  waveWindowDays: 14,
+  // A pattern that alerted a wave stays silent this long.
+  waveCooldownDays: 30,
+  // A title word is a pattern key only when at least this many titles carry it...
+  minimumWordGames: 2,
+  // ...and at most this share of all titles does: a word in more is too generic to point to one trend.
+  maximumWordShare: 0.01,
+  // The daily digest goes out at this hour of this time zone.
+  digestHour: 8,
+  digestTimeZone: "Europe/Paris",
+  // The digest lists at most this many games.
+  digestMaximumGames: 10,
+  // Per pattern key, the tracked games created in this many last days are counted on the alert card.
+  recentGamesDays: 14,
 } as const;
 
 // The game page (src/app/games/[universeId]).
