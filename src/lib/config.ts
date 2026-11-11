@@ -358,6 +358,25 @@ export const ALERT_CONFIG = {
   digestMaximumGames: 10,
   // Per pattern key, the tracked games created in this many last days are counted on the alert card.
   recentGamesDays: 14,
+  // A Discord webhook call is abandoned after this long.
+  discordTimeoutMs: 10_000,
+  // Discord's limits on one webhook message: title, description, field name and value, fields per embed, embeds per
+  // message, and the characters of all embed texts of a message together.
+  discordTitleCharacters: 256,
+  discordDescriptionCharacters: 4_096,
+  discordFieldNameCharacters: 256,
+  discordFieldValueCharacters: 1_024,
+  discordMaximumFields: 25,
+  discordMaximumEmbeds: 10,
+  discordMessageCharacters: 6_000,
+  // A wave card shows at most this many pattern keys, and per key this many prior breakouts.
+  cardMaximumKeys: 8,
+  cardMaximumPriors: 5,
+  // A game name on a card is cut to this many characters inside lists.
+  cardNameCharacters: 48,
+  // A digest embed is compact: its pattern line and concept command are cut to these lengths.
+  digestPatternCharacters: 160,
+  digestCommandCharacters: 100,
 } as const;
 
 // The game page (src/app/games/[universeId]).
