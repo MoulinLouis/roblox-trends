@@ -11,7 +11,7 @@ export type BreakoutQuery = { createdSince: Date; until: Date };
 type BreakoutRow = { universe_id: string; created_at: Date | string; crossed_at: Date | string };
 
 // The games created since `createdSince` that read `crossingCcu` before `until`, and when: the first hour in
-// game_hourly or in census_hourly (through the game's places), else the first v1 day in game_daily_all. A crossing
+// game_hourly or in census_hourly (through the game's places), else the first v1 day in game_daily_all (days of the radar's own observations are covered by the hourly reads). A crossing
 // more than `maximumAgeDays` after the game's creation is not early, so it is dropped.
 export async function readBreakouts(
   db: Database,
@@ -61,6 +61,7 @@ export async function readBreakouts(
       where d.day >= ${since}::timestamptz
         and d.day < ${end}::timestamptz
         and d.day <= y.roblox_created_at + make_interval(days => ${scanDays}::int)
+        and d.origin = 'legacy'
         and d.ccu_peak >= ${config.crossingCcu}::int
         and not exists (select 1 from observed o where o.universe_id = y.universe_id)
       group by y.universe_id
