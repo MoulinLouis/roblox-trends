@@ -207,7 +207,7 @@ from rising_games(as_of => now(), max_age_days => 30, min_ccu => 100, window_hou
 order by sort_rank;
 ```
 
-`format_stats` gives one row per format with readings in the latest complete UTC week before `as_of`: its share of the market's CCU, the share trend, the leader's own trend, the hit counts of the trend window, the wave age, the followers and a `phase`. `dimension` is `family`, `template`, `reward_loop` or `family_reward_loop`. A session calls it with the values of `FORMAT_CONFIG` in `src/lib/config.ts`. Both functions are read-only and need no grant:
+`format_stats` gives one row per format with readings in the latest complete UTC week before `as_of`: its share of the market's CCU, the share trend, the leader's own trend, the hit counts of the trend window, the wave age, the followers and a `phase`. `dimension` is `family`, `template`, `reward_loop` or `family_reward_loop`. For `family_reward_loop` the `format` reads `family × reward_loop`. Template `none` has no row in the template dimension, and `game_formats` holds only classified games (`WHERE family IS NOT NULL`). A session calls it with the values of `FORMAT_CONFIG` in `src/lib/config.ts`:
 
 ```sql
 select dimension, format, week_start, coverage, games, ccu_avg, share, share_trend, leader_name, leader_share, leader_trend,
@@ -219,9 +219,9 @@ from format_stats(as_of => now(), full_coverage_from => '2026-10-19', hit_days =
 order by dimension, share desc;
 ```
 
-`phase_rule` gives the reason for each label: the measured value and the threshold. A trend window that mixes `top` weeks (before `full_coverage_from`, when the radar tracked about 3,800 games) and `full` weeks (about 11,000 games) gives `unknown`, because the two are not comparable.
+`phase_rule` gives the reason for each label: the measured value and the threshold. The rule steps apply in order: `small`, then `unknown`, then `emerging`, then `rising` or `declining`, then `plateau`. A trend window that mixes `top` weeks (before `full_coverage_from`, when the radar tracked about 3,800 games) and `full` weeks (about 11,000 games) gives `unknown`, because the two are not comparable. A small format reads `small` even in a mixed window.
 
-`format_weeks` gives the weekly history of the formats, the 12 complete weeks before `as_of` for `FORMAT_CONFIG.weeks`. `dimension_filter` and `format_filter` narrow it, case-insensitively; this reads one format:
+`format_weeks` gives the weekly history of the formats, the `weeks` most recent complete UTC weeks before `as_of` (12 in `FORMAT_CONFIG.weeks`). `dimension_filter` and `format_filter` narrow it, case-insensitively; this reads one format:
 
 ```sql
 select week_start, coverage, games, ccu_avg, share, leader_name, leader_share, entrants, entrants_matured, hits_small, hits_large
@@ -229,6 +229,8 @@ from format_weeks(as_of => now(), weeks => 12, full_coverage_from => '2026-10-19
   hit_large => 10000, dimension_filter => 'family', format_filter => '+1')
 order by week_start;
 ```
+
+Both functions are read-only and need no grant.
 
 ### Dashboard
 
