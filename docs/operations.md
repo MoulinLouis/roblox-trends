@@ -387,7 +387,7 @@ journalctl -u radar-job@alerts -n 100 -o cat
 
 A row with `sent_at` null is waiting for the digest hour, or its post failed (the journal line `A Discord alert was not sent` gives the kind of failure, never the URL). A webhook Discord rejects (deleted, wrong URL) makes every run degraded: the owner writes `/etc/radar/discord.env` again (section 3) and the unsent alerts go out on the next run.
 
-An alert Discord rejects for good (a non-429 4xx in the journal on every run) blocks the runs behind it. Read its row, then, after checking that the card cannot be sent, mark it sent by hand on the server, as the owner. This skips that alert for good:
+An alert that fails the same way on every run (a non-429 4xx from Discord, or a card that cannot be built from its stored evidence) blocks the posts behind it, since a run stops at its first failed post. Read its row, then, after checking that the card cannot be sent, mark it sent by hand on the server, as the owner. This skips that alert for good:
 
 ```bash
 runuser -u radar -- psql -X -d radar -c "select id, kind, universe_id, created_at from alerts where sent_at is null"

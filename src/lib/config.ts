@@ -331,9 +331,10 @@ export const FORMAT_CONFIG = {
 // Early breakout alerts (docs/plans/2026-11-11-radar-v2-early-alerts-design.md). Measured on 2026-11-11: a median of
 // about 4 days from 1,000 to 10,000 CCU, and 270–350 games under 30 days old crossing 1,000 CCU a week.
 // The age, wave and word values were chosen with `npm run alerts:backtest` on 2026-11-12, over 2026-08-25 to
-// 2026-11-11 with full classification coverage from 2026-10-19. The first values (30 days, ranks 2 and 3, a 14-day
-// window, 2 titles) pushed 74 waves a week and put 35 games a day in the digest; these give 4 pushes a week and 9
-// digest games a day, and push the realistic ragdoll wave on 2026-10-22. The runs are in the plan's "Execution notes"
+// 2026-11-11, averaged over the weeks from 2026-10-19, when the radar went from about 3,800 to 11,000 tracked games.
+// The first values (30 days, ranks 2 and 3 over the lookback, a 14-day window, 2 titles) pushed 74 waves a week and put
+// 35 games a day in the digest; these give 4 pushes a week and 8 digest games a day, and push the realistic ragdoll
+// wave on 2026-10-22. The runs are in the plan's "Execution notes"
 // (docs/plans/2026-11-11-radar-v2-early-alerts.md).
 export const ALERT_CONFIG = {
   // A game crossing this CCU is a breakout candidate.
