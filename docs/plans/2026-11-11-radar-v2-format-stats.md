@@ -283,11 +283,11 @@ export const FORMAT_CONFIG = {
 
 ## Sessions after the merge
 
-- [ ] **S1: Merge.** CI green, then the owner approves. The deploy runs migrations 0014 to 0017.
+- [x] **S1: Merge.** CI green, then the owner approves. The deploy runs migrations 0014 to 0017.
   - Check that the release is live.
   - Check, through the analysis tunnel, that `select count(*) from game_formats` is close to the classified count.
   - Check that the next classify run reports `stats.merges`.
-- [ ] **S2: The check against the owner's eye** (design, section 6), through the tunnel:
+- [x] **S2: The check against the owner's eye** (design, section 6), through the tunnel:
   - `as_of` 2026-10-19 (four `top` weeks): `+1` family `declining`; `eggs` reward loop with `leader_share` of 0.5 or more; `{verb} for {reward} × eggs` `rising`.
   - `as_of` 2026-11-16 (four `full` weeks): `{verb} for {reward} × eggs` with `share_trend` under 1.
   - When a result disagrees, Claude shows the numbers and the owner judges.
@@ -329,3 +329,16 @@ export const FORMAT_CONFIG = {
     - entrant peaks are looked up for unclassified games;
     - an odd `trend_weeks` splits unequal halves;
     - a few tie-break and window tests are missing.
+- **S1, 2026-11-11** (release `ca1ac5d`, deployed at 14:17 UTC):
+  - The migrations ran while explore was still running, as the deploy allows. `game_formats` holds 16,485 rows, the classified count.
+  - `format_stats` hit the analysis role's 5-minute timeout. The planner takes `format_weeks` for a 1,000-row function and expected 2 latest formats; production had 771. Two loops then read `game_daily_all` once per row:
+    - the wave, which cost about 40 s;
+    - the followers' ranking, run once per format, with the peak lookup before the rank filter (2.45 million lookups).
+  - Fixing only the followers left the call at 43 s, and only the wave at 227 s. With both, it takes 3.4 s.
+  - Migration 0018 (#25) replaces the function with the same query, changed only in its plan. CI and the task tests were blind to it: their data is a few games.
+  - The classify run of 14:46 copied the 9 merges (`stats.merges`). `strategy` went from 24 to 57 games, `rhythm` from 13 to 24, `building sandbox` from 41 to 48 and `donation game` from 7 to 10.
+- **S2, 2026-11-11**, with 0018's query, read-only, for `as_of` 2026-10-19 (four `top` weeks, 2.3 s):
+  - `+1` family: `declining`, share x0.72.
+  - `{verb} for {reward} × eggs`: `rising`, x1.52. Its weekly share then went 1.04%, 1.11%, 1.12%, 0.93% (weeks of 2026-10-12 to 11-02): cooling.
+  - `eggs` reward loop: `plateau`, x1.02, with `Steal An Egg` holding 78% of it: carried by its leader.
+  - The function reproduces all three readings of 2026-10-26. The label at `as_of` 2026-11-16, the first date with four `full` weeks, comes with S3.
