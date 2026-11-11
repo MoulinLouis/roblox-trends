@@ -134,6 +134,13 @@
       "when": 1794407376024,
       "tag": "0018_format_stats_plan",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1794435924671,
+      "tag": "0019_alerts",
+      "breakpoints": true
     }
   ]
 }
