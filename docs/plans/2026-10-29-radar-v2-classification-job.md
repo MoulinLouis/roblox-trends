@@ -706,20 +706,20 @@ In `ops/bin/deploy.sh`, add `radar-classify.timer` to `job_timers`, so a migrati
 
 ## Sessions after the merge
 
-- [ ] **S1: Merge.** CI green, then the owner approves. A push to `main` deploys, and the migration pauses the job timers while it runs.
+- [x] **S1: Merge.** CI green, then the owner approves. A push to `main` deploys, and the migration pauses the job timers while it runs.
   Check:
   - the release is live (`readlink -f /opt/radar/current`);
   - `classification_batches` exists, read through the analysis tunnel.
-- [ ] **S2: The key.** The owner writes the key from their own terminal: `ssh radar-prod`, then
+- [x] **S2: The key.** The owner writes the key from their own terminal: `ssh radar-prod`, then
   `sudo install -m 600 -o root -g root /dev/null /etc/radar/anthropic.env && sudo nano /etc/radar/anthropic.env`. The file holds one line, `ANTHROPIC_API_KEY=...`, the same value as `~/.config/radar/anthropic.env`.
 - [ ] **S3: Checks.** The owner runs `npm run provision:healthchecks` (runbook, section 8). Expect 18 lines.
-- [ ] **S4: First run, by hand.** `sudo systemctl start radar-job@classify.service`, then read its `job_runs` row:
+- [x] **S4: First run, by hand.** `sudo systemctl start radar-job@classify.service`, then read its `job_runs` row:
   - it submitted 1,000 games, with about 2 % without a thumbnail (3 of 100 in review-2).
   - Then `sudo systemctl enable --now radar-classify.timer`.
-- [ ] **S5: Backfill.** For about 2.5 days, read each batch's `cost_usd`, `stats` and cache reads.
+- [x] **S5: Backfill.** For about 2.5 days, read each batch's `cost_usd`, `stats` and cache reads.
   - **Expected:** about $2.2 for 1,000 games, cache reads in about 99% of requests, and less than 5% failed.
   - **If the cache falls below 50%,** compare with the trial and tell the owner before the next day.
-- [ ] **S6: Notes.** The execution notes record:
+- [x] **S6: Notes.** The execution notes record:
   - the backfill's cost and duration;
   - the failures and their causes;
   - the new values the model proposed;
@@ -742,3 +742,21 @@ In `ops/bin/deploy.sh`, add `radar-classify.timer` to `job_timers`, so a migrati
 - **Create timeout.** `submitBatch` passes `createTimeoutMs` (5 min) as the SDK's `timeout`, so a create started at `latestSubmissionMs` ends before the runner's 30 min. A timeout is an `APIConnectionTimeoutError` with no status: `rejectedByApi` is false, the row keeps a null id and blocks, as designed. A test pins both.
 - **One open batch.** A unique partial index (`classification_batches_one_open_idx`, `((true)) where collected_at is null`, migration 0013) makes the invariant structural: a second `insertSubmittingBatch` fails before `api.create`. Tests that held two open batches now collect the first, or list a single one.
 - **Thumbnail wait.** A never classified game is held back while `thumbnails_checked_at` is null and its `first_observed_at` is under `thumbnailWaitHours` (6) old; `selection.waitingThumbnail` counts them. Retitled and outdated games do not wait: they were classified once already, a thumbnail was not what made them due, and the thumbnail URL is read fresh when they are submitted.
+- **S1–S5, read on the server on 2026-11-11** (`classification_batches`, `job_runs`, `game_classifications`):
+  - **Start:** the first run, on 2026-10-29 at 11:40 UTC, found 13,741 never classified games and submitted 1,000. The timer has run hourly since. The key file is `root:root 600`, and the job's log carries no missing-ping warning. S3 stays open: whether the checks were provisioned cannot be read from the server.
+  - **Backfill:** 14,367 requests in 23 batches, from 2026-10-29 11:40 to 2026-10-31 16:46 UTC, about 2 days and 5 hours. The daily cap held it to 6 batches of 1,000 a day. Each batch was collected at the next hourly run.
+  - **Backfill cost:** $31.29, or $0.00218 a game, as the trial measured. Cache reads in 14,320 of 14,367 requests (99.7%).
+  - **Since 2026-11-01:** 2,797 requests in 245 batches of about 11 games, $7.98, about $0.70 a day. A small batch writes the cache once, so cache reads fall to 91% and a game costs $0.00285.
+  - **Failures:** none. No failed, errored, expired or released request; 312 runs, all successful, none degraded or blocked. 119 of 17,164 requests (0.7%) went without a thumbnail. 466 games were classified again after a new title.
+  - **Coverage:** 16,460 of 16,472 tracked games (99.9%); the others sat in the open batch or waited for their thumbnail. Confidence: high 37%, medium 60%, low 3%.
+- **New values the model proposed** (latest classification of each game, against `CLASSIFICATION_VOCABULARY`):
+  - **Reward loops** stay closed: 3 new values, each on one game (`unlocks`, `creatures`, `coins`).
+  - **Families:** 241 new values on 492 games (3.0%), 172 of them on one game. The largest are `building sandbox` (41), `strategy` (24), `rhythm` (13), `grand strategy` (12), `trading` (11) and `rhythm game` (11). Many are near-duplicates: `rhythm` and `rhythm game`; `strategy`, `grand strategy`, `war strategy`, `RTS`, `conquest strategy` and `territory strategy`; `building sandbox` and `sandbox builder`; `donation game` and `donation hangout`.
+  - **Templates:** 793 new values on 1,877 games (11.4%), 579 of them on one game. The largest are `{thing} Obby` (109), `{thing} Prison Run` (108), `{verb} {thing}` (52), `{thing} Hatchers` (50), `{thing} Escape` (37) and `{thing} Roleplay` (32). Some differ only in case (`{thing} VS {thing}` and `{thing} vs {thing}`; `{verb} your {thing}` and `{verb} Your {thing}`); others shadow a known value (`{thing} Roleplay` and `{thing} RP`). `none` holds 8,346 games (51%).
+  - **A pattern the owner chose is missing:** review-2 settled `Mount {name}` for MOUNT PAGI, but the value is not in the vocabulary, so production never proposes it. The 63 obby games whose title starts with Mount all have `none`.
+  - The `format_stats` plan's merges start from these lists.
+- **Spot check** (https://claude.ai/artifact/2FXYMJSgdWRQNi1FBV2x1T): 20 games drawn among production classifications without overrides, ordered by `md5(universe_id::text || 's6-2026-11-11')`. Claude read each title, description and thumbnail and raised doubts on 5 games: `physics sandbox` for a flip-and-land skill game with levels, `shooter` for a title carrying the ADMIN PANEL marker, `other` and `none` for an auto battler whose twin title got `{thing} Battles`, `none` for a Mount game, and `sports` for what may be a stadium tour.
+  - **The owner's answers (2026-11-11):** they upheld all five doubts and judged the 15 other games right (the page saved only the five answered games; the owner confirmed the rest in the session).
+  - **Accuracy over the 20 games:** family 16 of 20 (80%), template 18 of 20 (90%), reward loop 20 of 20 (100%), 54 of 60 format fields (90%). Twenty games make a wide interval: the family's 80% sits below review-2's 96% without proving a drop.
+  - **The errors:** three games fell outside the vocabulary and were forced into a near family: an auto battler as `other`, a skill game as `physics sandbox`, a stadium showcase as `sports`. One missed the ADMIN PANEL marker of `modded copy`, and two templates were missing (`{thing} Battles`, `Mount {name}`). Each points to the vocabulary rather than to the model.
+  - **Overrides:** the six corrected fields, 135 entries in all.
