@@ -1,10 +1,11 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import type { GameClassification } from "@/lib/classify/schema";
+import { type ClassificationMerge, mergeKey } from "@/lib/classify/merges";
 import type { ClassificationOverride } from "@/lib/classify/overrides";
 import type { ClassificationCandidate } from "@/lib/classify/selection";
 import type { ClassificationModel, ClassificationUsage } from "@/lib/classify/types";
 import type { Database } from "./client";
-import { classificationBatches, classificationOverrides, classifications } from "./schema";
+import { classificationBatches, classificationMerges, classificationOverrides, classifications } from "./schema";
 
 export interface ClassificationBatchRow {
   id: string;
@@ -41,6 +42,25 @@ export async function syncClassificationOverrides(db: Database, overrides: reado
     );
   });
   return overrides.length;
+}
+
+// Replaces the table's content with the given merges, in one transaction. Returns their number.
+export async function syncClassificationMerges(db: Database, merges: readonly ClassificationMerge[]): Promise<number> {
+  await db.transaction(async (transaction) => {
+    await transaction.delete(classificationMerges);
+    if (merges.length === 0) return;
+    await transaction.insert(classificationMerges).values(
+      merges.map((merge) => ({
+        field: merge.field,
+        fromKey: mergeKey(merge.from),
+        fromValue: merge.from,
+        toValue: merge.to,
+        reason: merge.reason,
+        decidedAt: merge.decidedAt,
+      })),
+    );
+  });
+  return merges.length;
 }
 
 // Every game once, with what its classifications say: the latest successful one, whether a request is in flight, and the

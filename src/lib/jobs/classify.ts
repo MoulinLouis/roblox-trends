@@ -7,6 +7,7 @@ import {
   readOpenBatches,
   requestsSubmittedSince,
   storeBatchResults,
+  syncClassificationMerges,
   syncClassificationOverrides,
   type BatchItemResult,
   type ClassificationBatchRow,
@@ -15,6 +16,7 @@ import type { Database } from "@/db/client";
 import { chunk } from "@/lib/arrays";
 import { type BatchApi, rejectedByApi } from "@/lib/classify/batches";
 import { classificationCostUsd } from "@/lib/classify/cost";
+import { CLASSIFICATION_MERGES, type ClassificationMerge } from "@/lib/classify/merges";
 import { CLASSIFICATION_OVERRIDES, type ClassificationOverride } from "@/lib/classify/overrides";
 import { CLASSIFICATION_PROMPT_VERSION } from "@/lib/classify/prompt";
 import { classificationCustomId, classificationRequest, readBatchResult, universeIdFromCustomId } from "@/lib/classify/request";
@@ -29,6 +31,7 @@ export interface ClassifyDependencies {
   batches: () => BatchApi;
   downloadThumbnail: (url: string | null) => Promise<Buffer | null>;
   overrides?: readonly ClassificationOverride[];
+  merges?: readonly ClassificationMerge[];
   newId?: () => string;
   // Measures the run's own wall-clock time, apart from the `now` of the slot.
   clock?: () => number;
@@ -65,6 +68,7 @@ export function createClassifyJob(dependencies: ClassifyDependencies): JobDefini
       const clock = dependencies.clock ?? Date.now;
       const startedMs = clock();
       const overrides = await syncClassificationOverrides(db, dependencies.overrides ?? CLASSIFICATION_OVERRIDES);
+      const merges = await syncClassificationMerges(db, dependencies.merges ?? CLASSIFICATION_MERGES);
       const api = dependencies.batches();
       const open = await readOpenBatches(db);
       // A submission whose answer was lost may have created a batch: nothing is submitted until the owner settles it.
@@ -103,6 +107,7 @@ export function createClassifyJob(dependencies: ClassifyDependencies): JobDefini
         status: blocked || failedShare > config.maximumFailedShare ? "degraded" : "success",
         stats: {
           overrides,
+          merges,
           collected: collected.length,
           classified: sum(collected, "classified"),
           failed: sum(collected, "failed"),

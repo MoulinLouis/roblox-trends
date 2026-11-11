@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { COMPARED_FIELDS } from "@/lib/classify/compare";
+import type { ClassificationMerge } from "@/lib/classify/merges";
 import type { GameClassification } from "@/lib/classify/schema";
 import type { ClassificationUsage } from "@/lib/classify/types";
 import { gameDetail } from "@/test/fixtures";
@@ -12,10 +13,11 @@ import {
   readOpenBatches,
   requestsSubmittedSince,
   storeBatchResults,
+  syncClassificationMerges,
   syncClassificationOverrides,
 } from "./classifications";
 import { upsertGameDetails } from "./games";
-import { classificationBatches, classificationOverrides, classifications } from "./schema";
+import { classificationBatches, classificationMerges, classificationOverrides, classifications } from "./schema";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "./test-database";
 
 const classification: GameClassification = {
@@ -35,6 +37,10 @@ const usage: ClassificationUsage = { inputTokens: 100, outputTokens: 50, cacheCr
 const batchOne = "00000000-0000-4000-8000-000000000001";
 const batchTwo = "00000000-0000-4000-8000-000000000002";
 const batchThree = "00000000-0000-4000-8000-000000000003";
+
+function merge(field: ClassificationMerge["field"], from: string, to: string): ClassificationMerge {
+  return { field, from, to, reason: "Owner.", decidedAt: "2026-11-11" };
+}
 
 function at(day: number): Date {
   return new Date(Date.UTC(2026, 9, day));
@@ -60,6 +66,7 @@ describe.skipIf(!hasTestDatabase)("classification persistence", () => {
     // Batches take their rows with them.
     await database.db.delete(classificationBatches);
     await database.db.delete(classificationOverrides);
+    await database.db.delete(classificationMerges);
   });
 
   const item = (universeId: number, name: string) => ({ universeId, name, hadThumbnail: true });
@@ -320,6 +327,71 @@ describe.skipIf(!hasTestDatabase)("classification persistence", () => {
       expect(await view()).toEqual([
         { universe_id: 3, family: "obby", template: null, core_action: null, theme: null, model: null, prompt_version: null, overridden: true },
       ]);
+    });
+  });
+
+  describe("classification merges", () => {
+    it("replaces the table's content and returns the count", async () => {
+      await syncClassificationMerges(database.db, [merge("family", "old", "older")]);
+      const count = await syncClassificationMerges(database.db, [merge("family", "Rhythm  Game", "rhythm"), merge("template", "{thing} Roleplay", "{thing} RP")]);
+      expect(count).toBe(2);
+      const rows = await database.db.select().from(classificationMerges);
+      expect(rows.map((row) => [row.field, row.fromKey, row.fromValue, row.toValue]).sort()).toEqual([
+        ["family", "rhythm game", "Rhythm  Game", "rhythm"],
+        ["template", "{thing} roleplay", "{thing} Roleplay", "{thing} RP"],
+      ]);
+    });
+
+    it("empties the table with an empty list", async () => {
+      await syncClassificationMerges(database.db, [merge("family", "a", "b")]);
+      expect(await syncClassificationMerges(database.db, [])).toBe(0);
+      expect(await database.db.select().from(classificationMerges)).toEqual([]);
+    });
+  });
+
+  describe("game_formats", () => {
+    const formats = async () => {
+      const result = await database.db.execute<{ universe_id: string; family: string; template: string | null; reward_loop: string | null }>(
+        sql`select universe_id, family, template, reward_loop from game_formats order by universe_id`,
+      );
+      return result.rows.map((row) => ({ ...row, universe_id: Number(row.universe_id) }));
+    };
+
+    async function classify(id: number, values: Partial<GameClassification>, batch = batchOne) {
+      await submit(batch, 2, [item(id, `Game ${id}`)]);
+      await storeBatchResults(database.db, batch, [classified(id, values)], collected(3));
+    }
+
+    it("merges a family case-insensitively", async () => {
+      await classify(1, { family: "Rhythm Game" });
+      await syncClassificationMerges(database.db, [merge("family", "rhythm game", "rhythm")]);
+      expect(await formats()).toMatchObject([{ universe_id: 1, family: "rhythm" }]);
+    });
+
+    it("merges a value with a leading tab and repeated spaces", async () => {
+      await classify(1, { family: "\tRhythm  Game" });
+      await syncClassificationMerges(database.db, [merge("family", "rhythm game", "rhythm")]);
+      expect(await formats()).toMatchObject([{ universe_id: 1, family: "rhythm" }]);
+    });
+
+    it("does not let a template merge touch a family with the same text", async () => {
+      await classify(1, { family: "Same", template: "Same" });
+      await syncClassificationMerges(database.db, [merge("template", "same", "merged")]);
+      expect(await formats()).toMatchObject([{ universe_id: 1, family: "Same", template: "merged" }]);
+    });
+
+    it("merges an overridden value too", async () => {
+      await classify(1, { family: "obby" });
+      await syncClassificationOverrides(database.db, [{ universeId: 1, field: "family", value: "Rhythm Game", reason: "Owner.", decidedAt: "2026-10-29" }]);
+      await syncClassificationMerges(database.db, [merge("family", "rhythm game", "rhythm")]);
+      expect(await formats()).toMatchObject([{ universe_id: 1, family: "rhythm" }]);
+    });
+
+    it("keeps the values of a game with no merge, case included, and drops games without a family", async () => {
+      await classify(1, { family: "Steal A", rewardLoop: "Brainrots" });
+      await syncClassificationOverrides(database.db, [{ universeId: 3, field: "template", value: "x", reason: "Owner.", decidedAt: "2026-10-29" }]);
+      await syncClassificationMerges(database.db, [merge("family", "other", "another")]);
+      expect(await formats()).toEqual([{ universe_id: 1, family: "Steal A", template: "Steal a {thing}", reward_loop: "Brainrots" }]);
     });
   });
 });
