@@ -113,6 +113,13 @@
       "when": 1794403595146,
       "tag": "0015_game_formats",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1794403882382,
+      "tag": "0016_format_weeks",
+      "breakpoints": true
     }
   ]
 }

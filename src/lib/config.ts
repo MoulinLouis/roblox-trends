@@ -302,6 +302,30 @@ export const RADAR_CONFIG = {
   pageSize: 100,
 } as const;
 
+// Format lifecycle (docs/plans/2026-11-11-radar-v2-format-stats.md): the parameters of format_weeks and format_stats.
+export const FORMAT_CONFIG = {
+  // format_weeks returns this many complete UTC weeks before as_of.
+  weeks: 12,
+  // Weeks starting before this Monday are "top": the radar then tracked about 3,800 of the biggest games, about
+  // 11,000 since. A trend never compares the two.
+  fullCoverageFrom: "2026-10-19",
+  // A hit: an entrant whose daily peak reaches a threshold within hitDays of its Roblox creation date.
+  hitDays: 14,
+  hitThresholds: { small: 1_000, large: 10_000 },
+  // Wave age counts from the first day a game of the format peaked at this CCU.
+  waveCcu: 10_000,
+  // Followers: the format's games of these ranks, in order of creation.
+  followerRanks: { first: 2, last: 10 },
+  // The phase rule, in order (provisional ratios, measured in S3).
+  trendWeeks: 4,
+  minimumGames: 5,
+  minimumCcu: 1_000,
+  emergingDays: 28,
+  risingShareRatio: 1.25,
+  decliningShareRatio: 0.8,
+  leaderCarryShare: 0.5,
+} as const;
+
 // The game page (src/app/games/[universeId]).
 export const GAME_VIEW_CONFIG = {
   // The detailed curve: every observation of these last days.
