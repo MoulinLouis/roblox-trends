@@ -1,0 +1,11 @@
+[Unit]
+Description=Radar early breakout alerts every hour
+
+[Timer]
+OnCalendar=*:56:30
+AccuracySec=1s
+Persistent=false
+Unit=radar-job@alerts.service
+
+[Install]
+WantedBy=timers.target
