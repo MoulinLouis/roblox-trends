@@ -120,6 +120,13 @@
       "when": 1794403882382,
       "tag": "0016_format_weeks",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1794404317045,
+      "tag": "0017_format_stats",
+      "breakpoints": true
     }
   ]
 }

@@ -5,7 +5,7 @@ import { FORMAT_CONFIG } from "@/lib/config";
 import { gameDetail } from "@/test/fixtures";
 import { createDatabase } from "./client";
 import { insertSubmittingBatch, markBatchSubmitted, storeBatchResults } from "./classifications";
-import { type FormatWeek, formatWeeks } from "./formats";
+import { type FormatStat, type FormatStatsConfig, formatStats, type FormatWeek, formatWeeks } from "./formats";
 import { upsertGameDetails } from "./games";
 import { classificationBatches, gameDailyLegacy, games } from "./schema";
 import { createTestDatabase, hasTestDatabase, type TestDatabase } from "./test-database";
@@ -28,7 +28,7 @@ function iso(day: string): number {
   return Date.parse(`${day}T00:00:00Z`);
 }
 
-describe.skipIf(!hasTestDatabase)("format_weeks", () => {
+describe.skipIf(!hasTestDatabase)("format queries", () => {
   let database: TestDatabase;
 
   beforeAll(async () => {
@@ -244,5 +244,156 @@ describe.skipIf(!hasTestDatabase)("format_weeks", () => {
     const weeks = await formatWeeks(database.db, { asOf, dimension: "family", format: "OBBY" }, config);
     expect(weeks).toHaveLength(1);
     expect(weeks[0]).toMatchObject({ dimension: "family", format: "obby" });
+  });
+  describe("format_stats", () => {
+    // The four weeks are Mar 2, 9, 16 and 23 (W-3 to W). All full coverage unless a test moves the date.
+    const statsConfig: FormatStatsConfig = { ...FORMAT_CONFIG, trendWeeks: 4, fullCoverageFrom: "2026-03-02" };
+    const marketCcu = 20_000;
+    const weekStarts = ["2026-03-02", "2026-03-09", "2026-03-16", "2026-03-23"];
+    const alpha = [1, 2, 3, 4, 5];
+
+    // Per-week CCU of one game over the four weeks; a zero leaves the week without readings. The peak stays under
+    // the wave threshold unless a test says otherwise.
+    async function place(id: number, ccus: number[]): Promise<void> {
+      for (const [index, ccu] of ccus.entries()) {
+        if (ccu > 0) await readings(id, weekStarts[index] as string, 7, ccu, 5_000);
+      }
+    }
+
+    // The format's games share these shares of a market of 20,000 CCU; game 900 is the rest of the market.
+    async function shares(ids: number[], weekly: number[]): Promise<void> {
+      for (const id of ids) await place(id, weekly.map((share) => (marketCcu * share) / ids.length));
+      await place(900, weekly.map((share) => marketCcu * (1 - share)));
+    }
+
+    const seedAlpha = (extra: Spec[] = []) =>
+      seed([...alpha.map((id) => ({ id, family: "alpha" })), { id: 900, family: "market" }, ...extra]);
+
+    async function alphaStat(config = statsConfig): Promise<FormatStat> {
+      const stats = await formatStats(database.db, { asOf }, config);
+      const stat = stats.find((row) => row.dimension === "family" && row.format === "alpha");
+      expect(stat).toBeDefined();
+      return stat as FormatStat;
+    }
+
+    it("labels a format rising when its share trend reaches the ratio (step 4)", async () => {
+      await seedAlpha();
+      await shares(alpha, [0.1, 0.1, 0.15, 0.15]);
+      const stat = await alphaStat();
+      expect(stat.shareTrend).toBeCloseTo(1.5, 10);
+      expect(stat).toMatchObject({ phase: "rising", games: 5, coverage: "full" });
+      expect(stat.phaseRule).toContain("1.50");
+      expect(stat.phaseRule).toContain("1.25");
+    });
+
+    it("labels a format declining when its share trend falls to the ratio (step 4)", async () => {
+      await seedAlpha();
+      await shares(alpha, [0.2, 0.2, 0.15, 0.15]);
+      const stat = await alphaStat();
+      expect(stat.shareTrend).toBeCloseTo(0.75, 10);
+      expect(stat.phase).toBe("declining");
+      expect(stat.phaseRule).toContain("0.75");
+      expect(stat.phaseRule).toContain("0.80");
+    });
+
+    it("labels a format plateau between the ratios (step 6)", async () => {
+      await seedAlpha();
+      await shares(alpha, [0.2, 0.2, 0.19, 0.21]);
+      const stat = await alphaStat();
+      expect(stat.shareTrend).toBeCloseTo(1, 10);
+      expect(stat.phase).toBe("plateau");
+    });
+
+    it("labels a format declining when a falling leader carries it (step 5)", async () => {
+      await seedAlpha();
+      // Flat shares of 0.2. Game 1 holds 70% of the format in week W and its CCU falls to 0.7 of the first half.
+      await place(1, [4_000, 4_000, 2_800, 2_800]);
+      for (const id of [2, 3, 4, 5]) await place(id, [0, 0, 300, 300]);
+      await place(900, [16_000, 16_000, 16_000, 16_000]);
+      const stat = await alphaStat();
+      expect(stat.shareTrend).toBeCloseTo(1, 10);
+      expect(stat.leaderShare).toBeCloseTo(0.7, 10);
+      expect(stat.leaderTrend).toBeCloseTo(0.7, 10);
+      expect(stat).toMatchObject({ phase: "declining", leaderUniverseId: 1, leaderName: "Game 1" });
+      expect(stat.phaseRule).toContain("Game 1");
+    });
+
+    it("follows week W's leader through its own CCU when another led W-3 (step 5)", async () => {
+      await seedAlpha();
+      // Flat shares of 0.2. Game 2 leads week W and was second in W-3; game 1 led W-3 and falls.
+      await place(1, [3_000, 3_000, 800, 800]);
+      await place(2, [1_000, 1_000, 2_800, 2_800]);
+      for (const id of [3, 4, 5]) await place(id, [0, 0, 400 / 3, 400 / 3]);
+      await place(900, [16_000, 16_000, 16_000, 16_000]);
+      const stat = await alphaStat();
+      expect(stat.leaderUniverseId).toBe(2);
+      expect(stat.leaderTrend).toBeCloseTo(2.8, 10);
+      expect(stat.phase).toBe("plateau");
+    });
+
+    it("labels a format unknown when the window mixes coverages (step 2)", async () => {
+      await seedAlpha();
+      await shares(alpha, [0.1, 0.1, 0.15, 0.15]);
+      const stat = await alphaStat({ ...statsConfig, fullCoverageFrom: "2026-03-16" });
+      expect(stat.phase).toBe("unknown");
+      expect(stat.phaseRule).toContain("2026-03-16");
+    });
+
+    it("labels a format emerging when its first wave day is under the emerging days old (step 3)", async () => {
+      await seedAlpha([{ id: 6, family: "alpha" }]);
+      await shares(alpha, [0.2, 0.2, 0.2, 0.2]);
+      // Game 6 first peaks at 10,000 CCU 10 days before as_of.
+      await readings(6, "2026-03-20", 1, 0, 10_000);
+      const stat = await alphaStat();
+      expect(stat).toMatchObject({ phase: "emerging", waveAgeDays: 10, waveBeforeHistory: false });
+      expect(stat.phaseRule).toContain("10");
+      expect(stat.phaseRule).toContain("28");
+    });
+
+    it("labels a format emerging, without dividing by zero, when W-3 and W-2 have no readings (step 3)", async () => {
+      await seedAlpha();
+      for (const id of alpha) await place(id, [0, 0, 800, 800]);
+      await place(900, [20_000, 20_000, 16_000, 16_000]);
+      const stat = await alphaStat();
+      expect(stat.phase).toBe("emerging");
+      expect(stat.shareTrend).toBeNull();
+      expect(stat.phaseRule).toContain("no readings");
+    });
+
+    it("labels a format small below the minimum games or CCU in week W (step 1)", async () => {
+      await seed([...alpha.slice(0, 4).map((id) => ({ id, family: "alpha" })), { id: 900, family: "market" }]);
+      await shares(alpha.slice(0, 4), [0.2, 0.2, 0.2, 0.2]);
+      const stat = await alphaStat();
+      expect(stat).toMatchObject({ phase: "small", games: 4 });
+      expect(stat.phaseRule).toContain("4 games");
+    });
+
+    it("takes the followers' median peak over ranks 2 to 10 in order of creation", async () => {
+      const ids = Array.from({ length: 11 }, (_, index) => index + 1);
+      // Created on successive days from Mar 1; the 14-day windows have ended by as_of.
+      await seed(
+        ids.map((id) => ({ id, family: "beta", created: `2026-03-${String(id).padStart(2, "0")}T10:00:00Z` })),
+      );
+      for (const id of ids) {
+        await readings(id, `2026-03-${String(id).padStart(2, "0")}`, 1, 50, 100 * id);
+        await readings(id, "2026-03-26", 1, 50, 50);
+      }
+      const stats = await formatStats(database.db, { asOf }, statsConfig);
+      const beta = stats.find((row) => row.dimension === "family" && row.format === "beta");
+      expect(beta).toMatchObject({ followers: 9, followersMedianPeak: 600, entrants: 11 });
+    });
+
+    it("counts the wave's age in days and flags a wave starting with the history", async () => {
+      await seedAlpha([{ id: 6, family: "alpha" }, { id: 7, family: "market" }]);
+      await shares(alpha, [0.2, 0.2, 0.2, 0.2]);
+      // 40 days before as_of, and the first day of the history.
+      await readings(6, "2026-02-18", 1, 100, 10_000);
+      const atStart = await alphaStat();
+      expect(atStart).toMatchObject({ waveAgeDays: 40, waveBeforeHistory: true, phase: "plateau" });
+      expect(atStart.firstWaveDay).toEqual(new Date("2026-02-18T00:00:00Z"));
+      // A reading from an earlier day: the wave begins inside the history.
+      await readings(7, "2026-02-10", 1, 10, 10);
+      expect(await alphaStat()).toMatchObject({ waveAgeDays: 40, waveBeforeHistory: false });
+    });
   });
 });
