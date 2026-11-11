@@ -373,7 +373,7 @@ A check created by provisioning has not received a ping, and Healthchecks.io doe
 
 The `alerts` job (`radar-alerts.timer`, `*:56:30`) tells the owner on Discord about a game early in its breakout. Each run reads only the database: it finds the games created within `ALERT_CONFIG.maximumAgeDays` that crossed `crossingCcu` in the last `candidateWindowHours`, decides which alerts they call for, records them in `alerts`, then posts them to the webhook. An alert is recorded before it is sent and marked sent (`sent_at`) only after its post succeeded, so a failed post stays unsent and the next run retries it.
 
-- A `wave` alert (the 2nd and 3rd games of one pattern key to cross within the wave window) is posted on its own right away.
+- A `wave` alert (the 3rd game of one pattern key to cross, within `waveWindowDays` of the first) is posted on its own right away.
 - `first_breakout` alerts wait for the daily digest, one message. It goes out at the first run at or after 08:00 Europe/Paris (daylight saving follows Paris) when no digest of first breakouts went out since 08:00 that day. A day whose first run after 08:00 had nothing to send can still send a later run's first breakouts the same day; once a digest went out, the day is closed.
 - A run is `degraded` when a post failed or, without `/etc/radar/discord.env`, when any alert is left unsent: the alerts are still recorded and go out on the first run after the file exists. With a webhook, first breakouts waiting for the digest hour are not degraded. Its stats are `candidates`, `firstBreakouts`, `waves`, `sent` and `unsent`.
 
@@ -394,7 +394,7 @@ ssh -N -L 15432:/var/run/postgresql/.s.PGSQL.5432 radar-analysis
 DATABASE_URL=postgresql://radar_analysis@localhost:15432/radar npm run alerts:backtest -- --from 2026-08-25 --to 2026-11-10
 ```
 
-`--words-only` keeps only the title-word keys (no classified format), `--coverage-from <date>` sets the day the classification coverage starts (default 2026-10-19), and the replay never runs past now. It prints each push and the weekly counts; aim for about 3 to 5 pushes and 10 digest games a day on average. Change `ALERT_CONFIG` in the repository, rerun the backtest, then deploy.
+`--words-only` keeps only the title-word keys (no classified format), `--coverage-from <date>` sets the day the classification coverage starts (default 2026-10-19), and the replay never runs past now. It prints each push and the weekly counts; aim for about 3 to 5 pushes a week and 10 digest games a day on average. Change `ALERT_CONFIG` in the repository, rerun the backtest, then deploy.
 
 Pause it: `systemctl disable --now radar-alerts.timer`. Deploys never re-enable a disabled timer. Pausing collection (above) pauses it too.
 

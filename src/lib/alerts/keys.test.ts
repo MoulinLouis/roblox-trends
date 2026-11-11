@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { patternKeys, wordFrequencies } from "./keys";
+import { ALERT_CONFIG } from "../config";
+import { patternKeys as pattern, wordFrequencies } from "./keys";
 import type { GameFormat } from "./types";
 
 const game = (overrides: Partial<GameFormat> = {}): GameFormat => ({
@@ -9,6 +10,11 @@ const game = (overrides: Partial<GameFormat> = {}): GameFormat => ({
   coreAction: null,
   ...overrides,
 });
+
+// Pinned: these tests are about the keys, not the number of titles ALERT_CONFIG now asks of a word.
+const PINNED = { ...ALERT_CONFIG, minimumWordGames: 2 } as unknown as typeof ALERT_CONFIG;
+const patternKeys = (...args: [Parameters<typeof pattern>[0], Parameters<typeof pattern>[1], number, { wordsOnly?: boolean }?]) =>
+  pattern(args[0], args[1], args[2], args[3], PINNED);
 
 const frequencies = new Map([
   ["ragdoll", 115],
@@ -27,6 +33,11 @@ describe("patternKeys", () => {
     ]);
     expect(patternKeys(game(), counts, 16_000)).toEqual(["word:physic"]);
     expect(patternKeys(game(), new Map([["ragdoll", 161], ["physic", 2]]), 16_000)).toEqual(["word:physic"]);
+  });
+
+  it("keeps a word only when the configured number of titles carry it", () => {
+    const counts = new Map([["ragdoll", ALERT_CONFIG.minimumWordGames - 1], ["physic", ALERT_CONFIG.minimumWordGames]]);
+    expect(pattern(game(), counts, 1_000_000)).toEqual(["word:physic"]);
   });
 
   it("drops a word with no known frequency", () => {

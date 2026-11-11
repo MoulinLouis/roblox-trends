@@ -330,25 +330,34 @@ export const FORMAT_CONFIG = {
 
 // Early breakout alerts (docs/plans/2026-11-11-radar-v2-early-alerts-design.md). Measured on 2026-11-11: a median of
 // about 4 days from 1,000 to 10,000 CCU, and 270–350 games under 30 days old crossing 1,000 CCU a week.
+// The age, wave and word values were chosen with `npm run alerts:backtest` on 2026-11-12, over 2026-08-25 to
+// 2026-11-11 with full classification coverage from 2026-10-19. The first values (30 days, ranks 2 and 3, a 14-day
+// window, 2 titles) pushed 74 waves a week and put 35 games a day in the digest; these give 4 pushes a week and 9
+// digest games a day, and push the realistic ragdoll wave on 2026-10-22. The runs are in the plan's "Execution notes"
+// (docs/plans/2026-11-11-radar-v2-early-alerts.md).
 export const ALERT_CONFIG = {
   // A game crossing this CCU is a breakout candidate.
   crossingCcu: 1_000,
-  // Only games created within this many days of the crossing count as early.
-  maximumAgeDays: 30,
-  // How far back a game's history is read to decide whether it crossed.
+  // Only games created within this many days of the crossing count as early. The digest falls under about 10 games a
+  // day only below 14 days (14 gives about 12 a day). The design measured a median of 13.5 days from creation to
+  // 1,000 CCU, so this ignores about half of the breakouts.
+  maximumAgeDays: 12,
+  // How far back a key's prior breakouts count before a candidate's crossing.
   lookbackDays: 60,
   // A crossing older than this is no longer news.
   candidateWindowHours: 48,
   // A candidate not yet classified waits this long for its format before it is judged without it.
   unclassifiedWaitHours: 12,
-  // A wave alert fires for the games of a pattern ranked 2nd and 3rd to cross, in order of crossing.
-  waveRanks: [2, 3],
-  // The crossings of a wave must fall within this many days of each other.
-  waveWindowDays: 14,
+  // A wave alert fires for the game of a pattern ranked 3rd to cross, in order of crossing: the owner's "second (or
+  // third)", the third. Rank 2 gave 13 pushes a week.
+  waveRanks: [3],
+  // The crossings of a wave must fall within this many days of each other: three breakouts within a week of the first.
+  waveWindowDays: 7,
   // A pattern that alerted a wave stays silent this long.
   waveCooldownDays: 30,
-  // A title word is a pattern key only when at least this many titles carry it...
-  minimumWordGames: 2,
+  // A title word is a pattern key only when at least this many titles carry it: generic words (eat, ride, become...)
+  // and one-off names stopped forming waves once a new word counts only with 30 tracked titles...
+  minimumWordGames: 30,
   // ...and at most this share of all titles does: a word in more is too generic to point to one trend.
   maximumWordShare: 0.01,
   // The daily digest goes out at this hour of this time zone.

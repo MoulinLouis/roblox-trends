@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { AlertDecision } from "@/lib/alerts/types";
 import type { GameClassification } from "@/lib/classify/schema";
+import { ALERT_CONFIG } from "@/lib/config";
 import { gameDetail } from "@/test/fixtures";
 import {
   markAlertsSent,
@@ -24,6 +25,8 @@ import { createTestDatabase, hasTestDatabase, type TestDatabase } from "./test-d
 const at = (value: string) => new Date(value);
 const createdSince = at("2026-03-25T00:00:00Z");
 const until = at("2026-06-01T00:00:00Z");
+// The age limit these fixtures are about (a crossing on day 30 counts, on day 31 not), whatever ALERT_CONFIG is tuned to.
+const config = { ...ALERT_CONFIG, maximumAgeDays: 30 } as unknown as typeof ALERT_CONFIG;
 const batchId = "00000000-0000-4000-8000-0000000000a1";
 
 describe.skipIf(!hasTestDatabase)("alert queries", () => {
@@ -70,10 +73,11 @@ describe.skipIf(!hasTestDatabase)("alert queries", () => {
   }
 
   async function breakouts(options: { createdSince?: Date; until?: Date } = {}) {
-    const rows = await readBreakouts(database.db, {
-      createdSince: options.createdSince ?? createdSince,
-      until: options.until ?? until,
-    });
+    const rows = await readBreakouts(
+      database.db,
+      { createdSince: options.createdSince ?? createdSince, until: options.until ?? until },
+      config,
+    );
     return new Map(rows.map((row) => [row.universeId, row]));
   }
 

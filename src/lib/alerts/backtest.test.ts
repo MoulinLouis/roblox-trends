@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { replayAlerts } from "./backtest";
+import { ALERT_CONFIG } from "../config";
+import { replayAlerts as replay } from "./backtest";
+import type { ReplayResult } from "./backtest";
 import type { Breakout } from "./types";
 
 const at = (iso: string) => new Date(iso);
@@ -10,6 +12,11 @@ const breakout = (universeId: number, crossedAt: string, keys: string[]): Breako
   keys,
   classified: true,
 });
+
+// The replay mechanics are tested with the first and second crossings of a key forming a wave within 14 days, not
+// with the values ALERT_CONFIG is tuned to.
+const PINNED = { ...ALERT_CONFIG, waveRanks: [2, 3], waveWindowDays: 14 } as unknown as typeof ALERT_CONFIG;
+const replayAlerts = (input: Parameters<typeof replay>[0]): ReplayResult => replay(input, PINNED);
 
 const from = at("2026-09-01T00:00:00Z");
 const to = at("2026-09-20T00:00:00Z");
