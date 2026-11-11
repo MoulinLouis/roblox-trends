@@ -100,12 +100,13 @@ describe.skipIf(!hasTestDatabase)("alerts job", () => {
   const unsent = async () => (await readUnsentAlerts(database.db)).map((alert) => `${alert.kind}:${alert.universeId}`);
 
   it("records a forming wave and posts it in the same run, and the next run posts nothing", async () => {
-    // Games 1 and 2 share a format: 1 is the first of it, 2 the second, which forms a wave.
+    // Games 1, 2 and 3 share a format: 1 is the first of it, 2 the second (no alert), 3 the third, which forms a wave.
     await breakout(1, "2026-03-10T10:00:00Z", "a");
-    await breakout(2, "2026-03-10T14:00:00Z", "a");
+    await breakout(2, "2026-03-10T12:00:00Z", "a");
+    await breakout(3, "2026-03-10T14:00:00Z", "a");
     // 15:30 UTC is 16:30 Paris (winter): the digest is due too.
     const first = await run("2026-03-10T15:30:00Z");
-    expect(first.stats).toMatchObject({ candidates: 2, firstBreakouts: 1, waves: 1, sent: 2, unsent: 0 });
+    expect(first.stats).toMatchObject({ candidates: 3, firstBreakouts: 1, waves: 1, sent: 2, unsent: 0 });
     expect(first.status).toBe("success");
     expect(posted).toHaveLength(2);
     expect(posted.every((entry) => entry.url === webhook)).toBe(true);
@@ -164,7 +165,8 @@ describe.skipIf(!hasTestDatabase)("alerts job", () => {
 
   it("records alerts without a webhook URL and degrades, and a later run with the URL posts them", async () => {
     await breakout(1, "2026-03-10T10:00:00Z", "a");
-    await breakout(2, "2026-03-10T14:00:00Z", "a");
+    await breakout(2, "2026-03-10T12:00:00Z", "a");
+    await breakout(3, "2026-03-10T14:00:00Z", "a");
     for (const missing of [undefined, ""]) {
       url = missing;
       const result = await run("2026-03-10T15:30:00Z");
@@ -181,12 +183,13 @@ describe.skipIf(!hasTestDatabase)("alerts job", () => {
 
   it("leaves an alert unsent when the post throws, degrades, and sends it on the next run", async () => {
     await breakout(1, "2026-03-10T10:00:00Z", "a");
-    await breakout(2, "2026-03-10T14:00:00Z", "a");
+    await breakout(2, "2026-03-10T12:00:00Z", "a");
+    await breakout(3, "2026-03-10T14:00:00Z", "a");
     failing = true;
     const failed = await run("2026-03-10T15:30:00Z");
     expect(failed.status).toBe("degraded");
     expect(failed.stats).toMatchObject({ sent: 0, unsent: 2 });
-    expect(await unsent()).toEqual(["first_breakout:1", "wave:2"]);
+    expect(await unsent()).toEqual(["first_breakout:1", "wave:3"]);
     failing = false;
     const next = await run("2026-03-10T16:30:00Z");
     expect(next.status).toBe("success");
@@ -196,7 +199,8 @@ describe.skipIf(!hasTestDatabase)("alerts job", () => {
 
   it("keeps the webhook URL out of the stats", async () => {
     await breakout(1, "2026-03-10T10:00:00Z", "a");
-    await breakout(2, "2026-03-10T14:00:00Z", "a");
+    await breakout(2, "2026-03-10T12:00:00Z", "a");
+    await breakout(3, "2026-03-10T14:00:00Z", "a");
     failing = true;
     const failed = await run("2026-03-10T15:30:00Z");
     expect(JSON.stringify(failed.stats)).not.toContain("secret-token");

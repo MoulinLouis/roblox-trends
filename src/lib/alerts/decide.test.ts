@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { decideAlerts } from "./decide";
+import { ALERT_CONFIG } from "../config";
+import { decideAlerts as decide } from "./decide";
 import type { Breakout, PastAlert } from "./types";
 
 const HOUR = 3_600_000;
@@ -19,6 +20,11 @@ function pastAlert(kind: PastAlert["kind"], universeId: number, keys: string[], 
 }
 
 const KEY = "word:ragdoll";
+
+// These tests are about the decision rules (a wave for the 2nd and 3rd breakout within 14 days), not the values
+// ALERT_CONFIG is tuned to, so they pin the ranks and the window.
+const PINNED = { ...ALERT_CONFIG, waveRanks: [2, 3], waveWindowDays: 14 } as unknown as typeof ALERT_CONFIG;
+const decideAlerts = (input: Parameters<typeof decide>[0]) => decide(input, PINNED);
 
 describe("decideAlerts", () => {
   it("gives a first_breakout for the first breakout of a key", () => {
@@ -154,5 +160,16 @@ describe("decideAlerts", () => {
     ];
     const [decision] = decideAlerts({ breakouts, pastAlerts: [], now: NOW });
     expect(decision.priors).toEqual({ "word:a": [10, 30], "word:b": [10, 20] });
+  });
+
+  it("follows the tuned ranks and window by default: a wave for the 3rd breakout within a week only", () => {
+    const within = [breakout(1, at(6), [KEY]), breakout(2, at(3), [KEY]), breakout(3, at(0, 1), [KEY])];
+    expect(decide({ breakouts: within, pastAlerts: [], now: NOW })).toEqual([
+      { kind: "wave", universeId: 3, keys: [KEY], priors: { [KEY]: [1, 2] } },
+    ]);
+    const second = [breakout(1, at(3), [KEY]), breakout(2, at(0, 1), [KEY])];
+    expect(decide({ breakouts: second, pastAlerts: [], now: NOW })).toEqual([]);
+    const slow = [breakout(1, at(9), [KEY]), breakout(2, at(5), [KEY]), breakout(3, at(0, 1), [KEY])];
+    expect(decide({ breakouts: slow, pastAlerts: [], now: NOW })).toEqual([]);
   });
 });
