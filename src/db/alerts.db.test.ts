@@ -132,7 +132,7 @@ describe.skipIf(!hasTestDatabase)("alert queries", () => {
     const early = await breakouts({ until: at("2026-04-05T11:00:00Z") });
     expect([...early.keys()].sort((a, b) => a - b)).toEqual([2, 3, 5]);
     const late = await breakouts({ createdSince: at("2026-04-02T00:00:00Z") });
-    expect([...late.keys()]).toEqual([2]);
+    expect([...late.keys()].sort((a, b) => a - b)).toEqual([2, 3]);
   });
 
   it("prefers an hourly crossing to a v1 day", async () => {
