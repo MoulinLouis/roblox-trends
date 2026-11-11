@@ -196,6 +196,72 @@ describe("alertEvidence", () => {
   });
 });
 
+describe("untrusted text", () => {
+  const FORBIDDEN = ["$", "`", "!", "\\", ";", "|", "&", "<", ">", "(", ")"];
+
+  it("keeps shell syntax out of the concept command", () => {
+    const e = alertEvidence(
+      {
+        kind: "first_breakout",
+        universeId: 1,
+        keys: ["word:ragdoll", "word:sim", "action:simulator|x"],
+        priors: {},
+      },
+      new Map([
+        [
+          1,
+          facts({
+            name: "$(touch x) Ragdoll `id` $HOME Sim!",
+            coreAction: "run `id` $(reboot) now; rm | x & y",
+          }),
+        ],
+      ]),
+      {},
+    );
+    const command = e.conceptCommand!;
+    const phrases = command.slice("npm run concept -- ".length);
+    for (const bad of FORBIDDEN) expect(phrases).not.toContain(bad);
+    expect(phrases).toMatch(/^"[^"]+"( "[^"]+")?$/);
+    expect(phrases).toContain("ragdoll");
+  });
+
+  it("drops a phrase left empty", () => {
+    const e = alertEvidence(
+      { kind: "wave", universeId: 1, keys: ["action:a|b"], priors: {} },
+      new Map([[1, facts({ coreAction: "$()`" })]]),
+      {},
+    );
+    expect(e.conceptCommand).toBeNull();
+  });
+
+  it("escapes markdown and masked links in rendered text", () => {
+    const name = "[Free Robux](https://evil.example) **x** ||y|| `z`";
+    const e = evidence(1, { name, family: "[a](b)", coreAction: "*c*" }, {});
+    e.keys[0].priors[0].name = name;
+    for (const message of [waveMessage(e), digestMessage([e])]) {
+      const texts = message.embeds.flatMap((m) => [
+        m.description ?? "",
+        ...(m.fields ?? []).flatMap((f) => [f.name, f.value]),
+      ]);
+      const joined = texts.join("\n");
+      expect(joined).not.toMatch(/(?<!\\)\]\(/);
+      if (message.embeds[0].fields!.length > 1)
+        expect(joined).toContain("\\[Free Robux\\]\\(");
+      expect(joined).not.toMatch(/(?<!\\)\*\*x/);
+      expect(joined).not.toMatch(/(?<!\\)\|\|y/);
+      checkLimits(message);
+    }
+  });
+
+  it("keeps the limits when escaping doubles a long name", () => {
+    const name = "*".repeat(500);
+    const e = evidence(1, { name }, {});
+    e.keys[0].priors[0].name = name;
+    checkLimits(waveMessage(e));
+    checkLimits(digestMessage(Array.from({ length: 10 }, () => e)));
+  });
+});
+
 describe("waveMessage", () => {
   it("renders one embed with the linked title, thumbnail and fields", () => {
     const m = waveMessage(evidence());
