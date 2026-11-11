@@ -49,6 +49,12 @@ export const WATCHED_STATS: Partial<Record<JobName, { values: readonly string[];
   classify: {
     values: ["submitted", "classified", "failed", "released", "costUsd", "cacheReads", "waitingBatches", "blockedBatch"],
   },
+  // candidates are the breakouts inside the candidate window; firstBreakouts and waves count the decisions of the run;
+  // sent counts the alerts marked sent in the run and unsent those still waiting at its end (no webhook, a failed post,
+  // or first breakouts waiting for the daily digest).
+  alerts: {
+    values: ["candidates", "firstBreakouts", "waves", "sent", "unsent"],
+  },
 };
 
 // Every line fits a 120-column terminal: watched stats wrap, and a message preview takes the room its line leaves.

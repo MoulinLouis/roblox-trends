@@ -59,7 +59,7 @@ Users: `radar` (application, PostgreSQL role `radar` by peer authentication), `a
 
 | Unit | Runs |
 | --- | --- |
-| `radar-job@<job>.service` | `scripts/job.ts <job>` as `radar`. `TimeoutStartSec` from its drop-in (census and poll 570 s, the hourly jobs 1830 s); `classify` also loads `/etc/radar/anthropic.env` through its `anthropic.conf` drop-in; on a unit failure, `radar-job-failed@<job>.service` sends the `/fail` ping |
+| `radar-job@<job>.service` | `scripts/job.ts <job>` as `radar`. `TimeoutStartSec` from its drop-in (census and poll 570 s, the hourly jobs 1830 s); `classify` also loads `/etc/radar/anthropic.env` through its `anthropic.conf` drop-in, and `alerts` loads `/etc/radar/discord.env` through its `discord.conf` drop-in; on a unit failure, `radar-job-failed@<job>.service` sends the `/fail` ping |
 | `radar-web.service` | `next start` on `127.0.0.1:3000` as `radar`, restarted on failure; writes only `.next/cache` |
 | `radar-deploy.service` | `ops/bin/deploy.sh` as root |
 | `radar-system-check.service` | `scripts/system-check.ts` as `radar` |
@@ -79,22 +79,23 @@ Jobs sharing Roblox hosts never start in the same minute (HTTP spacing is per pr
 | `radar-explore.timer` | `*:26:30` | +26:30 |
 | `radar-thumbnails.timer` | `*:36:30` | +36:30 |
 | `radar-classify.timer` | `*:46:30` | +46:30 |
+| `radar-alerts.timer` | `*:56:30` | +56:30 |
 | `radar-system-check.timer` | `*:4/15:00` | every 15 minutes |
 | `radar-deploy.timer` | `*:1/5:30` | every 5 minutes |
 | `radar-backup-diff.timer` | `Mon..Sat *-*-* 03:10:00` | daily differential |
 | `radar-backup-full.timer` | `Sun *-*-* 03:10:00` | weekly full |
 | `radar-restore-test.timer` | `Sun *-*-* 05:30:00` | weekly restore test |
 
-Job timers are not persistent: a slot missed while the server was down is not caught up. The deploy starts only the job timers that are enabled, and never enables `radar-classify.timer`: the owner enables it after a first manual run (section 4, Classification). The backup and restore-test timers are persistent: a missed run starts at boot.
+Job timers are not persistent: a slot missed while the server was down is not caught up. The deploy starts only the job timers that are enabled, and never enables `radar-classify.timer` or `radar-alerts.timer`: the owner enables the first after a first manual run (section 4, Classification), and the second once `/etc/radar/discord.env` exists. The backup and restore-test timers are persistent: a missed run starts at boot.
 
-### Healthchecks checks (18 of the 20 free checks)
+### Healthchecks checks (20 of the 20 free checks)
 
 Project `radar` on Healthchecks.io; every check notifies every integration of the project (email, and Telegram if added).
 
 | Slug | Period | Grace | Pinged by |
 | --- | --- | --- | --- |
-| `radar-<job>` (7) | job interval | `timeoutMs` + 5 min | every completed run (degraded included); `/fail` from the job or from `radar-job-failed@` |
-| `radar-<job>-quality` (7) | job interval | 60 min | fully successful runs only |
+| `radar-<job>` (8) | job interval | `timeoutMs` + 5 min | every completed run (degraded included); `/fail` from the job or from `radar-job-failed@` |
+| `radar-<job>-quality` (8) | job interval | 60 min | fully successful runs only |
 | `radar-deploy` | 5 min | 30 min | every deploy timer run |
 | `radar-system` | 15 min | 15 min | `scripts/system-check.ts` (disk, WAL archiving, TimescaleDB policies) |
 | `radar-backup` | 1 day | 3 h | `ops/bin/backup.sh` |
@@ -266,6 +267,7 @@ Rules:
 | `/etc/radar/radar.env` | `root:radar 640` | `DATABASE_URL` (peer authentication over the local socket, no password), `NEXT_TELEMETRY_DISABLED=1`; not a secret | `configure-database.sh` |
 | `/etc/radar/healthchecks.env` | `root 600` | `HEALTHCHECKS_PING_BASE=https://hc-ping.com/<ping-key>` | owner |
 | `/etc/radar/anthropic.env` | `root 600` | `ANTHROPIC_API_KEY=...`, one line: the same key the owner uses on their machine (`~/.config/radar/anthropic.env`). Only the classify unit loads it, through its `anthropic.conf` drop-in, without a `-` prefix: a missing file fails the unit, and `radar-job-failed@classify` alerts | owner, with `install -m 600 -o root -g root /dev/null /etc/radar/anthropic.env && nano /etc/radar/anthropic.env` |
+| `/etc/radar/discord.env` | `root 600` | `DISCORD_WEBHOOK_URL=...`, one line: the webhook of the alerts channel. Only the alerts unit loads it, through its `discord.conf` drop-in, with a `-` prefix: without the file the job still records alerts and runs degraded until the owner adds it | owner, with `install -m 600 -o root -g root /dev/null /etc/radar/discord.env && nano /etc/radar/discord.env` |
 | `/etc/radar/r2.env` | `root 600` | `R2_ENDPOINT` (the host only, `<account-id>.r2.cloudflarestorage.com`, with or without `https://`), `R2_BUCKET` (`radar-backups`), `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | owner |
 | `/etc/radar/pgbackrest-cipher` | `root 600` | The backup encryption passphrase | generated once by `configure-backups.sh`; restored by the owner on a rebuild |
 | `/etc/radar/deploy.env` | `root` | Optional `RADAR_DEPLOY_BRANCH` (default `main`), only to deploy another branch; absent; not a secret | owner |
@@ -361,7 +363,7 @@ Pause it: `systemctl disable --now radar-classify.timer`. Deploys never re-enabl
 First start after deploying the job, once and in order:
 
 1. **Owner** writes the key (section 3).
-2. Provision the new checks (section 8, Healthchecks checks): expect 18 lines.
+2. Provision the new checks (section 8, Healthchecks checks): expect 20 lines.
 3. Run it by hand, `systemctl start radar-job@classify.service`, then read its `job_runs` row: `runuser -u radar -- psql -X -d radar -c "select status, stats, error from job_runs where job = 'classify' order by started_at desc limit 1"`.
 4. `systemctl enable --now radar-classify.timer`.
 

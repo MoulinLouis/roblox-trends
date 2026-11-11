@@ -3,6 +3,7 @@ import { RobloxClient } from "@/lib/api/roblox";
 import { getRolimonsGames } from "@/lib/api/rolimons";
 import { downloadThumbnailJpeg } from "@/lib/classify/thumbnails";
 import { ROBLOX_REGION } from "@/lib/config";
+import { createAlertsJob } from "./alerts";
 import { createCensusJob } from "./census";
 import { createChartsJob } from "./charts";
 import { createClassifyJob } from "./classify";
@@ -25,5 +26,6 @@ export function createJobs(): JobDefinition[] {
       batches: () => new Anthropic().messages.batches,
       downloadThumbnail: (url) => downloadThumbnailJpeg(url),
     }),
+    createAlertsJob({ webhookUrl: () => process.env.DISCORD_WEBHOOK_URL }),
   ];
 }

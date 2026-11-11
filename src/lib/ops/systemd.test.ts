@@ -212,3 +212,19 @@ describe("the Anthropic key", () => {
     expect(loading).toEqual([{ path: "radar-job@classify.service.d/anthropic.conf", value: keyFile }]);
   });
 });
+
+describe("the Discord webhook", () => {
+  const dropIns = dropInDirectories.flatMap((directory) =>
+    readdirSync(new URL(`${directory}/`, units))
+      .filter((entry) => entry.endsWith(".conf"))
+      .map((entry) => `${directory}/${entry}`),
+  );
+  const environmentFiles = [...unitFiles, ...dropIns].flatMap((path) =>
+    (readUnit(path).get("EnvironmentFile") ?? []).map((value) => ({ path, value })),
+  );
+
+  it("is loaded by the alerts job only, and its absence does not fail the unit", () => {
+    const loading = environmentFiles.filter(({ value }) => value.replace(/^-/, "") === "/etc/radar/discord.env");
+    expect(loading).toEqual([{ path: "radar-job@alerts.service.d/discord.conf", value: "-/etc/radar/discord.env" }]);
+  });
+});
