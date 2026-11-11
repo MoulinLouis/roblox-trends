@@ -282,6 +282,17 @@ describe.skipIf(!hasTestDatabase)("alert queries", () => {
     await markAlertsSent(database.db, [], at("2026-04-07T08:00:00Z"));
   });
 
+  it("marks only unsent alerts, so a second mark keeps the first send time", async () => {
+    await game(1, "2026-04-01T00:00:00Z");
+    await recordAlerts(database.db, [
+      { decision: decision("wave", 1, ["a"]), evidence: {}, createdAt: at("2026-04-06T10:00:00Z") },
+    ]);
+    const [alert] = await readUnsentAlerts(database.db);
+    await markAlertsSent(database.db, [alert.id], at("2026-04-07T08:00:00Z"));
+    await markAlertsSent(database.db, [alert.id], at("2026-04-09T08:00:00Z"));
+    expect(await readLastSentAt(database.db, "wave")).toEqual(at("2026-04-07T08:00:00Z"));
+  });
+
   it("reads the latest send time of a kind", async () => {
     await game(1, "2026-04-01T00:00:00Z");
     await game(2, "2026-04-01T00:00:00Z");

@@ -19,6 +19,7 @@ describe.skipIf(!hasTestDatabase)("alerts job", () => {
   let database: TestDatabase;
   let posted: Array<{ url: string; message: DiscordMessage }>;
   let failing: boolean;
+  let attempts: number;
   let url: string | undefined;
 
   beforeAll(async () => {
@@ -32,6 +33,7 @@ describe.skipIf(!hasTestDatabase)("alerts job", () => {
   beforeEach(async () => {
     posted = [];
     failing = false;
+    attempts = 0;
     url = webhook;
     await database.db.delete(alerts);
     await database.db.delete(classificationBatches);
@@ -48,6 +50,7 @@ describe.skipIf(!hasTestDatabase)("alerts job", () => {
     return createAlertsJob({
       webhookUrl: () => url,
       post: async (target, message) => {
+        attempts += 1;
         if (failing) throw new Error(`Failed to post to ${target}`);
         posted.push({ url: target, message });
       },
@@ -207,5 +210,35 @@ describe.skipIf(!hasTestDatabase)("alerts job", () => {
     failing = false;
     const sent = await run("2026-03-10T16:30:00Z");
     expect(JSON.stringify(sent.stats)).not.toContain("secret-token");
+  });
+
+  it("degrades instead of failing when a stored evidence cannot be rendered", async () => {
+    await breakout(1, "2026-03-10T10:00:00Z", "a");
+    await breakout(2, "2026-03-10T12:00:00Z", "a");
+    await breakout(3, "2026-03-10T14:00:00Z", "a");
+    await run("2026-03-10T15:30:00Z", { webhookUrl: () => undefined });
+    await database.db.execute(sql`update alerts set evidence = '{}'::jsonb where kind = 'wave'`);
+    const result = await run("2026-03-10T16:30:00Z");
+    expect(result.status).toBe("degraded");
+    expect(result.stats).toMatchObject({ sent: 0, unsent: 2 });
+    expect(attempts).toBe(0);
+  });
+
+  it("stops posting after the first failed post of a run", async () => {
+    for (const [offset, format] of [[0, "a"], [10, "b"]] as const) {
+      await breakout(offset + 1, "2026-03-10T10:00:00Z", format);
+      await breakout(offset + 2, "2026-03-10T12:00:00Z", format);
+      await breakout(offset + 3, "2026-03-10T14:00:00Z", format);
+    }
+    failing = true;
+    const failed = await run("2026-03-10T15:30:00Z");
+    expect(failed.status).toBe("degraded");
+    // Two waves and one digest are unsent, and only the first post was tried.
+    expect(attempts).toBe(1);
+    expect(failed.stats).toMatchObject({ sent: 0, unsent: 4 });
+    failing = false;
+    const next = await run("2026-03-10T16:30:00Z");
+    expect(next.status).toBe("success");
+    expect(next.stats).toMatchObject({ sent: 4, unsent: 0 });
   });
 });

@@ -262,6 +262,62 @@ describe("untrusted text", () => {
   });
 });
 
+describe("astral characters", () => {
+  const emoji = "😀".repeat(400);
+
+  it("keeps every limit by string length with emoji-heavy names on a wave card and a 10-game digest", () => {
+    const e = evidence(1, { name: emoji, family: emoji, coreAction: emoji });
+    for (const prior of e.keys.flatMap((key) => key.priors)) prior.name = emoji;
+    const wave = waveMessage(e);
+    checkLimits(wave);
+    checkLimits(digestMessage(Array.from({ length: 10 }, () => e)));
+    for (const text of [wave.embeds[0].title!, wave.embeds[0].description!]) {
+      expect(text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    }
+  });
+
+  it("cuts by UTF-16 length without splitting a surrogate pair", () => {
+    const e = evidence(1, { name: "😀".repeat(300) });
+    const title = waveMessage(e).embeds[0].title!;
+    expect(title.length).toBeLessThanOrEqual(256);
+    expect(title).toMatch(/…$/);
+    expect(title.slice(0, -1)).toBe("😀".repeat((title.length - 1) / 2));
+  });
+});
+
+describe("message kinds", () => {
+  it("says on a wave card how many breakouts of the pattern fall within the window, from the evidence", () => {
+    // The candidate crossed 2026-11-10 14:00: prior 3 (11-07) is inside 5 days, prior 2 (11-05) is not.
+    const m = waveMessage(evidence());
+    expect(m.content).toBe("Wave forming: 2nd breakout of this pattern within 5 days");
+    const e = evidence();
+    e.waveWindowDays = 7;
+    expect(waveMessage(e).content).toBe("Wave forming: 3rd breakout of this pattern within 7 days");
+  });
+
+  it("titles the digest with its number of first breakouts, and keeps 'and N more' when it cuts", () => {
+    expect(digestMessage([evidence()]).content).toBe("Daily digest: 1 first breakout");
+    const list = Array.from({ length: 12 }, (_, i) => evidence(1, { name: `Game ${i}`, rootPlaceId: 1000 + i }));
+    expect(digestMessage(list).content).toBe("Daily digest: 12 first breakouts, and 2 more, listed in the alerts table");
+  });
+});
+
+describe("digest footer", () => {
+  it("drops whole phrases rather than cut the command inside a quote", () => {
+    const e = evidence();
+    e.conceptCommand = `npm run concept -- "${"a".repeat(30)}" "${"b".repeat(30)}" "${"c".repeat(30)}"`;
+    const footer = digestMessage([e]).embeds[0].footer!.text;
+    expect(footer).toBe(`npm run concept -- "${"a".repeat(30)}" "${"b".repeat(30)}"`);
+    expect(footer.length).toBeLessThanOrEqual(ALERT_CONFIG.digestCommandCharacters);
+  });
+
+  it("drops the whole command when not even one phrase fits", () => {
+    const e = evidence();
+    e.conceptCommand = `npm run concept -- "${"a".repeat(200)}"`;
+    expect(digestMessage([e]).embeds[0].footer).toBeUndefined();
+  });
+});
+
 describe("waveMessage", () => {
   it("renders one embed with the linked title, thumbnail and fields", () => {
     const m = waveMessage(evidence());
