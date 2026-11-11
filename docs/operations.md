@@ -189,6 +189,14 @@ select count(*) filter (where c.family is not null) as classified, count(*) as t
 from games g left join game_classifications c using (universe_id);
 ```
 
+The view `game_formats` (`drizzle/0015_game_formats.sql`) gives each game's family, template and reward loop with the owner's vocabulary merges applied on top of `game_classifications`, so near-duplicate spellings count as one value. Read it for merged values and `game_classifications` for the model's own answers:
+
+```sql
+select universe_id, family, template, reward_loop from game_formats where universe_id = <universe id>;
+
+select count(*) from game_formats;
+```
+
 `rising_games` computes the Radar page's metrics for any `as_of`. A session calls it with the values of `RADAR_CONFIG` in `src/lib/config.ts`; `sort_by` is `growth`, `acceleration`, `ccu` or `age`, and `row_limit` null returns every game (about 1 s for 90 days):
 
 ```sql
@@ -197,6 +205,29 @@ from rising_games(as_of => now(), max_age_days => 30, min_ccu => 100, window_hou
   event_peak_ratio => 3, event_min_samples => 12, velocity_start => 100, velocity_middle => 1000, velocity_end => 10000,
   velocity_max_gap_hours => 2, sort_by => 'growth', row_limit => 25)
 order by sort_rank;
+```
+
+`format_stats` gives one row per format with readings in the latest complete UTC week before `as_of`: its share of the market's CCU, the share trend, the leader's own trend, the hit counts of the trend window, the wave age, the followers and a `phase`. `dimension` is `family`, `template`, `reward_loop` or `family_reward_loop`. A session calls it with the values of `FORMAT_CONFIG` in `src/lib/config.ts`. Both functions are read-only and need no grant:
+
+```sql
+select dimension, format, week_start, coverage, games, ccu_avg, share, share_trend, leader_name, leader_share, leader_trend,
+  entrants, entrants_matured, hits_small, hits_large, first_wave_day, wave_age_days, wave_before_history,
+  followers, followers_median_peak, phase, phase_rule
+from format_stats(as_of => now(), full_coverage_from => '2026-10-19', hit_days => 14, hit_small => 1000, hit_large => 10000,
+  wave_ccu => 10000, follower_first => 2, follower_last => 10, trend_weeks => 4, minimum_games => 5, minimum_ccu => 1000,
+  emerging_days => 28, rising_ratio => 1.25, declining_ratio => 0.8, leader_carry_share => 0.5)
+order by dimension, share desc;
+```
+
+`phase_rule` gives the reason for each label: the measured value and the threshold. A trend window that mixes `top` weeks (before `full_coverage_from`, when the radar tracked about 3,800 games) and `full` weeks (about 11,000 games) gives `unknown`, because the two are not comparable.
+
+`format_weeks` gives the weekly history of the formats, the 12 complete weeks before `as_of` for `FORMAT_CONFIG.weeks`. `dimension_filter` and `format_filter` narrow it, case-insensitively; this reads one format:
+
+```sql
+select week_start, coverage, games, ccu_avg, share, leader_name, leader_share, entrants, entrants_matured, hits_small, hits_large
+from format_weeks(as_of => now(), weeks => 12, full_coverage_from => '2026-10-19', hit_days => 14, hit_small => 1000,
+  hit_large => 10000, dimension_filter => 'family', format_filter => '+1')
+order by week_start;
 ```
 
 ### Dashboard
@@ -303,6 +334,8 @@ runuser -u radar -- psql -X -d radar -c "delete from classifications where statu
 An `errored` result of a batch counts as a failure like a refusal. Read the errors first (`select name, error, finished_at from classifications where status = 'failed' and universe_id = <id>`): a given-up game usually fails the same way every time.
 
 Changing a classification: edit `src/lib/classify/overrides.ts` and deploy. The next run copies it, and the `game_classifications` view applies it field by field.
+
+Changing the vocabulary: edit `src/lib/classify/merges.ts` (a merge maps one value of one field onto another) and deploy. The next classify run copies it into `classification_merges`, `stats.merges` counts the merges it copied, and the `game_formats` view applies them. A merge's target is final: chains are refused by the test of the file.
 
 Reclassifying after a prompt change: bump `CLASSIFICATION_PROMPT_VERSION` (`src/lib/classify/prompt.ts`), update the prompt hash test, and raise `JOB_CONFIG.classify.minimumPromptVersion`. The runs then reclassify the older games at the caps above. A retitled game is reclassified on its own; a change of its title's brackets only is not.
 
