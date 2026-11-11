@@ -380,7 +380,9 @@ describe.skipIf(!hasTestDatabase)("format queries", () => {
       }
       const stats = await formatStats(database.db, { asOf }, statsConfig);
       const beta = stats.find((row) => row.dimension === "family" && row.format === "beta");
-      expect(beta).toMatchObject({ followers: 9, followersMedianPeak: 600, entrants: 11 });
+      expect(beta).toMatchObject({ followers: 9, followersMedianPeak: 600 });
+      // Game 1 was created on Sunday Mar 1, in the week before the window.
+      expect(beta?.entrants).toBe(10);
     });
 
     it("counts the wave's age in days and flags a wave starting with the history", async () => {
