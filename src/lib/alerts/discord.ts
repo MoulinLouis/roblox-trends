@@ -43,6 +43,8 @@ export interface GameEvidence {
 export interface AlertEvidence {
   kind: AlertKind;
   universeId: number;
+  // The wave window the decision was made with, so the card counts the breakouts inside it as decided.
+  waveWindowDays: number;
   game: GameEvidence;
   keys: KeyEvidence[];
   // The local concept check for the owner to run; null when the decision names no phrase.
@@ -154,6 +156,7 @@ export function alertEvidence(
   decision: AlertDecision,
   facts: Map<number, CardFacts>,
   keyGames: Record<string, { tracked: number; recent: number }>,
+  config: Pick<typeof ALERT_CONFIG, "waveWindowDays"> = ALERT_CONFIG,
 ): AlertEvidence {
   const candidate = facts.get(decision.universeId);
   if (candidate === undefined)
@@ -162,6 +165,7 @@ export function alertEvidence(
   return {
     kind: decision.kind,
     universeId: decision.universeId,
+    waveWindowDays: config.waveWindowDays,
     game: gameEvidence(candidate),
     keys: decision.keys.map((key) => ({
       key,
@@ -197,11 +201,13 @@ export function alertEvidence(
   };
 }
 
+// Cuts to `limit` UTF-16 code units (Discord's measure, and `string.length`), never splitting a surrogate pair.
 function truncate(text: string, limit: number): string {
-  const chars = [...text];
-  return chars.length <= limit
-    ? text
-    : `${chars.slice(0, Math.max(0, limit - 1)).join("")}…`;
+  if (text.length <= limit) return text;
+  let end = Math.max(0, limit - 1);
+  const last = text.charCodeAt(end - 1);
+  if (end > 0 && last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${text.slice(0, end)}…`;
 }
 
 function number(value: number): string {
@@ -281,6 +287,27 @@ function kindLine(evidence: AlertEvidence): string {
       ? "Another breakout of a pattern seen before"
       : "First breakout of its patterns";
   return `${kind}. Created ${day(evidence.game.robloxCreatedAt)}, ${days(age)} before crossing.`;
+}
+
+function ordinal(count: number): string {
+  const tens = count % 100;
+  if (tens >= 11 && tens <= 13) return `${count}th`;
+  return `${count}${({ 1: "st", 2: "nd", 3: "rd" } as Record<number, string>)[count % 10] ?? "th"}`;
+}
+
+// The wave line of a card: the highest rank among its keys, counted from the priors that crossed within the window
+// the decision used.
+function waveLine(evidence: AlertEvidence): string {
+  const crossed = Date.parse(evidence.game.crossedAt);
+  const windowMs = evidence.waveWindowDays * DAY_MS;
+  let rank = 1;
+  for (const key of evidence.keys) {
+    const inWindow = key.priors.filter(
+      (prior) => prior.crossedAt !== null && crossed - Date.parse(prior.crossedAt) <= windowMs,
+    ).length;
+    rank = Math.max(rank, inWindow + 1);
+  }
+  return `Wave forming: ${ordinal(rank)} breakout of this pattern within ${days(evidence.waveWindowDays)}`;
 }
 
 function keyField(key: KeyEvidence): {
@@ -365,8 +392,8 @@ export function waveMessage(
   config = ALERT_CONFIG,
 ): DiscordMessage {
   const fields: NonNullable<DiscordEmbed["fields"]> = [
-    { name: "Trajectory", value: trajectory(evidence.game), inline: false },
-    { name: "Format", value: format(evidence.game), inline: false },
+    { name: "Trajectory", value: truncate(trajectory(evidence.game), config.discordFieldValueCharacters), inline: false },
+    { name: "Format", value: truncate(format(evidence.game), config.discordFieldValueCharacters), inline: false },
     ...evidence.keys.slice(0, config.cardMaximumKeys).map(keyField),
   ];
   if (evidence.keys.length > config.cardMaximumKeys) {
@@ -395,9 +422,26 @@ export function waveMessage(
     fields: fields.slice(0, config.discordMaximumFields),
   };
   return {
+    content: truncate(waveLine(evidence), config.discordContentCharacters),
     embeds: [fit(embed, config.discordMessageCharacters)],
     allowed_mentions: { parse: [] },
   };
+}
+
+// The concept command within `limit` UTF-16 units, cut only between quoted phrases: it drops the last phrases (or the
+// whole command) rather than leave a quote open, since the owner pastes it into a terminal.
+function fitCommand(command: string, limit: number): string | null {
+  if (command.length <= limit) return command;
+  const prefix = "npm run concept --";
+  const phrases = command.match(/"[^"]*"/g) ?? [];
+  let text = prefix;
+  let kept = 0;
+  for (const phrase of phrases) {
+    if (`${text} ${phrase}`.length > limit) break;
+    text = `${text} ${phrase}`;
+    kept += 1;
+  }
+  return kept === 0 ? null : text;
 }
 
 function digestEmbed(
@@ -425,11 +469,9 @@ function digestEmbed(
             },
           ],
   };
-  if (evidence.conceptCommand !== null) {
-    embed.footer = {
-      text: truncate(evidence.conceptCommand, config.digestCommandCharacters),
-    };
-  }
+  const command =
+    evidence.conceptCommand === null ? null : fitCommand(evidence.conceptCommand, config.digestCommandCharacters);
+  if (command !== null) embed.footer = { text: command };
   return embed;
 }
 
@@ -446,15 +488,14 @@ export function digestMessage(
   const sorted = [...evidences].sort((a, b) => b.game.lastCcu - a.game.lastCcu);
   const shown = sorted.slice(0, limit);
   const cut = sorted.length - shown.length;
-  const content =
-    cut > 0
-      ? `Daily digest: and ${cut} more, listed in the alerts table`
-      : undefined;
+  const content = `Daily digest: ${sorted.length} first ${sorted.length === 1 ? "breakout" : "breakouts"}${
+    cut > 0 ? `, and ${cut} more, listed in the alerts table` : ""
+  }`;
   const budget = Math.floor(
     config.discordMessageCharacters / Math.max(1, shown.length),
   );
   return {
-    ...(content === undefined ? {} : { content }),
+    content,
     embeds: shown.map((evidence) => fit(digestEmbed(evidence, config), budget)),
     allowed_mentions: { parse: [] },
   };

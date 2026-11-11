@@ -236,7 +236,7 @@ export async function markAlertsSent(db: Database, ids: string[], sentAt: Date):
   await db
     .update(alerts)
     .set({ sentAt })
-    .where(sql`${alerts.id} = any(${sql.param(ids)}::uuid[])`);
+    .where(and(sql`${alerts.id} = any(${sql.param(ids)}::uuid[])`, isNull(alerts.sentAt)));
 }
 
 // The latest send of an alert of this kind; null when none went out.

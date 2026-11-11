@@ -58,7 +58,12 @@ export function createAlertsJob(dependencies: AlertsDependencies): JobDefinition
       }
 
       const found = await readBreakouts(db, {
-        createdSince: new Date(now.getTime() - (ALERT_CONFIG.lookbackDays + ALERT_CONFIG.maximumAgeDays) * dayMs),
+        // A candidate can be 48 hours old, and its priors reach back lookbackDays before it.
+        createdSince: new Date(
+          now.getTime() -
+            (ALERT_CONFIG.lookbackDays + ALERT_CONFIG.maximumAgeDays) * dayMs -
+            ALERT_CONFIG.candidateWindowHours * hourMs,
+        ),
         until: now,
       });
       const breakouts: Breakout[] = found.map((breakout) => ({
@@ -86,10 +91,16 @@ export function createAlertsJob(dependencies: AlertsDependencies): JobDefinition
       let sent = 0;
       let failedPosts = 0;
       if (webhookUrl) {
-        const attempt = async (message: Parameters<typeof postDiscord>[1], alerts: typeof unsent): Promise<void> => {
+        // The message is built inside the try: a bad stored evidence degrades the run like a failed post. After the
+        // first failure the rest of the run stays unsent, so a backlog after a long outage does not hammer Discord or
+        // reach the job timeout.
+        let stopped = false;
+        const attempt = async (build: () => Parameters<typeof postDiscord>[1], alerts: typeof unsent): Promise<void> => {
+          if (stopped) return;
           try {
-            await post(webhookUrl, message);
+            await post(webhookUrl, build());
           } catch (error) {
+            stopped = true;
             failedPosts += 1;
             // The kind of failure only: DiscordError text never holds the URL, and nothing else is copied.
             logger.error("A Discord alert was not sent", { kind: error instanceof DiscordError ? "discord" : "unexpected", alerts: alerts.length });
@@ -99,11 +110,11 @@ export function createAlertsJob(dependencies: AlertsDependencies): JobDefinition
           sent += alerts.length;
         };
         for (const alert of unsent.filter((entry) => entry.kind === "wave")) {
-          await attempt(waveMessage(alert.evidence as AlertEvidence), [alert]);
+          await attempt(() => waveMessage(alert.evidence as AlertEvidence), [alert]);
         }
         const firstBreakouts = unsent.filter((entry) => entry.kind === "first_breakout");
-        if (firstBreakouts.length > 0 && digestDue(now, await readLastSentAt(db, "first_breakout"))) {
-          await attempt(digestMessage(firstBreakouts.map((alert) => alert.evidence as AlertEvidence)), firstBreakouts);
+        if (!stopped && firstBreakouts.length > 0 && digestDue(now, await readLastSentAt(db, "first_breakout"))) {
+          await attempt(() => digestMessage(firstBreakouts.map((alert) => alert.evidence as AlertEvidence)), firstBreakouts);
         }
       }
 
