@@ -93,8 +93,22 @@ function gameEvidence(facts: CardFacts): GameEvidence {
   };
 }
 
+// A phrase of the concept command, pasted into a terminal by the owner: titles and classifications are controlled by
+// creators and a model, so only letters, digits, spaces, hyphens and apostrophes survive; no shell expansion can happen
+// inside the double quotes.
 function quotedPhrase(text: string): string {
-  return `"${text.replace(/["\\]/g, " ").replace(/\s+/g, " ").trim()}"`;
+  const safe = text
+    .replace(/[^\p{L}\p{N}\s'-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^[\s'-]+/, "")
+    .trim();
+  return `"${safe}"`;
+}
+
+// Discord renders markdown in embed descriptions and field values, masked links included: text from creators or the
+// model is escaped before it is shown there.
+function escapeMarkdown(text: string): string {
+  return text.replace(/[\\*_~|>[\]()`]/g, "\\$&");
 }
 
 function keyLabel(key: string, spelled: Map<string, string>): string {
@@ -237,7 +251,7 @@ function format(game: GameEvidence): string {
   ] as const;
   const shown = lines
     .filter(([, value]) => value !== null)
-    .map(([name, value]) => `${name}: ${value}`);
+    .map(([name, value]) => `${name}: ${escapeMarkdown(value!)}`);
   return shown.length === 0 ? "Not classified yet" : shown.join("\n");
 }
 
@@ -250,7 +264,9 @@ function priorLine(prior: PriorEvidence): string {
   ) {
     return `Game ${prior.universeId} (facts unavailable)`;
   }
-  const name = truncate(prior.name, ALERT_CONFIG.cardNameCharacters);
+  const name = escapeMarkdown(
+    truncate(prior.name, ALERT_CONFIG.cardNameCharacters),
+  );
   return `${name}: crossed ${day(prior.crossedAt)}, peak ${number(prior.peakCcu)} CCU, ${days(prior.ageDays)} old`;
 }
 
@@ -282,7 +298,10 @@ function keyField(key: KeyEvidence): {
       ? "No earlier breakout"
       : `Earlier breakouts:\n${shown.join("\n")}`;
   return {
-    name: truncate(key.label, ALERT_CONFIG.discordFieldNameCharacters),
+    name: truncate(
+      escapeMarkdown(key.label),
+      ALERT_CONFIG.discordFieldNameCharacters,
+    ),
     value: truncate(
       `${priors}\n${counts(key)}`,
       ALERT_CONFIG.discordFieldValueCharacters,
@@ -389,7 +408,7 @@ function digestEmbed(
   const patterns = evidence.keys
     .map(
       (key) =>
-        `${key.label} (${key.priors.length} earlier, ${number(key.trackedGames)} tracked)`,
+        `${escapeMarkdown(key.label)} (${key.priors.length} earlier, ${number(key.trackedGames)} tracked)`,
     )
     .join("; ");
   const embed: DiscordEmbed = {
