@@ -12,7 +12,7 @@ import {
 import { decideAlerts } from "@/lib/alerts/decide";
 import { digestDue } from "@/lib/alerts/digest-time";
 import { alertEvidence, digestMessage, DiscordError, postDiscord, waveMessage, type AlertEvidence } from "@/lib/alerts/discord";
-import { patternKeys, wordFrequencies } from "@/lib/alerts/keys";
+import { trackedGameKeys } from "@/lib/alerts/keys";
 import type { Breakout } from "@/lib/alerts/types";
 import { ALERT_CONFIG, JOB_CONFIG } from "@/lib/config";
 import { logger } from "@/lib/logger";
@@ -44,14 +44,11 @@ export function createAlertsJob(dependencies: AlertsDependencies): JobDefinition
         db,
         tracked.map((game) => game.universeId),
       );
-      const frequencies = wordFrequencies(tracked.map((game) => game.name));
-      const keysOf = new Map<number, string[]>();
+      const keysOf = trackedGameKeys(tracked, formats);
       const keyGames: Record<string, { tracked: number; recent: number }> = {};
       const recentSince = now.getTime() - ALERT_CONFIG.recentGamesDays * dayMs;
       for (const game of tracked) {
-        const format = formats.get(game.universeId) ?? { name: game.name, family: null, template: null, coreAction: null };
-        const keys = patternKeys(format, frequencies, tracked.length);
-        keysOf.set(game.universeId, keys);
+        const keys = keysOf.get(game.universeId) ?? [];
         const recent = game.robloxCreatedAt !== null && game.robloxCreatedAt.getTime() >= recentSince;
         for (const key of keys) {
           const entry = (keyGames[key] ??= { tracked: 0, recent: 0 });

@@ -1,12 +1,12 @@
 import { ALERT_CONFIG } from "../config";
 
-interface LocalTime {
+export interface LocalTime {
   day: string;
   hour: number;
 }
 
 // The calendar day (YYYY-MM-DD) and hour of an instant in a time zone, from Intl so daylight saving is handled.
-function localTime(instant: Date, timeZone: string): LocalTime {
+export function localTime(instant: Date, timeZone: string): LocalTime {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
     year: "numeric",

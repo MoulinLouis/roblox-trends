@@ -35,3 +35,19 @@ export function patternKeys(
   }
   return [...keys].sort();
 }
+
+// The pattern keys of every tracked game, computed against the titles of all of them: the job and the backtest build
+// their keys the same way. A game without a format row is keyed by its title words alone.
+export function trackedGameKeys(
+  tracked: ReadonlyArray<{ universeId: number; name: string }>,
+  formats: ReadonlyMap<number, GameFormat>,
+  options: { wordsOnly?: boolean } = {},
+): Map<number, string[]> {
+  const frequencies = wordFrequencies(tracked.map((game) => game.name));
+  const keysOf = new Map<number, string[]>();
+  for (const game of tracked) {
+    const format = formats.get(game.universeId) ?? { name: game.name, family: null, template: null, coreAction: null };
+    keysOf.set(game.universeId, patternKeys(format, frequencies, tracked.length, options));
+  }
+  return keysOf;
+}
