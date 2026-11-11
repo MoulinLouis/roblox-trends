@@ -307,3 +307,25 @@ export const FORMAT_CONFIG = {
 ## Execution notes
 
 (Record decisions and surprises here as tasks complete; committed code is authoritative over the code blocks above.)
+
+- **Execution, 2026-11-11.** The owner approved the plan and chose subagent-driven execution. Every subagent ran on Sonnet, the final review included. Tasks 3 and 4 shipped together.
+  - **Merges** (`7572fa5`): 9 first merges; `mergeProblems` refuses chains, loops, self-merges and two spellings of one `from`.
+  - **Merge key in SQL:** `lower(btrim(regexp_replace(value, '\s+', ' ', 'g')))`. It collapses whitespace first, then trims, so a leading tab keys as `mergeKey` does. The plan's order (trim first) would have missed it.
+  - **`game_formats`** (`c97323f`): migrations 0014 and 0015. The production-roles read list was not extended: its privilege test already covers every public relation.
+  - **`format_weeks`** (`ad978ef`):
+    - It reads one week more than it returns, so the oldest week's leader has a `leader_previous_ccu`.
+    - The hit window is the `hit_days` UTC days from the creation day. The literal `[created, created + hit_days)` range would drop the creation day's peak.
+    - A format with entrants and no readings in a week has a row with 0 CCU.
+    - On production, read-only with `game_formats` replaced by `game_classifications`, its query took 3.2 s for every format over 12 weeks. The `+1` shares matched the prototype.
+  - **`format_stats`** (`1bb2890`, `8dd31c2`):
+    - Followers count once their window has ended by `as_of`.
+    - "No readings in W−3 and W−2" means a share of 0 in both weeks. That gives `emerging` with a null `share_trend`.
+    - The leader trend follows week W's leader through its own daily rows.
+  - **Runbook** (`0a38b56`, `aadfae7`): the queries, the rule order, and what `game_formats` holds.
+  - **Final review:** ready to merge. Its one important point is S2: `format_stats` has not run on production yet. A read-only check found its follower lookups cheap (2,000 in 140 ms).
+  - **Left for later:**
+    - `format_stats` recomputes the coverage rule instead of reading `format_weeks`' column;
+    - the market day count is computed twice in 0016;
+    - entrant peaks are looked up for unclassified games;
+    - an odd `trend_weeks` splits unequal halves;
+    - a few tie-break and window tests are missing.
