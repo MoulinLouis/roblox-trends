@@ -4,6 +4,7 @@ import {
   alertEvidence,
   DiscordError,
   digestMessage,
+  frenchLabel,
   postDiscord,
   waveMessage,
   type AlertEvidence,
@@ -75,13 +76,28 @@ function evidence(
   });
 }
 
+// Non-breaking and narrow no-break spaces read as plain spaces, so expectations stay readable.
+function plain(text: string): string {
+  return text.replace(/[\u00a0\u202f]/g, " ");
+}
+
+const NOW = new Date("2026-11-11T14:00:00Z");
+
 function allText(message: DiscordMessage): string {
   const parts: string[] = [message.content ?? ""];
   for (const e of message.embeds) {
     parts.push(e.title ?? "", e.description ?? "", e.footer?.text ?? "");
     for (const f of e.fields ?? []) parts.push(f.name, f.value);
   }
-  return parts.join("\n");
+  return plain(parts.join("\n"));
+}
+
+function plainFields(message: DiscordMessage) {
+  return message.embeds[0].fields!.map((f) => ({
+    ...f,
+    name: plain(f.name),
+    value: plain(f.value),
+  }));
 }
 
 function totalCharacters(message: DiscordMessage): number {
@@ -122,7 +138,22 @@ const BANNED = [
   "should",
   "winner",
   "best",
+  "opportunité",
+  "recommandé",
+  "recommande",
+  "conseil",
+  "conseillé",
+  "devrais",
+  "fonce",
+  "gagnant",
+  "à faire",
 ];
+
+function bannedIn(text: string): string[] {
+  return BANNED.filter((word) =>
+    new RegExp(`(?<![\\p{L}])${word}(?![\\p{L}])`, "iu").test(text),
+  );
+}
 
 describe("alertEvidence", () => {
   it("holds the candidate, each key with its priors and counts, and the concept command", () => {
@@ -245,7 +276,7 @@ describe("untrusted text", () => {
       ]);
       const joined = texts.join("\n");
       expect(joined).not.toMatch(/(?<!\\)\]\(/);
-      if (message.embeds[0].fields!.length > 1)
+      if ((message.embeds[0].fields?.length ?? 0) > 1)
         expect(joined).toContain("\\[Free Robux\\]\\(");
       expect(joined).not.toMatch(/(?<!\\)\*\*x/);
       expect(joined).not.toMatch(/(?<!\\)\|\|y/);
@@ -288,17 +319,35 @@ describe("astral characters", () => {
 describe("message kinds", () => {
   it("says on a wave card how many breakouts of the pattern fall within the window, from the evidence", () => {
     // The candidate crossed 2026-11-10 14:00: prior 3 (11-07) is inside 5 days, prior 2 (11-05) is not.
-    const m = waveMessage(evidence());
-    expect(m.content).toBe("Wave forming: 2nd breakout of this pattern within 5 days");
+    const m = waveMessage(evidence(), ALERT_CONFIG, NOW);
+    expect(plain(m.content!)).toBe(
+      "🌊 **Vague en formation** : Ragdoll Physics Simulator est le 2e jeu récent du même motif à dépasser 1 000 joueurs en 5 jours.",
+    );
     const e = evidence();
     e.waveWindowDays = 7;
-    expect(waveMessage(e).content).toBe("Wave forming: 3rd breakout of this pattern within 7 days");
+    expect(plain(waveMessage(e, ALERT_CONFIG, NOW).content!)).toContain(
+      "est le 3e jeu récent du même motif à dépasser 1 000 joueurs en 7 jours.",
+    );
   });
 
-  it("titles the digest with its number of first breakouts, and keeps 'and N more' when it cuts", () => {
-    expect(digestMessage([evidence()]).content).toBe("Daily digest: 1 first breakout");
+  it("keeps the wave content within its limit and escapes the name", () => {
+    const m = waveMessage(evidence(1, { name: `@everyone **${"x".repeat(3000)}` }));
+    expect(m.content!.length).toBeLessThanOrEqual(2_000);
+    expect(m.content).toContain("\\*\\*");
+  });
+
+  it("titles the digest with its number of games, and says how many are left out when it cuts", () => {
+    const one = plain(digestMessage([evidence()], ALERT_CONFIG, NOW).content!);
+    expect(one).toBe(
+      "📬 **Les nouvelles percées du jour** : 1 jeu récent a dépassé 1 000 joueurs en même temps sur un motif sans percée ces 60 derniers jours.\n_Une percée = un jeu créé il y a moins de 12 jours qui passe 1 000 joueurs en même temps. Un motif = un mot du titre, un gameplay ou un modèle de titre que d'autres jeux partagent._",
+    );
     const list = Array.from({ length: 12 }, (_, i) => evidence(1, { name: `Game ${i}`, rootPlaceId: 1000 + i }));
-    expect(digestMessage(list).content).toBe("Daily digest: 12 first breakouts, and 2 more, listed in the alerts table");
+    const [first, second] = plain(digestMessage(list, ALERT_CONFIG, NOW).content!).split("\n");
+    expect(first).toBe(
+      "📬 **Les nouvelles percées du jour** : 12 jeux récents ont dépassé 1 000 joueurs en même temps sur un motif sans percée ces 60 derniers jours. Voici les 10 plus joués ; les 2 autres sont dans la table alerts.",
+    );
+    expect(second.startsWith("_Une percée")).toBe(true);
+    expect(plain(digestMessage(list.slice(0, 11)).content!)).toContain("l'autre est dans la table alerts.");
   });
 });
 
@@ -307,7 +356,7 @@ describe("digest footer", () => {
     const e = evidence();
     e.conceptCommand = `npm run concept -- "${"a".repeat(30)}" "${"b".repeat(30)}" "${"c".repeat(30)}"`;
     const footer = digestMessage([e]).embeds[0].footer!.text;
-    expect(footer).toBe(`npm run concept -- "${"a".repeat(30)}" "${"b".repeat(30)}"`);
+    expect(footer).toBe(`🧪 npm run concept -- "${"a".repeat(30)}" "${"b".repeat(30)}"`);
     expect(footer.length).toBeLessThanOrEqual(ALERT_CONFIG.digestCommandCharacters);
   });
 
@@ -320,7 +369,7 @@ describe("digest footer", () => {
 
 describe("waveMessage", () => {
   it("renders one embed with the linked title, thumbnail and fields", () => {
-    const m = waveMessage(evidence());
+    const m = waveMessage(evidence(), ALERT_CONFIG, NOW);
     checkLimits(m);
     expect(m.embeds).toHaveLength(1);
     const embed = m.embeds[0];
@@ -328,39 +377,82 @@ describe("waveMessage", () => {
     expect(embed.url).toBe("https://www.roblox.com/games/111");
     expect(embed.thumbnail?.url).toBe("https://tr.rbxcdn.com/thumb.png");
     expect(embed.timestamp).toBe("2026-11-10T14:00:00.000Z");
-    const fields = embed.fields!;
-    const trajectory = fields.find((f) => f.name === "Trajectory")!;
-    expect(trajectory.value).toContain("2,345");
-    expect(trajectory.value).toContain("2026-11-10 14:00 UTC");
-    expect(trajectory.value).toContain("410");
-    expect(fields.find((f) => f.name === "Format")!.value).toContain(
-      "simulator",
+    expect(plain(embed.description!)).toBe(
+      "Un jeu créé il y a moins de 12 jours vient de passer 1 000 joueurs en même temps, et d'autres jeux du même motif l'ont fait juste avant lui : une vague commence peut-être.",
     );
-    const key = fields.find(
-      (f) => f.name.includes("ragdoll") && f.name.startsWith("Gameplay"),
-    )!;
-    expect(key.value).toContain("Ragdoll Launch");
-    expect(key.value).toContain("8,000");
-    expect(key.value).toContain("2026-11-05 UTC");
-    expect(key.value).toContain(
-      "12 tracked games, 5 created in the last 14 days",
+    const fields = plainFields(m);
+    expect(fields.slice(0, 4)).toEqual([
+      { name: "👥 Joueurs", value: "**2 345** en ce moment\n410 la veille de sa percée", inline: true },
+      { name: "📈 Percée", value: "**mar. 10 nov. à 15 h**\nil y a 1 j", inline: true },
+      { name: "🎂 Créé", value: "**mar. 3 nov.**\n7 j avant sa percée", inline: true },
+      { name: "👍 Avis", value: "87 % de j'aime", inline: true },
+    ]);
+    expect(fields[4]).toEqual({
+      name: "🎮 Format",
+      value: "Famille : simulator\nModèle de titre : simulator\nRécompense : collect and upgrade\nAction principale : ragdoll",
+      inline: false,
+    });
+    const key = fields.find((f) => f.name === "🔎 Motif : gameplay « simulator / ragdoll »")!;
+    expect(key.inline).toBe(false);
+    expect(key.value).toBe(
+      [
+        "Déjà percé avant lui :",
+        "• Ragdoll Launch — le jeu. 5 nov. (pic 8 000 joueurs, 4 j après sa création)",
+        "• Rag Tower — le sam. 7 nov. (pic 1 500 joueurs, 3 j après sa création)",
+        "12 jeux suivis portent ce motif, dont 5 créés ces 14 derniers jours.",
+      ].join("\n"),
     );
-    expect(
-      fields.some((f) =>
-        f.value.includes('npm run concept -- "ragdoll physics" "ragdoll"'),
-      ),
-    ).toBe(true);
+    expect(fields.find((f) => f.name === "🧪 Vérifier l'idée")!.value).toBe(
+      '`npm run concept -- "ragdoll physics" "ragdoll"`',
+    );
   });
 
-  it("says when a key has no earlier breakout", () => {
-    const text = allText(waveMessage(evidence()));
-    expect(text).toContain("No earlier breakout");
+  it("omits the likes when unknown and says when there is no reading the day before or no format", () => {
+    const m = waveMessage(
+      evidence(1, { likeRatio: null, ccuDayBefore: null, family: null, template: null, rewardLoop: null, coreAction: null }),
+      ALERT_CONFIG,
+      NOW,
+    );
+    const fields = plainFields(m);
+    expect(fields.some((f) => f.name === "👍 Avis")).toBe(false);
+    expect(fields[0].value).toContain("pas de relevé la veille");
+    expect(fields.find((f) => f.name === "🎮 Format")!.value).toBe("Pas encore classé");
   });
 
-  it("makes no verdict", () => {
+  it("says when a key has no earlier breakout, with the singular counts", () => {
     const text = allText(waveMessage(evidence()));
-    for (const word of BANNED)
-      expect(text).not.toMatch(new RegExp(`\\b${word}\\b`, "i"));
+    expect(text).toContain(
+      "Aucun jeu de ce motif n'avait dépassé 1 000 joueurs ces 60 derniers jours.\n2 jeux suivis portent ce motif, dont 1 créé ces 14 derniers jours.",
+    );
+    const e = evidence();
+    e.keys[2].trackedGames = 1;
+    expect(allText(waveMessage(e))).toContain("1 jeu suivi porte ce motif");
+  });
+
+  it("caps the priors and the keys, and names the rest in French", () => {
+    const keys = Array.from({ length: 40 }, (_, i) => `word:w${i}`);
+    const priors = Object.fromEntries(keys.map((k) => [k, [2, 3, 2, 3, 2, 3, 2, 3]]));
+    const map = new Map([
+      [1, facts()],
+      [2, facts({ name: "P" })],
+      [3, facts({ name: "Q" })],
+    ]);
+    const m = waveMessage(alertEvidence({ kind: "wave", universeId: 1, keys, priors }, map, {}));
+    const fields = plainFields(m);
+    expect(fields.at(-1)!.name).toBe("Autres motifs");
+    expect(fields.at(-1)!.value).toMatch(/^\d+ autres? motifs?, dans la table alerts$/);
+    expect(fields.some((f) => /^et \d+ autres?$/m.test(f.value))).toBe(true);
+  });
+
+  it("makes no verdict, in French or English", () => {
+    const text = allText(waveMessage(evidence()));
+    expect(bannedIn(text)).toEqual([]);
+    expect(bannedIn("Un conseil : fonce, c'est une opportunité à faire")).toEqual([
+      "opportunité",
+      "conseil",
+      "fonce",
+      "à faire",
+    ]);
   });
 
   it("renders the same from the evidence read back from JSON", () => {
@@ -397,7 +489,7 @@ describe("waveMessage", () => {
 });
 
 describe("digestMessage", () => {
-  it("gives 10 embeds, most CCU first, and 'and 2 more' for 12", () => {
+  it("gives 10 embeds, most players first, and says 2 are left out for 12", () => {
     const list = Array.from({ length: 12 }, (_, i) =>
       evidence(1, {
         name: `Game ${i}`,
@@ -410,15 +502,33 @@ describe("digestMessage", () => {
     expect(m.embeds).toHaveLength(10);
     expect(m.embeds[0].title).toBe("Game 11");
     expect(m.embeds[9].title).toBe("Game 2");
-    expect(m.content).toContain("and 2 more");
+    expect(plain(m.content!)).toContain("les 2 autres sont dans la table alerts");
     expect(m.embeds[0].url).toBe("https://www.roblox.com/games/1011");
   });
 
-  it("has no 'more' line when nothing is cut", () => {
+  it("renders a compact game embed in French", () => {
+    const e = evidence(1, { template: "{thing} Sandbox", family: "physics sandbox", coreAction: "none" }, {
+      kind: "first_breakout",
+      keys: ["action:physics sandbox|spawn tornadoes"],
+      priors: {},
+    });
+    e.keys[0].trackedGames = 2;
+    const embed = digestMessage([e], ALERT_CONFIG, NOW).embeds[0];
+    expect(plain(embed.description!)).toBe(
+      [
+        "👥 **2 345 joueurs** en ce moment · percée **mar. 10 nov. à 15 h** (il y a 1 j) · 410 la veille",
+        "🎂 Créé le **mar. 3 nov.** (7 j avant sa percée) · 👍 87 % de j'aime",
+        "🎮 physics sandbox · {thing} Sandbox",
+        "🆕 Premier à percer pour : gameplay « physics sandbox / spawn tornadoes » (2 jeux suivis)",
+      ].join("\n"),
+    );
+    expect(embed.fields).toBeUndefined();
+  });
+
+  it("says nothing of cut games when nothing is cut", () => {
     const m = digestMessage([evidence()]);
-    expect(m.content ?? "").not.toContain("more");
-    for (const word of BANNED)
-      expect(allText(m)).not.toMatch(new RegExp(`\\b${word}\\b`, "i"));
+    expect(plain(m.content!)).not.toContain("Voici");
+    expect(bannedIn(allText(m))).toEqual([]);
   });
 
   it("stays under 6,000 characters in total for the worst case", () => {
@@ -451,9 +561,100 @@ describe("digestMessage", () => {
         {},
       );
     });
-    const m = digestMessage(list);
+    const m = digestMessage(list, ALERT_CONFIG, NOW);
     checkLimits(m);
     expect(m.embeds).toHaveLength(10);
+    expect(totalCharacters(m)).toBeLessThanOrEqual(6_000);
+    expect(m.content!.length).toBeLessThanOrEqual(2_000);
+  });
+});
+
+describe("French dates", () => {
+  // Paris is UTC+2 until 2026-10-25 01:00 UTC, then UTC+1.
+  function crossingAt(iso: string) {
+    return evidence(1, {
+      crossedAt: new Date(iso),
+      robloxCreatedAt: new Date("2026-10-20T10:00:00Z"),
+    });
+  }
+  const now = new Date("2026-10-26T00:00:00Z");
+
+  it("shows the Paris hour on both sides of a daylight saving change", () => {
+    const summer = plainFields(waveMessage(crossingAt("2026-10-24T22:00:00Z"), ALERT_CONFIG, now));
+    const winter = plainFields(waveMessage(crossingAt("2026-10-25T22:00:00Z"), ALERT_CONFIG, now));
+    // 22:00 UTC is 00:00 the next day in summer time and 23:00 the same day in winter time.
+    expect(summer[1].value).toBe("**dim. 25 oct. à 0 h**\nil y a 1 j");
+    expect(winter[1].value).toBe("**dim. 25 oct. à 23 h**\nil y a 2 h");
+    expect(summer[2].value).toBe("**mar. 20 oct.**\n4 j avant sa percée");
+  });
+
+  it("shows the minutes only when they are not 00, never ISO text or UTC", () => {
+    const m = waveMessage(crossingAt("2026-11-10T11:30:00Z"), ALERT_CONFIG, new Date("2026-11-10T11:50:00Z"));
+    expect(plainFields(m)[1].value).toBe("**mar. 10 nov. à 12 h 30**\nil y a moins d'1 h");
+    const text = allText(m);
+    expect(text).not.toMatch(/UTC|\d{4}-\d{2}-\d{2}/);
+  });
+
+  it("counts the relative age in hours under a day and days after", () => {
+    const e = crossingAt("2026-11-10T11:00:00Z");
+    const at = (iso: string) => plainFields(waveMessage(e, ALERT_CONFIG, new Date(iso)))[1].value;
+    expect(at("2026-11-10T14:30:00Z")).toContain("il y a 3 h");
+    expect(at("2026-11-12T12:00:00Z")).toContain("il y a 2 j");
+  });
+
+  it("writes the digest dates the same way", () => {
+    const d = digestMessage([crossingAt("2026-10-25T22:00:00Z")], ALERT_CONFIG, now);
+    expect(plain(d.embeds[0].description!)).toContain("percée **dim. 25 oct. à 23 h** (il y a 2 h)");
+    expect(d.embeds[0].timestamp).toBe("2026-10-25T22:00:00.000Z");
+  });
+});
+
+describe("French numbers and values", () => {
+  it("groups thousands the French way and writes percentages with a space", () => {
+    const m = waveMessage(evidence(1, { lastCcu: 1_234_567, likeRatio: 0.774 }), ALERT_CONFIG, NOW);
+    const fields = plainFields(m);
+    expect(fields[0].value).toContain("**1 234 567** en ce moment");
+    expect(fields[3].value).toBe("77 % de j'aime");
+    expect(m.content).toContain("1\u202f000");
+  });
+
+  it("shows the literal none as aucun, in the format and the gameplay key", () => {
+    const e = evidence(1, { coreAction: "none", family: "none" }, { keys: ["action:none|none"], priors: {} });
+    const text = allText(waveMessage(e));
+    expect(text).toContain("Famille : aucun");
+    expect(text).toContain("Action principale : aucun");
+    expect(text).toContain("gameplay « aucun / aucun »");
+    expect(text.replace(/`npm run concept[^`]*`/, "")).not.toMatch(/\bnone\b/);
+  });
+});
+
+describe("labels", () => {
+  it("builds the labels in French", () => {
+    const e = evidence(1, {}, { keys: ["word:ragdoll", "template:{thing} Sandbox", "action:simulator|ragdoll"], priors: {} });
+    expect(e.keys.map((k) => plain(k.label))).toEqual([
+      "mot du titre « ragdoll »",
+      "modèle de titre « {thing} Sandbox »",
+      "gameplay « simulator / ragdoll »",
+    ]);
+  });
+
+  it("translates a label stored by the previous version", () => {
+    expect(plain(frenchLabel('Title word: "ragdoll"'))).toBe("mot du titre « ragdoll »");
+    expect(plain(frenchLabel("Gameplay: simulator / ragdoll"))).toBe("gameplay « simulator / ragdoll »");
+    expect(plain(frenchLabel("Title template: {thing} Sandbox"))).toBe("modèle de titre « {thing} Sandbox »");
+    expect(plain(frenchLabel("Gameplay: none / x"))).toBe("gameplay « aucun / x »");
+    const already = frenchLabel("mot du titre « ragdoll »");
+    expect(frenchLabel(already)).toBe(already);
+    expect(frenchLabel("word:odd")).toBe("word:odd");
+  });
+
+  it("renders an old English label in French on a card", () => {
+    const e = evidence();
+    e.keys[1].label = 'Title word: "ragdoll"';
+    const m = waveMessage(e);
+    expect(plainFields(m).some((f) => f.name === "🔎 Motif : mot du titre « ragdoll »")).toBe(true);
+    expect(allText(m)).not.toContain("Title word");
+    expect(allText(digestMessage([e]))).toContain("mot du titre « ragdoll »");
   });
 });
 

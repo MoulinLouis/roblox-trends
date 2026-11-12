@@ -1,6 +1,7 @@
 # Repository guidance
 
 - Write all source code, identifiers, comments, tests, documentation, configuration, logs, and UI copy in English.
+- Exception: the Discord alert messages (src/lib/alerts/discord.ts) are written in French, at the owner's request (2026-11-12); their code, comments and tests stay in English.
 - Communicate with the repository owner in French.
 - Keep the product as one Next.js application backed by one PostgreSQL 18 database with TimescaleDB.
 - Put reusable domain logic in `src/lib`, persistence in `src/db`, pages in `src/app`, scheduled and operations entry points in `scripts`, and server units, configuration and shell scripts in `ops`.
