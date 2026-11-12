@@ -112,7 +112,7 @@ evaluated on its title words only, and is held from the digest until it is class
 
 ### The card
 
-One Discord embed per alert, in English (`AGENTS.md`):
+One Discord embed per alert. The cards are in French since 2026-11-12, as an exception recorded in `AGENTS.md`:
 
 - the thumbnail (`games.thumbnail_url`), the title linked to the Roblox page, the age since creation;
 - the trajectory: CCU now, the hour it crossed 1,000, the CCU 24 hours earlier, the like ratio;
