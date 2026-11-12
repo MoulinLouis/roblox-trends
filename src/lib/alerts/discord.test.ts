@@ -321,12 +321,12 @@ describe("message kinds", () => {
     // The candidate crossed 2026-11-10 14:00: prior 3 (11-07) is inside 5 days, prior 2 (11-05) is not.
     const m = waveMessage(evidence(), ALERT_CONFIG, NOW);
     expect(plain(m.content!)).toBe(
-      "🌊 **Vague en formation** : Ragdoll Physics Simulator est le 2e jeu récent du même motif à dépasser 1 000 joueurs en 5 jours.",
+      "🌊 **Vague en formation** : 2 jeux du même motif ont dépassé 1 000 joueurs en même temps en moins de 5 jours ; Ragdoll Physics Simulator est le 2e.",
     );
     const e = evidence();
     e.waveWindowDays = 7;
     expect(plain(waveMessage(e, ALERT_CONFIG, NOW).content!)).toContain(
-      "est le 3e jeu récent du même motif à dépasser 1 000 joueurs en 7 jours.",
+      "3 jeux du même motif ont dépassé 1 000 joueurs en même temps en moins de 7 jours ; Ragdoll Physics Simulator est le 3e.",
     );
   });
 
@@ -382,7 +382,7 @@ describe("waveMessage", () => {
     );
     const fields = plainFields(m);
     expect(fields.slice(0, 4)).toEqual([
-      { name: "👥 Joueurs", value: "**2 345** en ce moment\n410 la veille de sa percée", inline: true },
+      { name: "👥 Joueurs", value: "**2 345** à la détection\n410 la veille de sa percée", inline: true },
       { name: "📈 Percée", value: "**mar. 10 nov. à 15 h**\nil y a 1 j", inline: true },
       { name: "🎂 Créé", value: "**mar. 3 nov.**\n7 j avant sa percée", inline: true },
       { name: "👍 Avis", value: "87 % de j'aime", inline: true },
@@ -397,8 +397,8 @@ describe("waveMessage", () => {
     expect(key.value).toBe(
       [
         "Déjà percé avant lui :",
-        "• Ragdoll Launch — le jeu. 5 nov. (pic 8 000 joueurs, 4 j après sa création)",
-        "• Rag Tower — le sam. 7 nov. (pic 1 500 joueurs, 3 j après sa création)",
+        "• Ragdoll Launch — jeu. 5 nov. (pic 8 000 joueurs, 4 j après sa création)",
+        "• Rag Tower — sam. 7 nov. (pic 1 500 joueurs, 4 j après sa création)",
         "12 jeux suivis portent ce motif, dont 5 créés ces 14 derniers jours.",
       ].join("\n"),
     );
@@ -516,10 +516,10 @@ describe("digestMessage", () => {
     const embed = digestMessage([e], ALERT_CONFIG, NOW).embeds[0];
     expect(plain(embed.description!)).toBe(
       [
-        "👥 **2 345 joueurs** en ce moment · percée **mar. 10 nov. à 15 h** (il y a 1 j) · 410 la veille",
+        "👥 **2 345 joueurs** à la détection · percée **mar. 10 nov. à 15 h** (il y a 1 j) · 410 la veille",
         "🎂 Créé le **mar. 3 nov.** (7 j avant sa percée) · 👍 87 % de j'aime",
         "🎮 physics sandbox · {thing} Sandbox",
-        "🆕 Premier à percer pour : gameplay « physics sandbox / spawn tornadoes » (2 jeux suivis)",
+        "🆕 Premier à percer depuis 60 jours : gameplay « physics sandbox / spawn tornadoes » (2 jeux suivis)",
       ].join("\n"),
     );
     expect(embed.fields).toBeUndefined();
@@ -583,9 +583,9 @@ describe("French dates", () => {
     const summer = plainFields(waveMessage(crossingAt("2026-10-24T22:00:00Z"), ALERT_CONFIG, now));
     const winter = plainFields(waveMessage(crossingAt("2026-10-25T22:00:00Z"), ALERT_CONFIG, now));
     // 22:00 UTC is 00:00 the next day in summer time and 23:00 the same day in winter time.
-    expect(summer[1].value).toBe("**dim. 25 oct. à 0 h**\nil y a 1 j");
+    expect(summer[1].value).toBe("**dim. 25 oct. à minuit**\nil y a 1 j");
     expect(winter[1].value).toBe("**dim. 25 oct. à 23 h**\nil y a 2 h");
-    expect(summer[2].value).toBe("**mar. 20 oct.**\n4 j avant sa percée");
+    expect(summer[2].value).toBe("**mar. 20 oct.**\n5 j avant sa percée");
   });
 
   it("shows the minutes only when they are not 00, never ISO text or UTC", () => {
@@ -613,18 +613,94 @@ describe("French numbers and values", () => {
   it("groups thousands the French way and writes percentages with a space", () => {
     const m = waveMessage(evidence(1, { lastCcu: 1_234_567, likeRatio: 0.774 }), ALERT_CONFIG, NOW);
     const fields = plainFields(m);
-    expect(fields[0].value).toContain("**1 234 567** en ce moment");
+    expect(fields[0].value).toContain("**1 234 567** à la détection");
     expect(fields[3].value).toBe("77 % de j'aime");
     expect(m.content).toContain("1\u202f000");
   });
 
   it("shows the literal none as aucun, in the format and the gameplay key", () => {
-    const e = evidence(1, { coreAction: "none", family: "none" }, { keys: ["action:none|none"], priors: {} });
+    const e = evidence(1, { coreAction: "none", family: "none" }, { keys: ["action:none|none", "template:none"], priors: {} });
     const text = allText(waveMessage(e));
-    expect(text).toContain("Famille : aucun");
-    expect(text).toContain("Action principale : aucun");
-    expect(text).toContain("gameplay « aucun / aucun »");
+    expect(text).toContain("Famille : aucune");
+    expect(text).toContain("Action principale : aucune");
+    expect(text).toContain("gameplay « aucune / aucune »");
+    expect(text).toContain("modèle de titre « aucun »");
+    expect(plain(frenchLabel("Title template: none"))).toBe("modèle de titre « aucun »");
     expect(text.replace(/`npm run concept[^`]*`/, "")).not.toMatch(/\bnone\b/);
+  });
+});
+
+describe("polish", () => {
+  it("says 1er, minuit and midi, and keeps the minutes otherwise", () => {
+    const at = (crossed: string, created = "2026-10-20T10:00:00Z") =>
+      plainFields(
+        waveMessage(evidence(1, { crossedAt: new Date(crossed), robloxCreatedAt: new Date(created) }), ALERT_CONFIG, NOW),
+      );
+    expect(at("2026-11-01T11:00:00Z")[1].value).toContain("**dim. 1er nov. à midi**");
+    expect(at("2026-11-01T11:30:00Z")[1].value).toContain("à 12 h 30**");
+    expect(at("2026-11-02T23:00:00Z")[1].value).toContain("**mar. 3 nov. à minuit**");
+    expect(at("2026-11-10T14:00:00Z", "2026-10-31T23:30:00Z")[2].value).toBe("**dim. 1er nov.**\n9 j avant sa percée");
+  });
+
+  it("counts ages in Paris calendar days, for the game and its priors", () => {
+    // Created 23:30 Paris on 10-03, crossed 00:30 Paris on 10-04: one calendar day, though one hour elapsed.
+    const e = evidence(1, {
+      robloxCreatedAt: new Date("2026-10-03T21:30:00Z"),
+      crossedAt: new Date("2026-10-03T22:30:00Z"),
+    });
+    expect(plainFields(waveMessage(e, ALERT_CONFIG, NOW))[2].value).toContain("1 j avant sa percée");
+    const map = new Map([
+      [1, facts()],
+      [2, facts({ name: "P", robloxCreatedAt: new Date("2026-10-03T21:30:00Z"), crossedAt: new Date("2026-10-03T22:30:00Z") })],
+    ]);
+    const w = alertEvidence({ kind: "wave", universeId: 1, keys: ["word:ragdoll"], priors: { "word:ragdoll": [2] } }, map, {});
+    expect(w.keys[0].priors[0].ageDays).toBe(1);
+    expect(allText(waveMessage(w))).toContain("• P — dim. 4 oct. (pic 3 000 joueurs, 1 j après sa création)");
+  });
+
+  it("flattens the whitespace of the name in the wave content", () => {
+    const m = waveMessage(evidence(1, { name: "A\n\n  B" }));
+    expect(m.content).toContain("; A B est le");
+  });
+
+  it("never emits a none or empty concept phrase", () => {
+    const e = alertEvidence(
+      { kind: "wave", universeId: 1, keys: ["action:a|none"], priors: {} },
+      new Map([[1, facts({ coreAction: "none" })]]),
+      {},
+    );
+    expect(e.conceptCommand).toBeNull();
+    const w = alertEvidence(
+      { kind: "wave", universeId: 1, keys: ["action:a|none", "word:ragdoll"], priors: {} },
+      new Map([[1, facts({ coreAction: "None" })]]),
+      {},
+    );
+    expect(w.conceptCommand).toBe('npm run concept -- "ragdoll"');
+  });
+
+  it("shows a repeated format value once in the digest", () => {
+    const e = evidence(1, { family: "simulator", template: "simulator", coreAction: "ragdoll" });
+    expect(plain(digestMessage([e], ALERT_CONFIG, NOW).embeds[0].description!)).toContain("🎮 simulator · ragdoll");
+  });
+
+  it("caps the patterns line and keeps the footer in a 10-game digest", () => {
+    const keys = Array.from({ length: 5 }, (_, i) => `word:longkeyword${i}`);
+    const name = keys.map((k) => k.slice(5)).join(" ");
+    const e = alertEvidence(
+      { kind: "first_breakout", universeId: 1, keys, priors: {} },
+      new Map([[1, facts({ name })]]),
+      Object.fromEntries(keys.map((k) => [k, { tracked: 1_000, recent: 100 }])),
+    );
+    expect(e.conceptCommand).not.toBeNull();
+    const m = digestMessage(Array.from({ length: 10 }, () => e), ALERT_CONFIG, NOW);
+    checkLimits(m);
+    for (const embed of m.embeds) {
+      expect(embed.footer!.text).toMatch(/^🧪 npm run concept -- "/);
+      const line = plain(embed.description!).split("\n").at(-1)!;
+      expect(line.startsWith("🆕 Premier à percer depuis 60 jours : ")).toBe(true);
+      expect(line).toMatch(/…$/);
+      expect(line.length).toBeLessThanOrEqual("🆕 Premier à percer depuis 60 jours : ".length + ALERT_CONFIG.digestPatternCharacters);
+    }
   });
 });
 
@@ -642,7 +718,7 @@ describe("labels", () => {
     expect(plain(frenchLabel('Title word: "ragdoll"'))).toBe("mot du titre « ragdoll »");
     expect(plain(frenchLabel("Gameplay: simulator / ragdoll"))).toBe("gameplay « simulator / ragdoll »");
     expect(plain(frenchLabel("Title template: {thing} Sandbox"))).toBe("modèle de titre « {thing} Sandbox »");
-    expect(plain(frenchLabel("Gameplay: none / x"))).toBe("gameplay « aucun / x »");
+    expect(plain(frenchLabel("Gameplay: none / x"))).toBe("gameplay « aucune / x »");
     const already = frenchLabel("mot du titre « ragdoll »");
     expect(frenchLabel(already)).toBe(already);
     expect(frenchLabel("word:odd")).toBe("word:odd");

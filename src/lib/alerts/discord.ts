@@ -122,8 +122,9 @@ function quoted(text: string): string {
 }
 
 // A classification value as the owner reads it: the literal `none` is "aucun".
-function shown(value: string): string {
-  return value === "none" ? "aucun" : value;
+function shown(value: string, feminine = false): string {
+  if (value !== "none") return value;
+  return feminine ? "aucune" : "aucun";
 }
 
 function keyLabel(key: string, spelled: Map<string, string>): string {
@@ -133,7 +134,7 @@ function keyLabel(key: string, spelled: Map<string, string>): string {
   if (kind === "word")
     return `mot du titre ${quoted(spelled.get(value) ?? value)}`;
   if (kind === "action")
-    return `gameplay ${quoted(value.split("|").map(shown).join(" / "))}`;
+    return `gameplay ${quoted(value.split("|").map((part) => shown(part, true)).join(" / "))}`;
   if (kind === "template") return `modèle de titre ${quoted(shown(value))}`;
   return key;
 }
@@ -144,7 +145,7 @@ export function frenchLabel(label: string): string {
   if (word !== null) return `mot du titre ${quoted(word[1])}`;
   const action = /^Gameplay: (.*)$/s.exec(label);
   if (action !== null)
-    return `gameplay ${quoted(action[1].split(" / ").map(shown).join(" / "))}`;
+    return `gameplay ${quoted(action[1].split(" / ").map((part) => shown(part, true)).join(" / "))}`;
   const template = /^Title template: (.*)$/s.exec(label);
   if (template !== null) return `modèle de titre ${quoted(shown(template[1]))}`;
   return label;
@@ -171,6 +172,7 @@ function conceptCommand(
   const usable = phrases.filter(
     (phrase, index) =>
       phrase !== '""' &&
+      phrase.toLowerCase() !== '"none"' &&
       phrases.findIndex(
         (other) => other.toLowerCase() === phrase.toLowerCase(),
       ) === index,
@@ -213,12 +215,9 @@ export function alertEvidence(
           name: prior.name,
           crossedAt: prior.crossedAt.toISOString(),
           peakCcu: prior.peakCcu,
-          ageDays: Math.max(
-            0,
-            Math.floor(
-              (prior.crossedAt.getTime() - prior.robloxCreatedAt.getTime()) /
-                DAY_MS,
-            ),
+          ageDays: calendarDays(
+            prior.robloxCreatedAt.toISOString(),
+            prior.crossedAt.toISOString(),
           ),
         };
       }),
@@ -267,7 +266,11 @@ function parts(iso: string, options: Intl.DateTimeFormatOptions) {
 // `dim. 2 nov.`
 function day(iso: string): string {
   const get = parts(iso, { weekday: "short", day: "numeric", month: "short" });
-  return `${get("weekday")} ${get("day")} ${get("month")}`;
+  return `${get("weekday")} ${dayOfMonth(get("day"))} ${get("month")}`;
+}
+
+function dayOfMonth(value: string): string {
+  return value === "1" ? "1er" : value;
 }
 
 // `mer. 11 nov. à 12 h`, with the minutes only when they are not :00.
@@ -279,9 +282,12 @@ function moment(iso: string): string {
     hour: "numeric",
     minute: "2-digit",
   });
+  const hour = Number(get("hour"));
   const minutes = Number(get("minute"));
-  const clock = `${Number(get("hour"))}${NB}h${minutes === 0 ? "" : `${NB}${get("minute")}`}`;
-  return `${get("weekday")} ${get("day")} ${get("month")} à${NB}${clock}`;
+  let clock = `${hour}${NB}h${minutes === 0 ? "" : `${NB}${get("minute")}`}`;
+  if (minutes === 0 && hour === 0) clock = "minuit";
+  if (minutes === 0 && hour === 12) clock = "midi";
+  return `${get("weekday")} ${dayOfMonth(get("day"))} ${get("month")} à${NB}${clock}`;
 }
 
 // `il y a 3 h`, `il y a 2 j`.
@@ -292,19 +298,30 @@ function ago(iso: string, now: Date): string {
   return `il y a ${Math.floor(elapsed / DAY_MS)}${NB}j`;
 }
 
-function ageDays(game: GameEvidence): number {
-  return Math.max(
-    0,
-    Math.floor(
-      (Date.parse(game.crossedAt) - Date.parse(game.robloxCreatedAt)) / DAY_MS,
-    ),
-  );
+// Whole calendar days between two instants, counted on the dates shown (owner's time zone), so the age agrees with
+// the dates next to it.
+export function calendarDays(from: string, to: string): number {
+  const number = (iso: string) => {
+    const get = parts(iso, { year: "numeric", month: "numeric", day: "numeric" });
+    return Date.UTC(Number(get("year")), Number(get("month")) - 1, Number(get("day")));
+  };
+  return Math.max(0, Math.round((number(to) - number(from)) / DAY_MS));
 }
 
-function dayBefore(game: GameEvidence): string {
+function ageDays(game: GameEvidence): number {
+  return calendarDays(game.robloxCreatedAt, game.crossedAt);
+}
+
+function dayBeforeCard(game: GameEvidence): string {
   return game.ccuDayBefore === null
     ? "pas de relevé la veille"
     : `${number(game.ccuDayBefore)} la veille de sa percée`;
+}
+
+function dayBeforeDigest(game: GameEvidence): string {
+  return game.ccuDayBefore === null
+    ? "pas de relevé la veille"
+    : `${number(game.ccuDayBefore)} la veille`;
 }
 
 function likes(game: GameEvidence): string | null {
@@ -315,14 +332,14 @@ function likes(game: GameEvidence): string | null {
 
 function format(game: GameEvidence): string {
   const lines = [
-    [`Famille${NB}:`, game.family],
-    [`Modèle de titre${NB}:`, game.template],
-    [`Récompense${NB}:`, game.rewardLoop],
-    [`Action principale${NB}:`, game.coreAction],
+    [`Famille${NB}:`, game.family, true],
+    [`Modèle de titre${NB}:`, game.template, false],
+    [`Récompense${NB}:`, game.rewardLoop, true],
+    [`Action principale${NB}:`, game.coreAction, true],
   ] as const;
   const present = lines
     .filter(([, value]) => value !== null)
-    .map(([name, value]) => `${name} ${escapeMarkdown(shown(value!))}`);
+    .map(([name, value, feminine]) => `${name} ${escapeMarkdown(shown(value!, feminine))}`);
   return present.length === 0 ? "Pas encore classé" : present.join("\n");
 }
 
@@ -338,7 +355,7 @@ function priorLine(prior: PriorEvidence): string {
   const name = escapeMarkdown(
     truncate(prior.name, ALERT_CONFIG.cardNameCharacters),
   );
-  return `• ${name} — le ${day(prior.crossedAt)} (pic ${number(prior.peakCcu)} joueurs, ${prior.ageDays}${NB}j après sa création)`;
+  return `• ${name} — ${day(prior.crossedAt)} (pic ${number(prior.peakCcu)} joueurs, ${prior.ageDays}${NB}j après sa création)`;
 }
 
 function counts(key: KeyEvidence): string {
@@ -369,9 +386,14 @@ function waveRank(evidence: AlertEvidence): number {
 function waveLine(evidence: AlertEvidence): string {
   const rank = waveRank(evidence);
   const name = escapeMarkdown(
-    truncate(evidence.game.name, ALERT_CONFIG.cardNameCharacters),
+    truncate(
+      evidence.game.name.replace(/\s+/g, " ").trim(),
+      ALERT_CONFIG.cardNameCharacters,
+    ),
   );
-  return `🌊 **Vague en formation**${NB}: ${name} est le ${rank === 1 ? "1er" : `${rank}e`} jeu récent du même motif à dépasser ${number(ALERT_CONFIG.crossingCcu)} joueurs en ${days(evidence.waveWindowDays)}.`;
+  const crossed =
+    rank === 1 ? "1 jeu du même motif a dépassé" : `${rank} jeux du même motif ont dépassé`;
+  return `🌊 **Vague en formation**${NB}: ${crossed} ${number(ALERT_CONFIG.crossingCcu)} joueurs en même temps en moins de ${days(evidence.waveWindowDays)}${NB}; ${name} est le ${rank === 1 ? "1er" : `${rank}e`}.`;
 }
 
 function keyField(key: KeyEvidence): {
@@ -464,7 +486,7 @@ export function waveMessage(
   const fields: NonNullable<DiscordEmbed["fields"]> = [
     {
       name: "👥 Joueurs",
-      value: truncate(`**${number(game.lastCcu)}** en ce moment\n${dayBefore(game)}`, limit),
+      value: truncate(`**${number(game.lastCcu)}** à la détection\n${dayBeforeCard(game)}`, limit),
       inline: true,
     },
     {
@@ -535,19 +557,25 @@ function digestEmbed(
 ): DiscordEmbed {
   const game = evidence.game;
   const liked = likes(game);
-  const format = [game.family, game.template, game.coreAction]
-    .filter((value): value is string => value !== null && value !== "none")
-    .map(escapeMarkdown)
-    .join(" · ");
+  // `none` values are skipped, and so is a value equal to the one before it.
+  const kept: string[] = [];
+  for (const value of [game.family, game.template, game.coreAction]) {
+    if (value !== null && value !== "none" && value !== kept.at(-1))
+      kept.push(value);
+  }
+  const format = kept.map(escapeMarkdown).join(" · ");
   const patterns = evidence.keys
     .map((key) => `${label(key)} (${plural(key.trackedGames, "jeu suivi", "jeux suivis")})`)
     .join(`${NB}; `);
   const lines = [
-    `👥 **${number(game.lastCcu)} joueurs** en ce moment · percée **${moment(game.crossedAt)}** (${ago(game.crossedAt, now)}) · ${dayBefore(game).replace(" de sa percée", "")}`,
+    `👥 **${number(game.lastCcu)} joueurs** à la détection · percée **${moment(game.crossedAt)}** (${ago(game.crossedAt, now)}) · ${dayBeforeDigest(game)}`,
     `🎂 Créé le **${day(game.robloxCreatedAt)}** (${ageDays(game)}${NB}j avant sa percée)${liked === null ? "" : ` · 👍 ${liked}`}`,
   ];
   if (format !== "") lines.push(`🎮 ${format}`);
-  if (patterns !== "") lines.push(`🆕 Premier à percer pour${NB}: ${patterns}`);
+  if (patterns !== "")
+    lines.push(
+      `🆕 Premier à percer depuis ${config.lookbackDays} jours${NB}: ${truncate(patterns, config.digestPatternCharacters)}`,
+    );
   const embed: DiscordEmbed = {
     ...baseEmbed(evidence),
     description: truncate(lines.join("\n"), config.discordDescriptionCharacters),
