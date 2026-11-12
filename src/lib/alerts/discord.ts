@@ -2,7 +2,8 @@ import { ALERT_CONFIG } from "../config";
 import { titleWords } from "../title";
 import type { AlertDecision, AlertKind, CardFacts } from "./types";
 
-const DAY_MS = 24 * 60 * 60 * 1_000;
+const HOUR_MS = 60 * 60 * 1_000;
+const DAY_MS = 24 * HOUR_MS;
 
 // A prior breakout of a key; everything but the id is null when its facts could not be read.
 export interface PriorEvidence {
@@ -16,7 +17,7 @@ export interface PriorEvidence {
 
 export interface KeyEvidence {
   key: string;
-  // How the card names the key, e.g. `Title word: "ragdoll"`.
+  // How the card names the key, in French, e.g. `mot du titre « ragdoll »`.
   label: string;
   priors: PriorEvidence[];
   trackedGames: number;
@@ -113,15 +114,42 @@ function escapeMarkdown(text: string): string {
   return text.replace(/[\\*_~|>[\]()`]/g, "\\$&");
 }
 
+// Non-breaking space: the French typography keeps it before `:` `%` and inside « ».
+const NB = " ";
+
+function quoted(text: string): string {
+  return `«${NB}${text}${NB}»`;
+}
+
+// A classification value as the owner reads it: the literal `none` is "aucun".
+function shown(value: string): string {
+  return value === "none" ? "aucun" : value;
+}
+
 function keyLabel(key: string, spelled: Map<string, string>): string {
   const separator = key.indexOf(":");
   const kind = key.slice(0, separator);
   const value = key.slice(separator + 1);
-  if (kind === "word") return `Title word: "${spelled.get(value) ?? value}"`;
-  if (kind === "action") return `Gameplay: ${value.replace("|", " / ")}`;
-  if (kind === "template") return `Title template: ${value}`;
+  if (kind === "word")
+    return `mot du titre ${quoted(spelled.get(value) ?? value)}`;
+  if (kind === "action")
+    return `gameplay ${quoted(value.split("|").map(shown).join(" / "))}`;
+  if (kind === "template") return `modèle de titre ${quoted(shown(value))}`;
   return key;
 }
+
+// Alerts recorded before the cards were French store English labels; this reads them in French.
+export function frenchLabel(label: string): string {
+  const word = /^Title word: "(.*)"$/s.exec(label);
+  if (word !== null) return `mot du titre ${quoted(word[1])}`;
+  const action = /^Gameplay: (.*)$/s.exec(label);
+  if (action !== null)
+    return `gameplay ${quoted(action[1].split(" / ").map(shown).join(" / "))}`;
+  const template = /^Title template: (.*)$/s.exec(label);
+  if (template !== null) return `modèle de titre ${quoted(shown(template[1]))}`;
+  return label;
+}
+
 
 function conceptCommand(
   decision: AlertDecision,
@@ -210,20 +238,58 @@ function truncate(text: string, limit: number): string {
   return `${text.slice(0, end)}…`;
 }
 
+const NUMBER_FORMAT = new Intl.NumberFormat("fr-FR");
+
 function number(value: number): string {
-  return value.toLocaleString("en-US");
+  return NUMBER_FORMAT.format(value);
+}
+
+function plural(count: number, one: string, many: string): string {
+  return `${number(count)} ${count > 1 ? many : one}`;
 }
 
 function days(count: number): string {
-  return `${count} ${count === 1 ? "day" : "days"}`;
+  return plural(count, "jour", "jours");
 }
 
-function hour(iso: string): string {
-  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+// Every date is shown in the owner's time zone, in French.
+function parts(iso: string, options: Intl.DateTimeFormatOptions) {
+  const formatted = new Intl.DateTimeFormat("fr-FR", {
+    timeZone: ALERT_CONFIG.digestTimeZone,
+    hourCycle: "h23",
+    ...options,
+  }).formatToParts(new Date(iso));
+  const get = (type: string) =>
+    formatted.find((part) => part.type === type)?.value ?? "";
+  return get;
 }
 
+// `dim. 2 nov.`
 function day(iso: string): string {
-  return `${iso.slice(0, 10)} UTC`;
+  const get = parts(iso, { weekday: "short", day: "numeric", month: "short" });
+  return `${get("weekday")} ${get("day")} ${get("month")}`;
+}
+
+// `mer. 11 nov. à 12 h`, with the minutes only when they are not :00.
+function moment(iso: string): string {
+  const get = parts(iso, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const minutes = Number(get("minute"));
+  const clock = `${Number(get("hour"))}${NB}h${minutes === 0 ? "" : `${NB}${get("minute")}`}`;
+  return `${get("weekday")} ${get("day")} ${get("month")} à${NB}${clock}`;
+}
+
+// `il y a 3 h`, `il y a 2 j`.
+function ago(iso: string, now: Date): string {
+  const elapsed = now.getTime() - Date.parse(iso);
+  if (elapsed < HOUR_MS) return `il y a moins d'1${NB}h`;
+  if (elapsed < DAY_MS) return `il y a ${Math.floor(elapsed / HOUR_MS)}${NB}h`;
+  return `il y a ${Math.floor(elapsed / DAY_MS)}${NB}j`;
 }
 
 function ageDays(game: GameEvidence): number {
@@ -235,30 +301,29 @@ function ageDays(game: GameEvidence): number {
   );
 }
 
-function trajectory(game: GameEvidence): string {
-  const parts = [
-    `${number(game.lastCcu)} CCU now`,
-    `crossed ${number(ALERT_CONFIG.crossingCcu)} CCU at ${hour(game.crossedAt)}`,
-    game.ccuDayBefore === null
-      ? "no reading 24 hours before"
-      : `${number(game.ccuDayBefore)} CCU 24 hours before`,
-  ];
-  if (game.likeRatio !== null)
-    parts.push(`${Math.round(game.likeRatio * 100)}% likes`);
-  return parts.join("; ");
+function dayBefore(game: GameEvidence): string {
+  return game.ccuDayBefore === null
+    ? "pas de relevé la veille"
+    : `${number(game.ccuDayBefore)} la veille de sa percée`;
+}
+
+function likes(game: GameEvidence): string | null {
+  return game.likeRatio === null
+    ? null
+    : `${Math.round(game.likeRatio * 100)}${NB}% de j'aime`;
 }
 
 function format(game: GameEvidence): string {
   const lines = [
-    ["Family", game.family],
-    ["Template", game.template],
-    ["Reward loop", game.rewardLoop],
-    ["Core action", game.coreAction],
+    [`Famille${NB}:`, game.family],
+    [`Modèle de titre${NB}:`, game.template],
+    [`Récompense${NB}:`, game.rewardLoop],
+    [`Action principale${NB}:`, game.coreAction],
   ] as const;
-  const shown = lines
+  const present = lines
     .filter(([, value]) => value !== null)
-    .map(([name, value]) => `${name}: ${escapeMarkdown(value!)}`);
-  return shown.length === 0 ? "Not classified yet" : shown.join("\n");
+    .map(([name, value]) => `${name} ${escapeMarkdown(shown(value!))}`);
+  return present.length === 0 ? "Pas encore classé" : present.join("\n");
 }
 
 function priorLine(prior: PriorEvidence): string {
@@ -268,36 +333,27 @@ function priorLine(prior: PriorEvidence): string {
     prior.peakCcu === null ||
     prior.ageDays === null
   ) {
-    return `Game ${prior.universeId} (facts unavailable)`;
+    return `• Jeu ${prior.universeId} (infos indisponibles)`;
   }
   const name = escapeMarkdown(
     truncate(prior.name, ALERT_CONFIG.cardNameCharacters),
   );
-  return `${name}: crossed ${day(prior.crossedAt)}, peak ${number(prior.peakCcu)} CCU, ${days(prior.ageDays)} old`;
+  return `• ${name} — le ${day(prior.crossedAt)} (pic ${number(prior.peakCcu)} joueurs, ${prior.ageDays}${NB}j après sa création)`;
 }
 
 function counts(key: KeyEvidence): string {
-  return `${number(key.trackedGames)} tracked games, ${number(key.recentGames)} created in the last ${ALERT_CONFIG.recentGamesDays} days`;
+  const recent = `${number(key.recentGames)} ${key.recentGames > 1 ? "créés" : "créé"}`;
+  const carry = key.trackedGames > 1 ? "portent" : "porte";
+  return `${plural(key.trackedGames, "jeu suivi", "jeux suivis")} ${carry} ce motif, dont ${recent} ces ${ALERT_CONFIG.recentGamesDays} derniers jours.`;
 }
 
-function kindLine(evidence: AlertEvidence): string {
-  const age = ageDays(evidence.game);
-  const kind =
-    evidence.kind === "wave"
-      ? "Another breakout of a pattern seen before"
-      : "First breakout of its patterns";
-  return `${kind}. Created ${day(evidence.game.robloxCreatedAt)}, ${days(age)} before crossing.`;
-}
-
-function ordinal(count: number): string {
-  const tens = count % 100;
-  if (tens >= 11 && tens <= 13) return `${count}th`;
-  return `${count}${({ 1: "st", 2: "nd", 3: "rd" } as Record<number, string>)[count % 10] ?? "th"}`;
+function label(key: KeyEvidence): string {
+  return escapeMarkdown(frenchLabel(key.label));
 }
 
 // The wave line of a card: the highest rank among its keys, counted from the priors that crossed within the window
 // the decision used.
-function waveLine(evidence: AlertEvidence): string {
+function waveRank(evidence: AlertEvidence): number {
   const crossed = Date.parse(evidence.game.crossedAt);
   const windowMs = evidence.waveWindowDays * DAY_MS;
   let rank = 1;
@@ -307,7 +363,15 @@ function waveLine(evidence: AlertEvidence): string {
     ).length;
     rank = Math.max(rank, inWindow + 1);
   }
-  return `Wave forming: ${ordinal(rank)} breakout of this pattern within ${days(evidence.waveWindowDays)}`;
+  return rank;
+}
+
+function waveLine(evidence: AlertEvidence): string {
+  const rank = waveRank(evidence);
+  const name = escapeMarkdown(
+    truncate(evidence.game.name, ALERT_CONFIG.cardNameCharacters),
+  );
+  return `🌊 **Vague en formation**${NB}: ${name} est le ${rank === 1 ? "1er" : `${rank}e`} jeu récent du même motif à dépasser ${number(ALERT_CONFIG.crossingCcu)} joueurs en ${days(evidence.waveWindowDays)}.`;
 }
 
 function keyField(key: KeyEvidence): {
@@ -315,18 +379,20 @@ function keyField(key: KeyEvidence): {
   value: string;
   inline: boolean;
 } {
-  const shown = key.priors
+  const lines = key.priors
     .slice(0, ALERT_CONFIG.cardMaximumPriors)
     .map(priorLine);
-  if (key.priors.length > shown.length)
-    shown.push(`and ${key.priors.length - shown.length} more`);
+  if (key.priors.length > lines.length) {
+    const more = key.priors.length - lines.length;
+    lines.push(`et ${plural(more, "autre", "autres")}`);
+  }
   const priors =
-    shown.length === 0
-      ? "No earlier breakout"
-      : `Earlier breakouts:\n${shown.join("\n")}`;
+    lines.length === 0
+      ? `Aucun jeu de ce motif n'avait dépassé ${number(ALERT_CONFIG.crossingCcu)} joueurs ces ${ALERT_CONFIG.lookbackDays} derniers jours.`
+      : `Déjà percé avant lui${NB}:\n${lines.join("\n")}`;
   return {
     name: truncate(
-      escapeMarkdown(key.label),
+      `🔎 Motif${NB}: ${label(key)}`,
       ALERT_CONFIG.discordFieldNameCharacters,
     ),
     value: truncate(
@@ -386,39 +452,57 @@ function baseEmbed(evidence: AlertEvidence): DiscordEmbed {
   };
 }
 
-// The push card of one game: one embed with its trajectory, format, one field per key and the concept check.
+// The push card of one game: one embed with its numbers, dates, format, one field per key and the concept check.
+// `now` is the render time, against which the ages are computed.
 export function waveMessage(
   evidence: AlertEvidence,
   config = ALERT_CONFIG,
+  now = new Date(),
 ): DiscordMessage {
+  const game = evidence.game;
+  const limit = config.discordFieldValueCharacters;
   const fields: NonNullable<DiscordEmbed["fields"]> = [
-    { name: "Trajectory", value: truncate(trajectory(evidence.game), config.discordFieldValueCharacters), inline: false },
-    { name: "Format", value: truncate(format(evidence.game), config.discordFieldValueCharacters), inline: false },
-    ...evidence.keys.slice(0, config.cardMaximumKeys).map(keyField),
+    {
+      name: "👥 Joueurs",
+      value: truncate(`**${number(game.lastCcu)}** en ce moment\n${dayBefore(game)}`, limit),
+      inline: true,
+    },
+    {
+      name: "📈 Percée",
+      value: truncate(`**${moment(game.crossedAt)}**\n${ago(game.crossedAt, now)}`, limit),
+      inline: true,
+    },
+    {
+      name: "🎂 Créé",
+      value: truncate(`**${day(game.robloxCreatedAt)}**\n${ageDays(game)}${NB}j avant sa percée`, limit),
+      inline: true,
+    },
   ];
+  const liked = likes(game);
+  if (liked !== null) fields.push({ name: "👍 Avis", value: liked, inline: true });
+  fields.push(
+    { name: "🎮 Format", value: truncate(format(game), limit), inline: false },
+    ...evidence.keys.slice(0, config.cardMaximumKeys).map(keyField),
+  );
   if (evidence.keys.length > config.cardMaximumKeys) {
+    const more = evidence.keys.length - config.cardMaximumKeys;
     fields.push({
-      name: "More patterns",
-      value: `${evidence.keys.length - config.cardMaximumKeys} more keys, listed in the alert evidence`,
+      name: "Autres motifs",
+      value: `${plural(more, "autre motif", "autres motifs")}, dans la table alerts`,
       inline: false,
     });
   }
   if (evidence.conceptCommand !== null) {
     fields.push({
-      name: "Local concept check",
-      value: truncate(
-        `\`${evidence.conceptCommand}\``,
-        config.discordFieldValueCharacters,
-      ),
+      name: `🧪 Vérifier l'idée`,
+      value: truncate(`\`${evidence.conceptCommand}\``, limit),
       inline: false,
     });
   }
+  const description = `Un jeu créé il y a moins de ${days(config.candidateMaximumAgeDays)} vient de passer ${number(config.crossingCcu)} joueurs en même temps, et d'autres jeux du même motif l'ont fait juste avant lui${NB}: une vague commence peut-être.`;
   const embed: DiscordEmbed = {
     ...baseEmbed(evidence),
-    description: truncate(
-      kindLine(evidence),
-      config.discordDescriptionCharacters,
-    ),
+    description: truncate(description, config.discordDescriptionCharacters),
     fields: fields.slice(0, config.discordMaximumFields),
   };
   return {
@@ -447,56 +531,64 @@ function fitCommand(command: string, limit: number): string | null {
 function digestEmbed(
   evidence: AlertEvidence,
   config: typeof ALERT_CONFIG,
+  now: Date,
 ): DiscordEmbed {
   const game = evidence.game;
+  const liked = likes(game);
+  const format = [game.family, game.template, game.coreAction]
+    .filter((value): value is string => value !== null && value !== "none")
+    .map(escapeMarkdown)
+    .join(" · ");
   const patterns = evidence.keys
-    .map(
-      (key) =>
-        `${escapeMarkdown(key.label)} (${key.priors.length} earlier, ${number(key.trackedGames)} tracked)`,
-    )
-    .join("; ");
+    .map((key) => `${label(key)} (${plural(key.trackedGames, "jeu suivi", "jeux suivis")})`)
+    .join(`${NB}; `);
+  const lines = [
+    `👥 **${number(game.lastCcu)} joueurs** en ce moment · percée **${moment(game.crossedAt)}** (${ago(game.crossedAt, now)}) · ${dayBefore(game).replace(" de sa percée", "")}`,
+    `🎂 Créé le **${day(game.robloxCreatedAt)}** (${ageDays(game)}${NB}j avant sa percée)${liked === null ? "" : ` · 👍 ${liked}`}`,
+  ];
+  if (format !== "") lines.push(`🎮 ${format}`);
+  if (patterns !== "") lines.push(`🆕 Premier à percer pour${NB}: ${patterns}`);
   const embed: DiscordEmbed = {
     ...baseEmbed(evidence),
-    description: `${trajectory(game)}\n${format(game).replace(/\n/g, "; ")}`,
-    fields:
-      patterns === ""
-        ? []
-        : [
-            {
-              name: "Patterns",
-              value: truncate(patterns, config.digestPatternCharacters),
-              inline: false,
-            },
-          ],
+    description: truncate(lines.join("\n"), config.discordDescriptionCharacters),
   };
   const command =
     evidence.conceptCommand === null ? null : fitCommand(evidence.conceptCommand, config.digestCommandCharacters);
-  if (command !== null) embed.footer = { text: command };
+  if (command !== null) embed.footer = { text: `🧪 ${command}` };
   return embed;
 }
 
-// The daily digest: one compact embed per game, most CCU first, at most digestMaximumGames, with an "and N more" line
-// when it cuts.
+// The daily digest: one compact embed per game, most players first, at most digestMaximumGames, with a line saying how
+// many are left out when it cuts.
 export function digestMessage(
   evidences: AlertEvidence[],
   config = ALERT_CONFIG,
+  now = new Date(),
 ): DiscordMessage {
   const limit = Math.min(
     config.digestMaximumGames,
     config.discordMaximumEmbeds,
   );
   const sorted = [...evidences].sort((a, b) => b.game.lastCcu - a.game.lastCcu);
-  const shown = sorted.slice(0, limit);
-  const cut = sorted.length - shown.length;
-  const content = `Daily digest: ${sorted.length} first ${sorted.length === 1 ? "breakout" : "breakouts"}${
-    cut > 0 ? `, and ${cut} more, listed in the alerts table` : ""
-  }`;
+  const included = sorted.slice(0, limit);
+  const cut = sorted.length - included.length;
+  const single = sorted.length === 1;
+  const cutText =
+    cut === 0
+      ? ""
+      : ` ${included.length === 1 ? "Voici le plus joué" : `Voici les ${included.length} plus joués`}${NB}; ${cut === 1 ? "l'autre est" : `les ${cut} autres sont`} dans la table alerts.`;
+  const content = truncate(
+    `📬 **Les nouvelles percées du jour**${NB}: ${single ? "1 jeu récent a dépassé" : `${sorted.length} jeux récents ont dépassé`} ${number(config.crossingCcu)} joueurs en même temps sur un motif sans percée ces ${config.lookbackDays} derniers jours.${cutText}\n_Une percée = un jeu créé il y a moins de ${days(config.candidateMaximumAgeDays)} qui passe ${number(config.crossingCcu)} joueurs en même temps. Un motif = un mot du titre, un gameplay ou un modèle de titre que d'autres jeux partagent._`,
+    config.discordContentCharacters,
+  );
   const budget = Math.floor(
-    config.discordMessageCharacters / Math.max(1, shown.length),
+    config.discordMessageCharacters / Math.max(1, included.length),
   );
   return {
     content,
-    embeds: shown.map((evidence) => fit(digestEmbed(evidence, config), budget)),
+    embeds: included.map((evidence) =>
+      fit(digestEmbed(evidence, config, now), budget),
+    ),
     allowed_mentions: { parse: [] },
   };
 }
