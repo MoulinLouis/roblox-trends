@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Replace the v1 radar code on the `radar-v2` branch with the v2 data core: TimescaleDB schema, six idempotent collectors (`census`, `poll`, `votes`, `charts`, `explore`, `thumbnails`), a job runner with Healthchecks pings, the legacy history import from Aiven, and a status CLI.
+**Goal:** Replace the v1 radar code on the `radar-v2` branch with the v2 data core: TimescaleDB schema, six idempotent collectors (`census`, `poll`, `votes`, `charts`, `explore`, `thumbnails`), a job runner with Healthchecks pings, the legacy history import from the v1 database, and a status CLI.
 
 **Architecture:** One PostgreSQL 18 + TimescaleDB database. Drizzle defines regular tables and hypertable base tables. A custom SQL migration turns four tables into compressed hypertables and adds continuous aggregates. Every collector is a `JobDefinition` run by `executeJob`, which records `job_runs`, pings Healthchecks and enforces a timeout. Collectors receive their API clients as dependencies, so tests use fakes. Phase 1b (separate plan) provisions the server, the systemd timers, backups and deployment.
 
@@ -15,7 +15,7 @@
 ## Ground rules for the executor
 
 - Work in the worktree `/home/playfade/dev/roblox-trends/.worktrees/radar-v2` on branch `radar-v2`. The v1 collector keeps running from `main`; never push to `main` from this plan.
-- `.env.local` in the worktree contains `LEGACY_DATABASE_URL` (the v1 Aiven production database). Never rename it back to `DATABASE_URL`. `src/db/migrate.ts` refuses to migrate a database that holds v1 tables, as a second safety net.
+- `.env.local` in the worktree contains `LEGACY_DATABASE_URL` (the v1 production database). Never rename it back to `DATABASE_URL`. `src/db/migrate.ts` refuses to migrate a database that holds v1 tables, as a second safety net.
 - All code, comments, tests and docs are in English. Commits follow Conventional Commits.
 - **Database tests.** Files named `*.db.test.ts` run only when `TEST_DATABASE_URL` points to a PostgreSQL 18 + TimescaleDB server where the user can create databases. Each test file creates and drops its own database. CI provides this server, and `src/db/test-database.ts` fails the run in CI if the variable is missing. Locally, put the variable in `.env.test.local`: `@next/env` skips `.env.local` when `NODE_ENV=test`, which Vitest sets. Never copy `LEGACY_DATABASE_URL` into `.env.test.local`. Without a local server these suites are reported as skipped. In that case, push the branch after each database task and confirm in CI: `git push origin radar-v2 && gh run watch --exit-status`.
 - Fixtures (fake games) are written only into these disposable test databases, never into an application database.
@@ -4489,7 +4489,7 @@ DATABASE_URL=
 # Vitest runs with NODE_ENV=test, and @next/env does not read .env.local in that mode. CI provides one.
 TEST_DATABASE_URL=
 
-# v1 Aiven database, read only by `npm run import:legacy`.
+# v1 database, read only by `npm run import:legacy`.
 LEGACY_DATABASE_URL=
 
 # Healthchecks.io ping base, for example https://hc-ping.com/<ping-key>. Checks are auto-created by slug.
@@ -4597,8 +4597,8 @@ Expected: CI green with every database suite executed.
 - Server provisioning script, PostgreSQL roles (application owner, read-only analysis role), TimescaleDB tuning, Node 24 LTS.
 - systemd units and timers per job, a pull-based deploy timer, the web service behind `tailscale serve`.
 - pgBackRest archiving to R2 or B2, the weekly restore test, disk monitoring, Healthchecks periods and grace times.
-- First production run, in this order: `pg_dump` the four v1 tables (`games`, `game_metadata_history`, `snapshots`, `daily_snapshots`) from Aiven to the backup bucket; run the read-only check `select chart, count(*) from snapshots where source = 'roblox-charts' group by chart` and confirm every label maps; `npm run db:migrate`; `npm run import:legacy`; only then enable the timers (the import warns if poll already ran); a 24-hour observation period. Keep the v1 dump after Aiven is deleted.
-- Cutover hardening: `LEGACY_DATABASE_URL` uses a read-only Aiven role, is tested from the server with a read-only `select 1` over TLS (`sslmode=verify-full`) before the window, and stays out of the job units' environment; the import summary must show `unmappedLabels = 0` and an explained `invalidRows` before the timers are enabled.
+- First production run, in this order: `pg_dump` the four v1 tables (`games`, `game_metadata_history`, `snapshots`, `daily_snapshots`) from the v1 database to the backup bucket; run the read-only check `select chart, count(*) from snapshots where source = 'roblox-charts' group by chart` and confirm every label maps; `npm run db:migrate`; `npm run import:legacy`; only then enable the timers (the import warns if poll already ran); a 24-hour observation period. Keep the v1 dump after the v1 database is deleted.
+- Cutover hardening: `LEGACY_DATABASE_URL` uses a read-only role on the v1 database, is tested from the server with a read-only `select 1` over TLS (`sslmode=verify-full`) before the window, and stays out of the job units' environment; the import summary must show `unmappedLabels = 0` and an explained `invalidRows` before the timers are enabled.
 - Deploy order: stop the timers and wait for running job units, run `npm run db:migrate`, then restart the timers. Install with `npm ci` (dev dependencies are needed by `next build`).
 - PostgreSQL setup: `shared_preload_libraries = 'timescaledb'`; create the extension as superuser before the first `db:migrate` unless the owner role may create it; the read-only analysis role gets `ALTER DEFAULT PRIVILEGES` so views and aggregates added by later migrations stay readable.
 - Monitor TimescaleDB's own jobs (aggregate refresh, compression, retention) from `timescaledb_information.job_stats`, as a `status` line or a Healthchecks check: a stalled `game_hourly` refresh makes the active-set query scan raw rows back to the watermark until `poll` times out.

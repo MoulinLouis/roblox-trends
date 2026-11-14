@@ -120,7 +120,7 @@ npm run status
 | --- | --- |
 | `DATABASE_URL` | The v2 database. Required by every command that connects to it. |
 | `TEST_DATABASE_URL` | Server for the database test suites, set in `.env.test.local` (see Tests). |
-| `LEGACY_DATABASE_URL` | A v1 database, read only by `npm run import:legacy`. The production one (Aiven) was deleted on 2026-10-25; its dumps are in R2 under `v1/`. Never use it as `DATABASE_URL`. |
+| `LEGACY_DATABASE_URL` | A v1 database, read only by `npm run import:legacy`. The production one was deleted on 2026-10-25; its dumps are in R2 under `v1/`. Never use it as `DATABASE_URL`. |
 | `HEALTHCHECKS_PING_BASE` | Healthchecks.io ping base, for example `https://hc-ping.com/<ping-key>`. Checks are created on first ping with Healthchecks' default 1-day period, so they alert about 25 hours late until `npm run provision:healthchecks` sets the real periods. Without it, no ping is sent. |
 | `HEALTHCHECKS_API_KEY` | Read-write Healthchecks API key, read from the environment only (not from `.env.local`) by `npm run provision:healthchecks`. Never stored on the server. |
 | `RADAR_REQUIRE_HEALTHCHECKS` | `1` makes `npm run job` and `npm run system-check` refuse to run without `HEALTHCHECKS_PING_BASE`. |
@@ -199,6 +199,6 @@ v2 runs on one server, `radar-prod`: a Hetzner Cloud CAX21 (4 arm64 vCPU, 8 GB R
 - Timers: one systemd timer per job, with the intervals of `JOB_CONFIG`, plus the deploy, the system check, the backups and the restore test (`ops/systemd`).
 - Backups: pgBackRest archives WAL continuously to Cloudflare R2 and takes a daily backup (full on Sundays), for 14 days of point-in-time recovery; a weekly job restores the latest backup into a scratch cluster and checks it.
 - Monitoring: 20 Healthchecks.io checks, provisioned by `npm run provision:healthchecks`.
-- Deploys: every 5 minutes, the server deploys the newest commit of `main` once its CI passed. v1 stopped on 2026-10-25, when its Aiven database ran out of disk space and went read-only.
+- Deploys: every 5 minutes, the server deploys the newest commit of `main` once its CI passed. v1 stopped on 2026-10-25, when its database ran out of disk space and went read-only.
 
 The runbook, with the layout, access, secrets, deploys, recovery, alerts and maintenance, is [`docs/operations.md`](docs/operations.md); the phase 1b plan with its execution notes is [`docs/plans/2026-10-21-radar-v2-phase-1b-infrastructure.md`](docs/plans/2026-10-21-radar-v2-phase-1b-infrastructure.md).

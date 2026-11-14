@@ -488,8 +488,8 @@ async function importDaily(target: Database, source: Pool, imported: Set<number>
     const rows = page.flatMap((row) => {
       const universeId = parseLegacyId(row.universe_id);
       if (universeId === null || !imported.has(universeId)) return [];
-      // v1 truncated days in its session time zone (UTC on Aiven). A day cut elsewhere is filed under the nearest UTC
-      // midnight, which is the calendar day it covers for any offset below 12 hours.
+      // v1 truncated days in its session time zone (UTC in production). A day cut elsewhere is filed under the
+      // nearest UTC midnight, which is the calendar day it covers for any offset below 12 hours.
       if (row.day_at.getTime() % DAY !== 0) {
         offMidnight += 1;
         offMidnightExample ??= row.day_at.toISOString();

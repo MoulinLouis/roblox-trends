@@ -13,7 +13,7 @@ The v1 radar was built quickly on free infrastructure. It kept collecting for ei
 - **Fragile measurements.** Point-to-point 72-hour comparisons on irregular samples labelled every format "declining" on weekdays. Market CCU averaged about 8M on weekdays against 12–14M on Saturdays. "New entrants" were counted from the radar's first sighting rather than from the real release. CCU was duplicated on one row per chart (about 3,700 rows per collection for about 3,000 games). Visits were stored as `real`, which loses precision on large games.
 - **Unvalidated scores.** Opportunity and momentum weights were invented and never checked against outcomes. "Retention" counted keywords such as "upgrade" and "rebirth". The developer profile was frozen at "solo, limited budget, 2–4 weeks".
 - **Unused outputs.** The idea generator had produced two ideas, and none was saved or rated. The Top Earning chart (monetization), the Top Revisited chart (retention) and the session-length estimate derived from visits (for example Adopt Me 28 minutes, Fisch 32, Steal a Brainrot 11) were collected or derivable, but never analysed.
-- **Free-tier time bombs.** The Neon-to-Aiven move lost the data collected from 2026-08-10 to 2026-08-24. The Aiven free plan caps storage at 1 GB, and the database already used 504 MB. GitHub disables scheduled workflows after 60 days without repository activity. A health check expected a run every 20 minutes while runs actually arrived every 4–5 hours, so its alert stayed red permanently and the agent brief failed for six weeks without anyone noticing.
+- **Free-tier time bombs.** A move between free database hosts lost the data collected from 2026-08-10 to 2026-08-24. The free plan of the v1 host caps storage at 1 GB, and the database already used 504 MB. GitHub disables scheduled workflows after 60 days without repository activity. A health check expected a run every 20 minutes while runs actually arrived every 4–5 hours, so its alert stayed red permanently and the agent brief failed for six weeks without anyone noticing.
 
 The owner's hit did not come from the radar. It came from a viral X clip of a 2D Steam demo (Rippleloop), transposed into a Roblox "+1" format, then executed and differentiated (secret throws, cinematics). v2 therefore focuses on the Roblox half of that recipe: which Roblox formats convert right now, what is breaking out early, and whether a concept still has room.
 
@@ -241,15 +241,15 @@ The Ideas, Trends and Settings pages are removed.
 - A Claude API failure leaves games "unclassified" and retries on the next run.
 - Roblox 429 responses trigger backoff and priority shedding.
 
-**Delivery phases.** Each phase is usable on its own. The v1 collector was meant to keep running on Aiven until cutover. On 2026-10-25 its database ran out of disk space and went read-only, so that part of phase 4 came first: the GitHub scheduled workflow was disabled, `radar-v2` was fast-forwarded into `main`, and `main` became the deploy branch.
+**Delivery phases.** Each phase is usable on its own. The v1 collector was meant to keep running on its hosted database until cutover. On 2026-10-25 its database ran out of disk space and went read-only, so that part of phase 4 came first: the GitHub scheduled workflow was disabled, `radar-v2` was fast-forwarded into `main`, and `main` became the deploy branch.
 
 1. **Data:** server provisioning, monitoring, backups, v2 schema, legacy import, and the `census`, `poll`, `votes`, `charts`, `explore` and `thumbnails` collectors. New data accumulates from this point.
 2. **Classification:** Opus 5.5 against Haiku 5.5 on 200 games (the owner chooses the model), initial classification, clusters.
 3. **Analysis:** SQL views and functions, then backtest validation.
 4. **Dashboard and cutover:** the remaining pages and the full versions of the first ones (which ship between phases 1 and 2, see section 6), then removal of v1 code (ideas, trends, agent brief, Discord reports, scheduler leases).
-   - A final incremental import from Aiven closes any gap (done on 2026-10-24).
+   - A final incremental import from the v1 database closes any gap (done on 2026-10-24).
    - The GitHub scheduled workflow is disabled (done on 2026-10-25).
-   - Aiven stays read-only for 14 days, then is deleted (deleted on 2026-10-25, the day it went read-only, after a last dump of the v1 tables to R2 under `v1/`).
+   - The v1 database stays read-only for 14 days, then is deleted (deleted on 2026-10-25, the day it went read-only, after a last dump of the v1 tables to R2 under `v1/`).
 
 `AGENTS.md` and the README are updated to the v2 commands and local setup.
 
