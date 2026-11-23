@@ -4,7 +4,7 @@ import { markGameDetailsAttempted, upsertGameDetails } from "@/db/games";
 import { writeGameObservations } from "@/db/observations";
 import { getHttpRequestMetrics } from "@/lib/api/http";
 import type { RobloxApi } from "@/lib/api/roblox";
-import { JOB_CONFIG, RADAR_CONFIG } from "@/lib/config";
+import { ACTIVE_SET_CONFIG, JOB_CONFIG, RADAR_CONFIG } from "@/lib/config";
 import { errorMessage, logger } from "@/lib/logger";
 import { evaluateCollectionQuality, httpMetricsSince, isRateLimited, runBatchesWithDeadline } from "./batching";
 import type { JobDefinition } from "./runner";
@@ -26,11 +26,17 @@ export interface PollLimits {
   tailUniversesPerRun: number;
   // A tail game created within this many days is young; the others are established.
   youngMaximumAgeDays: number;
+  // A young tail game whose priority is below this is quiet: it had no reading at this CCU in the active set's lookback.
+  quietBelowCcu: number;
   // How long each lane of the tail should wait between two requests.
   tailRefreshMinutes: Record<TailLane, number>;
 }
 
-export type TailLane = "young" | "established";
+export type TailLane = "young" | "quiet" | "established";
+
+export const TAIL_LANES: readonly TailLane[] = ["young", "quiet", "established"];
+
+type LaneLimits = Pick<PollLimits, "youngMaximumAgeDays" | "quietBelowCcu">;
 
 // A game the run requests: an active game, or a promotion candidate that `games` does not hold yet.
 export type PlannedUniverse = Omit<ActiveUniverse, "robloxCreatedAt">;
@@ -50,9 +56,9 @@ export interface PollPlan {
 
 // The active set holds more games than one run can request within the game details limit. The hot set is requested
 // on every run; the tail rotates, since every game requested moves behind the others: a game polled gets fresh
-// details, and a game Roblox does not answer gets a new request time, so it is retried once per interval. Young and
-// established tail games wait their own lane's interval: each run requests the games furthest past it, so when the
-// tail outgrows the budget both lanes slow down in proportion. Candidates take the place of as many tail games, so
+// details, and a game Roblox does not answer gets a new request time, so it is retried once per interval. Young, quiet
+// and established tail games wait their own lane's interval: each run requests the games furthest past it, so when the
+// tail outgrows the budget every lane slows down in proportion. Candidates take the place of as many tail games, so
 // promoting them adds no request to the run.
 export function planPollRun(
   active: readonly ActiveUniverse[],
@@ -79,16 +85,18 @@ export function planPollRun(
 }
 
 // Young when created less than youngMaximumAgeDays ago, the comparison of rising_games' age filter: a game exactly that
-// old is established.
-export function tailLane(game: Pick<ActiveUniverse, "robloxCreatedAt">, now: Date, youngMaximumAgeDays: number): TailLane {
-  return game.robloxCreatedAt.getTime() > now.getTime() - youngMaximumAgeDays * dayMs ? "young" : "established";
+// old is established. A young game below quietBelowCcu is quiet: active only because it is young and had players this
+// week, under the Radar's lowest CCU filter. It waits longer, and joins the young lane with its first busier reading.
+export function tailLane(game: Pick<ActiveUniverse, "robloxCreatedAt" | "priority">, now: Date, limits: LaneLimits): TailLane {
+  if (game.robloxCreatedAt.getTime() <= now.getTime() - limits.youngMaximumAgeDays * dayMs) return "established";
+  return game.priority < limits.quietBelowCcu ? "quiet" : "young";
 }
 
 // The wait since the game's latest details request, in intervals of its lane: 1 when it is exactly due. A game never
 // requested comes first.
 function overdueRatio(game: ActiveUniverse, limits: PollLimits, now: Date): number {
   if (game.lastDetailsRequestAt === null) return Number.POSITIVE_INFINITY;
-  const intervalMs = limits.tailRefreshMinutes[tailLane(game, now, limits.youngMaximumAgeDays)] * 60_000;
+  const intervalMs = limits.tailRefreshMinutes[tailLane(game, now, limits)] * 60_000;
   return (now.getTime() - game.lastDetailsRequestAt.getTime()) / intervalMs;
 }
 
@@ -97,11 +105,12 @@ export function medianTailDetailsMinutesByLane(
   tailRequested: readonly ActiveUniverse[],
   unanswered: ReadonlySet<number>,
   now: Date,
-  youngMaximumAgeDays: number,
+  limits: LaneLimits,
 ): Record<TailLane, number | null> {
-  const lane = (wanted: TailLane) => tailRequested.filter((game) => tailLane(game, now, youngMaximumAgeDays) === wanted);
+  const lane = (wanted: TailLane) => tailRequested.filter((game) => tailLane(game, now, limits) === wanted);
   return {
     young: medianTailDetailsMinutes(lane("young"), unanswered, now),
+    quiet: medianTailDetailsMinutes(lane("quiet"), unanswered, now),
     established: medianTailDetailsMinutes(lane("established"), unanswered, now),
   };
 }
@@ -132,6 +141,8 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
     hotUniverses: dependencies.hotUniverses ?? config.hotUniverses,
     tailUniversesPerRun: dependencies.tailUniversesPerRun ?? config.tailUniversesPerRun,
     youngMaximumAgeDays: Math.max(...RADAR_CONFIG.ageOptionsDays),
+    // The young games below it are active only through the young-game rule of the active set.
+    quietBelowCcu: ACTIVE_SET_CONFIG.minimumCcu,
     tailRefreshMinutes: config.tailRefreshMinutes,
   };
   const candidatesPerRun = dependencies.candidatesPerRun ?? config.candidatesPerRun;
@@ -222,7 +233,9 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
           hot: plan.hot.length,
           candidates: plan.candidates.length,
           tail: plan.tail.length,
-          youngTail: plan.tail.filter((game) => tailLane(game, now, limits.youngMaximumAgeDays) === "young").length,
+          // Every young tail game, quiet ones included; quietTail counts those.
+          youngTail: plan.tail.filter((game) => tailLane(game, now, limits) !== "established").length,
+          quietTail: plan.tail.filter((game) => tailLane(game, now, limits) === "quiet").length,
           tailRequested: plan.tailRequested.length,
           requested: requested.length,
           attempted: outcome.attempted,
@@ -234,12 +247,7 @@ export function createPollJob(dependencies: PollDependencies): JobDefinition {
           // The priority of the first requested game left out: every game before it in the request order (the hot
           // set by priority, then the tail by request age) was attempted.
           shedBelowCcu: outcome.skippedItems > 0 ? requested[outcome.attempted].priority : null,
-          medianTailDetailsMinutes: medianTailDetailsMinutesByLane(
-            plan.tailRequested,
-            new Set(missing),
-            now,
-            limits.youngMaximumAgeDays,
-          ),
+          medianTailDetailsMinutes: medianTailDetailsMinutesByLane(plan.tailRequested, new Set(missing), now, limits),
           // The requested games Roblox did not answer: every requested game is answered, missing or skipped.
           missing: missing.length,
           missingSample: missing.slice(0, config.missingSampleSize),

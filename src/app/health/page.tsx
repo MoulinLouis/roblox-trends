@@ -5,6 +5,7 @@ import { MetricCard } from "@/components/MetricCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { dashboardDatabase } from "@/db/dashboard";
 import type { JobSummary } from "@/db/status";
+import { ACTIVE_SET_CONFIG } from "@/lib/config";
 import { readHealth } from "@/lib/dashboard/health";
 import { formatCount, formatElapsed, formatMinutes, formatPercent, formatUtc } from "@/lib/format";
 import { formatStat, hasStat, statAt, type TailRefresh, WATCHED_STATS } from "@/lib/status-report";
@@ -29,7 +30,7 @@ export default async function HealthPage() {
           </p>
         </div>
       </div>
-      <div className="grid grid-3">
+      <div className="grid grid-4">
         <MetricCard
           label="Coverage"
           value={formatPercent(coverage.listed ? coverage.tracked / coverage.listed : null)}
@@ -93,6 +94,10 @@ export default async function HealthPage() {
 
 const tailLaneCopy: Record<TailRefresh["lane"], { label: string; games: string }> = {
   young: { label: "Young games refresh", games: "young tail games, the ones the Radar lists" },
+  quiet: {
+    label: "Quiet young games refresh",
+    games: `young tail games below ${ACTIVE_SET_CONFIG.minimumCcu} CCU, under the Radar's lowest filter`,
+  },
   established: { label: "Established games refresh", games: "established tail games, whose CCU census counts every 10 min" },
 };
 

@@ -97,10 +97,16 @@ export const JOB_CONFIG = {
     // (RADAR_CONFIG.ageOptionsDays), are the only ones the Radar lists, and their hourly readings date its crossings
     // and pair its weekday-safe growth. Census counts the CCU of nearly every established tail game every 10 minutes,
     // so poll adds little more than their visits, favorites and metadata; a game that breaks out joins the hot set.
-    // On 2026-10-25 the tail held 2,240 young and 5,528 established games: about 2,240 × 2 + 5,528 / 4 ≈ 5,860
+    // Quiet games are young games below ACTIVE_SET_CONFIG.minimumCcu (50), the Radar's lowest CCU filter: active only
+    // because they are young and had players this week, and almost never in census. Two hours matches
+    // RADAR_CONFIG.velocityMaximumGapHours, so their rise can still be dated, and their first reading at 50 CCU or more
+    // moves them to the young lane. On 2026-10-25 the tail held 2,240 young and 5,528 established games: about 2,240 × 2 + 5,528 / 4 ≈ 5,860
     // requests an hour, against 6,300–6,900 (1,150 a run, fewer when candidates take their place). One rotating tail
-    // refreshed every game every 70 minutes. When the tail outgrows the budget, both lanes slow down in proportion.
-    tailRefreshMinutes: { young: 30, established: 240 },
+    // refreshed every game every 70 minutes. On 2026-11-23 it held 3,150 young, 1,934 quiet and 5,015 established
+    // games: about 3,150 × 2 + 1,934 / 2 + 5,015 / 4 ≈ 8,520 an hour, down from 11,420 with the quiet games every
+    // 30 minutes, which had slowed the young lane to 50 minutes and the established one to 6–8 hours. When the tail
+    // outgrows the budget, every lane slows down in proportion.
+    tailRefreshMinutes: { young: 30, quiet: 120, established: 240 },
     // Of the games requested (the hot set and the tail slice), not of the whole active set.
     minimumReturnedShare: 0.95,
     maximumConsecutiveFailedBatches: 3,

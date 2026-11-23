@@ -14,7 +14,7 @@ const coverage: CensusCoverage = {
   withinMinutes: 15,
 };
 const totals = { games: 41_233, pollObservations: 1_012_345, censusRows: 1_123_456 };
-const tailRefreshMinutes = { young: 30, established: 240 };
+const tailRefreshMinutes = { young: 30, quiet: 120, established: 240 };
 const noRuns = { runs: 0, degraded: 0, failed: 0, rateLimitedRuns: null, http: null };
 
 function summary(job: JobName, overrides: Partial<JobSummary> = {}): JobSummary {
@@ -76,7 +76,7 @@ describe("formatStatusReport", () => {
             missing: 1,
             missingSample: [3_269_082_462],
             shedBelowCcu: 63,
-            medianTailDetailsMinutes: { young: 31, established: 200 },
+            medianTailDetailsMinutes: { young: 31, quiet: 130, established: 200 },
           },
         },
         recent: { runs: 288, degraded: 3, failed: 2, rateLimitedRuns: 1, http: { rateLimitedResponses: 12, attempts: 20_160 } },
@@ -105,8 +105,8 @@ describe("formatStatusReport", () => {
         "         promotionError: Game details request failed: 503 Service Unavailable",
         "poll     failed 7m ago    success 11m ago    288         3       2             1      12/20,160",
         "         rateLimited=true stoppedBy=error http.rateLimitedResponses=4 requested=3150 skipped=600 missing=1",
-        "         shedBelowCcu=63 medianTailDetailsMinutes.young=31 medianTailDetailsMinutes.established=200",
-        '         http.endpointIntervalMs={"games.roblox.com/v1/games":10500}',
+        "         shedBelowCcu=63 medianTailDetailsMinutes.young=31 medianTailDetailsMinutes.quiet=130",
+        '         medianTailDetailsMinutes.established=200 http.endpointIntervalMs={"games.roblox.com/v1/games":10500}',
         "         error 7m ago: poll exceeded 270000 ms",
         "votes    failed 3d ago    never                0         0       0",
         "         error 3d ago: votes went quiet",
@@ -115,7 +115,8 @@ describe("formatStatusReport", () => {
         "",
         "429s over the last 24 h: 13/21,048 requests (0.06%); 1 rate-limited run",
         "Coverage: 2,712/2,903 (93.4%) Rolimon's places at or above 100 CCU polled within 15m; complete list 12m old",
-        "Tail refresh in the last poll run: young games 31 min (target 30), established 200 min (target 240)",
+        "Tail refresh in the last poll run: young games 31 min (target 30), quiet young games 130 min (target 120),",
+        "  established 200 min (target 240)",
         "Data: 41,233 games; last 24 h: 1,012,345 poll observations, 1,123,456 census rows",
       ].join("\n"),
     );
@@ -127,8 +128,9 @@ describe("formatStatusReport", () => {
       completed("census", { listQuality: "success", listed: 7_800 }),
     ]);
     expect(lines).toContain("rateLimited=false stoppedBy=- http.rateLimitedResponses=- requested=- skipped=0 missing=- shedBelowCcu=-");
-    expect(lines).toContain("medianTailDetailsMinutes.young=- medianTailDetailsMinutes.established=- http.endpointIntervalMs=-");
-    expect(lines).toContain("Tail refresh in the last poll run: young games n/a (target 30), established n/a (target 240)");
+    expect(lines).toContain("medianTailDetailsMinutes.young=- medianTailDetailsMinutes.quiet=- medianTailDetailsMinutes.established=-");
+    expect(lines).toContain("Tail refresh in the last poll run: young games n/a (target 30), quiet young games n/a (target 120),");
+    expect(lines).toContain("established n/a (target 240)");
     expect(lines).toContain("listQuality=success listed=7800 rejected=- resolved=- resolutionFailures=- deferred=- rateLimited=-");
     expect(lines.some((line) => line.startsWith("promotionError") || line.startsWith("listError"))).toBe(false);
   });
@@ -202,7 +204,7 @@ describe("formatStatusReport", () => {
         skipped: 12_345,
         missing: 123_456,
         shedBelowCcu: 12_345,
-        medianTailDetailsMinutes: { young: 12_345, established: 12_345 },
+        medianTailDetailsMinutes: { young: 12_345, quiet: 12_345, established: 12_345 },
       },
       { rateLimitedResponses: 123_456, attempts: 1_234_567 },
     );
@@ -215,7 +217,7 @@ describe("formatStatusReport", () => {
       jobs: [census, poll, ...others],
       coverage: { slot: new Date("2026-10-20T12:13:00Z"), listed: 12_345, tracked: 12_345, minimumCcu: 100, withinMinutes: 15 },
       totals: { games: 123_456, pollObservations: 12_345_678, censusRows: 12_345_678 },
-      tailRefreshMinutes: { young: 12_345, established: 12_345 },
+      tailRefreshMinutes: { young: 12_345, quiet: 12_345, established: 12_345 },
     });
     const lines = report.split("\n");
     expect(lines.filter((line) => line.length > 120)).toEqual([]);
@@ -282,16 +284,24 @@ describe("hasStat", () => {
 
 describe("tailRefresh", () => {
   it("reads each lane's median wait from poll's last completed run beside its target", () => {
-    const jobs = [completed("census", {}), completed("poll", { medianTailDetailsMinutes: { young: 28, established: null } })];
+    const jobs = [
+      completed("census", {}),
+      completed("poll", { medianTailDetailsMinutes: { young: 28, quiet: 115, established: null } }),
+    ];
     expect(tailRefresh(jobs, tailRefreshMinutes)).toEqual([
       { lane: "young", minutes: 28, targetMinutes: 30 },
+      { lane: "quiet", minutes: 115, targetMinutes: 120 },
       { lane: "established", minutes: null, targetMinutes: 240 },
     ]);
+    // A run from before the quiet lane reports the other two.
+    const older = [completed("poll", { medianTailDetailsMinutes: { young: 50, established: 360 } })];
+    expect(tailRefresh(older, tailRefreshMinutes).map((lane) => lane.minutes)).toEqual([50, null, 360]);
   });
 
   it("has no wait to report before poll completes a run with lanes", () => {
     const unknown = [
       { lane: "young", minutes: null, targetMinutes: 30 },
+      { lane: "quiet", minutes: null, targetMinutes: 120 },
       { lane: "established", minutes: null, targetMinutes: 240 },
     ];
     expect(tailRefresh([summary("poll")], tailRefreshMinutes)).toEqual(unknown);

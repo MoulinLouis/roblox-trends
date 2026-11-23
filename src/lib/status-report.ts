@@ -1,6 +1,6 @@
 import type { CensusCoverage, DataTotals, JobSummary } from "@/db/status";
 import { formatElapsed, formatMinutes, formatUtc } from "@/lib/format";
-import type { TailLane } from "@/lib/jobs/poll";
+import { TAIL_LANES, type TailLane } from "@/lib/jobs/poll";
 import type { JobName } from "@/lib/jobs/types";
 
 export interface StatusSnapshot {
@@ -27,7 +27,7 @@ export const WATCHED_STATS: Partial<Record<JobName, { values: readonly string[];
   // stoppedBy tells games shed at the deadline from games skipped after a rate limit or repeated failed batches;
   // requested is the hot set plus the tail slice the run planned, and skipped the part of it left out; missing counts
   // the requested games Roblox did not answer (job_runs.stats.missingSample lists some);
-  // medianTailDetailsMinutes shows how long the young and established tail games wait between two refreshes;
+  // medianTailDetailsMinutes shows how long the young, quiet and established tail games wait between two refreshes;
   // http.endpointIntervalMs shows the game details spacing the run ended with, above its configured value after a 429.
   poll: {
     values: [
@@ -39,6 +39,7 @@ export const WATCHED_STATS: Partial<Record<JobName, { values: readonly string[];
       "missing",
       "shedBelowCcu",
       "medianTailDetailsMinutes.young",
+      "medianTailDetailsMinutes.quiet",
       "medianTailDetailsMinutes.established",
       "http.endpointIntervalMs",
     ],
@@ -103,7 +104,7 @@ export function formatStatusReport({ now, windowHours, jobs, coverage, totals, t
     "",
     rateLimitLine(jobs, windowHours),
     coverageLine(now, coverage, windowHours),
-    tailRefreshLine(tailRefresh(jobs, tailRefreshMinutes)),
+    ...tailRefreshLines(tailRefresh(jobs, tailRefreshMinutes)),
     totalsLine(totals, windowHours),
   ].join("\n");
 }
@@ -148,19 +149,20 @@ export interface TailRefresh {
 // How long each lane of poll's tail waits between two refreshes, against how long it should.
 export function tailRefresh(jobs: readonly JobSummary[], targets: Record<TailLane, number>): TailRefresh[] {
   const stats = jobs.find((job) => job.job === "poll")?.lastCompleted?.stats ?? {};
-  return (["young", "established"] as const).map((lane) => {
+  return TAIL_LANES.map((lane) => {
     const minutes = statAt(stats, `medianTailDetailsMinutes.${lane}`);
     return { lane, minutes: typeof minutes === "number" ? minutes : null, targetMinutes: targets[lane] };
   });
 }
 
-function tailRefreshLine(lanes: readonly TailRefresh[]): string {
-  const label: Record<TailLane, string> = { young: "young games", established: "established" };
+function tailRefreshLines(lanes: readonly TailRefresh[]): string[] {
+  const label: Record<TailLane, string> = { young: "young games", quiet: "quiet young games", established: "established" };
   const parts = lanes.map(
-    ({ lane, minutes, targetMinutes }) =>
-      `${label[lane]} ${minutes === null ? "n/a" : `${counts.format(minutes)} min`} (target ${counts.format(targetMinutes)})`,
+    ({ lane, minutes, targetMinutes }, index) =>
+      `${label[lane]} ${minutes === null ? "n/a" : `${counts.format(minutes)} min`} (target ${counts.format(targetMinutes)})` +
+      (index < lanes.length - 1 ? "," : ""),
   );
-  return `Tail refresh in the last poll run: ${parts.join(", ")}`;
+  return wrap("  ", ["Tail refresh in the last poll run:", ...parts], "");
 }
 
 function rateLimitLine(jobs: readonly JobSummary[], windowHours: number): string {
@@ -212,19 +214,21 @@ export function formatStat(value: unknown): string {
   return typeof value === "object" ? JSON.stringify(value) : String(value);
 }
 
-// Packs the items into as few lines as fit the width; an item longer than a line gets a line of its own.
-function wrap(indent: string, items: readonly string[]): string[] {
+// Packs the items into as few lines as fit the width; an item longer than a line gets a line of its own. The first
+// line takes firstIndent, so a labelled line can hang its continuation lines under the label.
+function wrap(indent: string, items: readonly string[], firstIndent = indent): string[] {
   const lines: string[] = [];
   let line = "";
+  const lineIndent = () => (lines.length === 0 ? firstIndent : indent);
   for (const item of items) {
-    if (line && indent.length + line.length + 1 + item.length > maximumLineWidth) {
-      lines.push(indent + line);
+    if (line && lineIndent().length + line.length + 1 + item.length > maximumLineWidth) {
+      lines.push(lineIndent() + line);
       line = item;
     } else {
       line = line ? `${line} ${item}` : item;
     }
   }
-  if (line) lines.push(indent + line);
+  if (line) lines.push(lineIndent() + line);
   return lines;
 }
 

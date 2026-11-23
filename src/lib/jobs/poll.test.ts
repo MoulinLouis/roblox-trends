@@ -23,13 +23,16 @@ function game(
   return { universeId, priority, robloxCreatedAt, lastDetailsAt, lastDetailsRequestAt };
 }
 
-// A young tail game is due every 30 minutes and an established one every 4 hours.
+// A young tail game is due every 30 minutes, a quiet one (below 50 CCU) every 2 hours and an established one every 4
+// hours.
+const lanes = { youngMaximumAgeDays: 90, quietBelowCcu: 50 };
+
 function limits(hotUniverses: number, tailUniversesPerRun: number): PollLimits {
   return {
     hotUniverses,
     tailUniversesPerRun,
-    youngMaximumAgeDays: 90,
-    tailRefreshMinutes: { young: 30, established: 240 },
+    ...lanes,
+    tailRefreshMinutes: { young: 30, quiet: 120, established: 240 },
   };
 }
 
@@ -135,6 +138,24 @@ describe("planPollRun", () => {
     expect(ids(plan.tailRequested)).toEqual([15, 11, 12, 13]);
   });
 
+  it("waits its own two-hour interval for a quiet young game, below the minimum CCU", () => {
+    // Overdue ratios: 24 (young, 35 of 30 minutes) 1.17, 23 (quiet, 130 of 120) 1.08, 21 (quiet, 100 of 120) 0.83,
+    // 22 (young, 20 of 30) 0.67, 25 (quiet, 45 of 120) 0.38. Game 25 waited longer than game 22 but is not due yet.
+    const plan = planPollRun(
+      [
+        game(1, 900, minutesAgo(0)),
+        game(22, 300, minutesAgo(20)),
+        game(24, 200, minutesAgo(35)),
+        game(21, 49, minutesAgo(100)),
+        game(25, 30, minutesAgo(45)),
+        game(23, 10, minutesAgo(130)),
+      ],
+      limits(1, 4),
+      now,
+    );
+    expect(ids(plan.tailRequested)).toEqual([24, 23, 21, 22]);
+  });
+
   it("leaves an established game requested an hour ago behind a young game requested 40 minutes ago", () => {
     const plan = planPollRun(
       [game(1, 900, minutesAgo(0)), game(2, 800, minutesAgo(60), minutesAgo(60), established), game(3, 700, minutesAgo(40))],
@@ -156,9 +177,16 @@ describe("tailLane", () => {
   const days = (count: number) => count * 24 * 60;
 
   it("counts a game created within the maximum age as young and one created exactly that long ago as established", () => {
-    expect(tailLane(game(1, 100, null, null, minutesAgo(days(90) - 1)), now, 90)).toBe("young");
-    expect(tailLane(game(1, 100, null, null, minutesAgo(days(90))), now, 90)).toBe("established");
-    expect(tailLane(game(1, 100, null, null, established), now, 90)).toBe("established");
+    expect(tailLane(game(1, 100, null, null, minutesAgo(days(90) - 1)), now, lanes)).toBe("young");
+    expect(tailLane(game(1, 100, null, null, minutesAgo(days(90))), now, lanes)).toBe("established");
+    expect(tailLane(game(1, 100, null, null, established), now, lanes)).toBe("established");
+  });
+
+  it("counts a young game below the minimum CCU as quiet, and an established one as established whatever its CCU", () => {
+    expect(tailLane(game(1, 49, null), now, lanes)).toBe("quiet");
+    expect(tailLane(game(1, 0, null), now, lanes)).toBe("quiet");
+    expect(tailLane(game(1, 50, null), now, lanes)).toBe("young");
+    expect(tailLane(game(1, 10, null, null, established), now, lanes)).toBe("established");
   });
 });
 
@@ -167,18 +195,24 @@ describe("medianTailDetailsMinutesByLane", () => {
     const requested = [
       game(11, 100, minutesAgo(30)),
       game(12, 100, minutesAgo(40)),
+      game(16, 20, minutesAgo(130)),
       game(13, 100, minutesAgo(200), minutesAgo(200), established),
       game(14, 100, minutesAgo(260), minutesAgo(260), established),
       game(15, 100, minutesAgo(300), minutesAgo(300), established),
     ];
-    expect(medianTailDetailsMinutesByLane(requested, new Set(), now, 90)).toEqual({ young: 35, established: 260 });
+    expect(medianTailDetailsMinutesByLane(requested, new Set(), now, lanes)).toEqual({ young: 35, quiet: 130, established: 260 });
     // Game 14 was not answered.
-    expect(medianTailDetailsMinutesByLane(requested, new Set([14]), now, 90)).toEqual({ young: 35, established: 250 });
+    expect(medianTailDetailsMinutesByLane(requested, new Set([14]), now, lanes)).toEqual({
+      young: 35,
+      quiet: 130,
+      established: 250,
+    });
   });
 
   it("reports no age for a lane without a requested game", () => {
-    expect(medianTailDetailsMinutesByLane([game(11, 100, minutesAgo(30))], new Set(), now, 90)).toEqual({
+    expect(medianTailDetailsMinutesByLane([game(11, 100, minutesAgo(30))], new Set(), now, lanes)).toEqual({
       young: 30,
+      quiet: null,
       established: null,
     });
   });

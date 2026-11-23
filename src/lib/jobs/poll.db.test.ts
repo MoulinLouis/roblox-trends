@@ -72,12 +72,13 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
         hot: 2,
         tail: 0,
         youngTail: 0,
+        quietTail: 0,
         tailRequested: 0,
         requested: 2,
         returned: 2,
         http: { attempts: 1, retries: 0, rateLimitedResponses: 0, endpointIntervalMs: { "games.roblox.com/v1/games": 7_000 } },
         shedBelowCcu: null,
-        medianTailDetailsMinutes: { young: null, established: null },
+        medianTailDetailsMinutes: { young: null, quiet: null, established: null },
         missing: 0,
         missingSample: [],
       });
@@ -95,6 +96,7 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
         "missing",
         "missingSample",
         "newGames",
+        "quietTail",
         "rateLimited",
         "requested",
         "returned",
@@ -175,7 +177,7 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
         // The tail games shed at the deadline were never requested: they are skipped, not missing, and still count here.
         // Nine of the ten hold details stored at `now`, so their median age is 0 (null if they did not count). The
         // fixtures are young games.
-        medianTailDetailsMinutes: { young: 0, established: null },
+        medianTailDetailsMinutes: { young: 0, quiet: null, established: null },
         missing: 0,
       });
     });
@@ -369,6 +371,8 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
         hot: 2,
         tail: 4,
         youngTail: 4,
+        // Game 205 has no reading at all, so its priority is 0: it is quiet.
+        quietTail: 1,
         tailRequested: 2,
         requested: 4,
         attempted: 4,
@@ -377,8 +381,21 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
         stoppedBy: null,
         shedBelowCcu: null,
         // Game 205 has no details to date; game 204's are 50 minutes old. Every game here is young.
-        medianTailDetailsMinutes: { young: 50, established: null },
+        medianTailDetailsMinutes: { young: 50, quiet: null, established: null },
       });
+    });
+
+    it("waits two hours for a quiet young game, below the minimum CCU", async () => {
+      // Game 207 had 20 players: it is active only because it is young and had players this week. Its details are 100
+      // minutes old, 0.83 of its 120-minute interval: game 205 (never detailed) and game 204 (50 of 30 minutes) come
+      // first, where at the young lane's 30 minutes it would have been second.
+      await upsertGameDetails(database.db, [gameDetail(207, { playing: 20 })], now);
+      await setDetailsAt(207, minutesBefore(100));
+      expect(await executeJob(rotatingJob(), database.db, now)).toBe("success");
+      expect(requests).toEqual([[201, 202, 205, 204]]);
+      const [run] = await database.db.select().from(jobRuns);
+      // Game 205 has no reading at all: it is quiet too, but never requested, so it comes first.
+      expect(run.stats).toMatchObject({ tail: 5, youngTail: 5, quietTail: 2 });
     });
 
     it("degrades a run when a requested game is missing", async () => {
@@ -404,7 +421,7 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
       ]);
       const runs = await database.db.select().from(jobRuns).orderBy(jobRuns.startedAt);
       expect(runs.map((run) => run.stats.medianTailDetailsMinutes)).toEqual(
-        [50, 30, 20].map((young) => ({ young, established: null })),
+        [50, 30, 20].map((young) => ({ young, quiet: null, established: null })),
       );
     });
 
@@ -434,7 +451,7 @@ describe.skipIf(!hasTestDatabase)("poll job", () => {
       // Game 204's 50-minute-old details never count: the first run reports game 205's 40 minutes, the second run the
       // median of 203's 40 and 206's 20 minutes, the last game 205's details from the first run, 20 minutes before.
       expect(runs.map((run) => run.stats.medianTailDetailsMinutes)).toEqual(
-        [40, 30, 20].map((young) => ({ young, established: null })),
+        [40, 30, 20].map((young) => ({ young, quiet: null, established: null })),
       );
     });
 
