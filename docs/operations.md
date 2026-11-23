@@ -122,6 +122,14 @@ Host radar-analysis
 
 `ssh radar-prod` opens a root shell; `ssh radar-prod '<command>'` runs one command.
 
+A new machine of the owner needs the Tailscale client (on Windows, the Windows client also serves WSL), the `~/.ssh/config` above, and its public key in both `/root/.ssh/authorized_keys` and `/home/analysis/.ssh/authorized_keys`: `provision.sh` copies root's keys to `analysis` only when that file does not exist yet. From a machine that already has access, with the new key's line (a comment such as `wsl-desktop` tells the machines apart):
+
+```bash
+ssh radar-prod 'k="ssh-ed25519 AAAA… <machine>"; for f in /root/.ssh/authorized_keys /home/analysis/.ssh/authorized_keys; do grep -qxF "$k" "$f" || echo "$k" >> "$f"; done'
+```
+
+Without such a machine, add it from the Hetzner web console (section 9, which also shows how). Remove the key of a machine the owner no longer has from both files.
+
 ### Network
 
 Only the tailnet reaches the server:
@@ -679,7 +687,19 @@ Deploys do not apply `provision.sh`. Once a change to it is live, rerun `/opt/ra
 
 When SSH over Tailscale fails (Tailscale logged out, a broken sshd or ufw configuration, a lost key):
 
-1. Hetzner Console → the server → Rescue tab → "Reset root password", then open the web console (Console button) and log in as `root` with that password. The password works only there: sshd refuses passwords. The console types some symbols wrongly from a non-US keyboard layout (from an AZERTY keyboard, `|` becomes `\`, `:` becomes `;` and `_` becomes `-`): prefer commands without them, and complete paths such as `authorized_keys` with Tab.
+1. Hetzner Console → the server → Rescue tab → "Reset root password", then open the web console (Console button) and log in as `root` with that password. The password works only there: sshd refuses passwords. The console types some symbols wrongly from a non-US keyboard layout (from an AZERTY keyboard, `|` becomes `\`, `:` becomes `;`, `_` becomes `-` and `>` becomes `.`, so no redirection works): prefer commands without them, and complete paths such as `authorized_keys` with Tab.
+
+   To authorize a machine's key from the console, when that key is on the owner's GitHub account (`github.com/<user>.keys` lists them), these commands avoid every one of those symbols; `<fragment>` is a few characters unique to the key, `<Tab>` completes `authorized_keys`, and `dd` appends without `>>` (without `oflag=append conv=notrunc` it would overwrite the file). This restored access on 2026-11-23:
+
+   ```bash
+   curl -sL github.com/<user>.keys -o /tmp/k
+   sed -i -n /<fragment>/p /tmp/k
+   cat /tmp/k
+   dd if=/tmp/k of=/root/.ssh/auth<Tab> oflag=append conv=notrunc
+   dd if=/tmp/k of=/home/analysis/.ssh/auth<Tab> oflag=append conv=notrunc
+   ```
+
+   `cat /tmp/k` must show the one key before the two `dd` commands run.
 2. Diagnose: `tailscale status`, `systemctl status tailscaled ssh`, `ufw status verbose`, `sshd -t`. `tailscale up --hostname=radar-prod` prints a login URL when the machine was logged out.
 3. If public SSH is needed: `ufw allow 22/tcp` restores it in ufw, and **Owner** adds an inbound TCP 22 rule to the Hetzner Cloud Firewall; then `ssh root@157.90.125.226` works with the key. Close both again once Tailscale works: `ufw delete allow 22/tcp` and remove the firewall rule.
 4. If the system does not boot: Rescue tab → enable the rescue system with the owner's key, power-cycle the server, open public SSH in the Cloud Firewall as above, `ssh root@157.90.125.226`, then mount the root partition (`lsblk` shows it) to repair it.
