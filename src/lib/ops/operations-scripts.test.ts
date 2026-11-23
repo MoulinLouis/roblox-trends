@@ -88,6 +88,8 @@ describe("operations scripts", () => {
     const dropIn = readFileSync(new URL("../../../ops/needrestart/90-radar.conf", import.meta.url), "utf8");
     // needrestart matches these keys against the unit name, here postgresql@18-main.service.
     expect(dropIn).toContain("$nrconf{override_rc}{qr(^postgresql)} = 0;");
+    // The radar's oneshot units, such as radar-job@poll.service; radar-web.service is still restarted.
+    expect(dropIn).toContain("$nrconf{override_rc}{qr(^radar-(?!web\\.))} = 0;");
     expect(script("provision.sh")).toContain('install -m 644 "${ops}/needrestart/90-radar.conf" /etc/needrestart/conf.d/90-radar.conf');
   });
 

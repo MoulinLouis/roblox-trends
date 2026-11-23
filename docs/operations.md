@@ -608,7 +608,7 @@ systemctl start radar-deploy.timer radar-system-check.timer
 
 Unattended upgrades install Ubuntu security updates only, daily, and reboot automatically at 04:48 UTC when one needs it (between job starts: a reboot costs at most one poll slot). Every unit, the timers and `tailscale serve` come back by themselves. The log is `/var/log/unattended-upgrades/unattended-upgrades.log`; `/var/run/reboot-required` exists while a reboot is pending.
 
-needrestart restarts the services that use an updated library, except PostgreSQL (`ops/needrestart/90-radar.conf`): restarting it ends every running job, which happened on 2026-10-22 (libc6) and 2026-10-24 (zlib1g). PostgreSQL picks the library up at the next reboot. `needrestart -b` lists it as `NEEDRESTART-SVC: postgresql@18-main.service` meanwhile; to restart it sooner, `systemctl restart postgresql@18-main` costs the running jobs their run.
+needrestart restarts the services that use an updated library, except PostgreSQL and the radar's oneshot units (`ops/needrestart/90-radar.conf`). Restarting PostgreSQL ends every running job, which happened on 2026-10-22 (libc6) and 2026-10-24 (zlib1g); restarting a running `radar-job@` unit kills its run and starts it again out of its slot, which happened to `poll` and `explore` on 2026-11-15 (libc6). The oneshot units load the library at their next start, and `radar-web`, the only long-running radar service, is still restarted. PostgreSQL picks the library up at the next reboot. `needrestart -b` lists it as `NEEDRESTART-SVC: postgresql@18-main.service` meanwhile; to restart it sooner, `systemctl restart postgresql@18-main` costs the running jobs their run.
 
 ### PostgreSQL minor releases
 
