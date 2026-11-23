@@ -50,7 +50,7 @@ node --version; pgbackrest version; tailscale version | head -n 1
 | `/etc/systemd/system/radar-*` | `root` | Copied from `ops/systemd` of the live release by every deploy |
 | `/usr/local/bin/radar` | symlink | `ops/bin/radar.sh` of the live release: `radar status` |
 | `/etc/ssh/sshd_config.d/01-radar.conf` | `root` | Keys only, root by key (`provision.sh`) |
-| `/etc/sysctl.d/90-radar.conf`, `/etc/systemd/journald.conf.d/90-radar.conf`, `/etc/apt/apt.conf.d/20auto-upgrades`, `/etc/apt/apt.conf.d/52radar-unattended-upgrades`, `/etc/needrestart/conf.d/90-radar.conf` | `root` | Swappiness, a 2 GB journal, daily security updates with a reboot at 04:48 UTC, no PostgreSQL restart by needrestart (`provision.sh`; the last one from `ops/needrestart`) |
+| `/etc/sysctl.d/90-radar.conf`, `/etc/systemd/journald.conf.d/90-radar.conf`, `/etc/apt/apt.conf.d/20auto-upgrades`, `/etc/apt/apt.conf.d/52radar-unattended-upgrades`, `/etc/needrestart/conf.d/90-radar.conf` | `root` | Swappiness, a 2 GB journal, daily security updates with a reboot at 04:18 UTC, no restart of PostgreSQL or of the radar's oneshot units by needrestart (`provision.sh`; the last two from `ops/apt` and `ops/needrestart`) |
 | `/root/radar-bootstrap` | `root` | Clone used for the first provisioning and deployment only |
 
 Users: `radar` (application, PostgreSQL role `radar` by peer authentication), `analysis` (owner's SSH key, mapped by `pg_ident` to the read-only role `radar_analysis`), `postgres`. The owner and maintenance sessions log in as `root` with the owner's key, over Tailscale only.
@@ -606,7 +606,7 @@ systemctl start radar-deploy.timer radar-system-check.timer
 
 ### Ubuntu
 
-Unattended upgrades install Ubuntu security updates only, daily, and reboot automatically at 04:48 UTC when one needs it (between job starts: a reboot costs at most one poll slot). Every unit, the timers and `tailscale serve` come back by themselves. The log is `/var/log/unattended-upgrades/unattended-upgrades.log`; `/var/run/reboot-required` exists while a reboot is pending.
+Unattended upgrades install Ubuntu security updates only, daily, and reboot automatically at 04:18 UTC when one needs it (`ops/apt/52radar-unattended-upgrades`). That minute is the only quiet one of the hour: `explore` runs from :26:30 to about :12, `poll` from :10:20 to at most :17:50, and the reboot (under a minute) ends before the poll of :20:20, so it costs no run. Until 2026-11-23 it was 04:48, inside `explore`, which lost its run on 2026-11-14 and 2026-11-16. Keep it in that window when a timer or a deadline moves. Every unit, the timers and `tailscale serve` come back by themselves. The log is `/var/log/unattended-upgrades/unattended-upgrades.log`; `/var/run/reboot-required` exists while a reboot is pending.
 
 needrestart restarts the services that use an updated library, except PostgreSQL and the radar's oneshot units (`ops/needrestart/90-radar.conf`). Restarting PostgreSQL ends every running job, which happened on 2026-10-22 (libc6) and 2026-10-24 (zlib1g); restarting a running `radar-job@` unit kills its run and starts it again out of its slot, which happened to `poll` and `explore` on 2026-11-15 (libc6). The oneshot units load the library at their next start, and `radar-web`, the only long-running radar service, is still restarted. PostgreSQL picks the library up at the next reboot. `needrestart -b` lists it as `NEEDRESTART-SVC: postgresql@18-main.service` meanwhile; to restart it sooner, `systemctl restart postgresql@18-main` costs the running jobs their run.
 
@@ -673,7 +673,7 @@ Expected: 20 `Check created` or `Check updated` lines (a heartbeat and a quality
 
 ### Provisioning changes
 
-Deploys do not apply `provision.sh`. Once a change to it is live, rerun `/opt/radar/current/ops/bin/provision.sh` with the job timers disabled: it restarts PostgreSQL when its configuration changed, and it upgrades PostgreSQL, Node.js, pgBackRest and Tailscale to their newest packages. A change to `ops/needrestart/90-radar.conf` alone needs no rerun: `install -m 644 /opt/radar/current/ops/needrestart/90-radar.conf /etc/needrestart/conf.d/90-radar.conf`. Likewise rerun `configure-database.sh` after a change to `ops/postgresql/*.sql`, and `configure-backups.sh` after a change to the backup settings (it reloads PostgreSQL, or restarts it when archiving was off).
+Deploys do not apply `provision.sh`. Once a change to it is live, rerun `/opt/radar/current/ops/bin/provision.sh` with the job timers disabled: it restarts PostgreSQL when its configuration changed, and it upgrades PostgreSQL, Node.js, pgBackRest and Tailscale to their newest packages. A change to `ops/needrestart/90-radar.conf` or `ops/apt/52radar-unattended-upgrades` alone needs no rerun: `install -m 644 /opt/radar/current/ops/needrestart/90-radar.conf /etc/needrestart/conf.d/90-radar.conf` or `install -m 644 /opt/radar/current/ops/apt/52radar-unattended-upgrades /etc/apt/apt.conf.d/52radar-unattended-upgrades`. Likewise rerun `configure-database.sh` after a change to `ops/postgresql/*.sql`, and `configure-backups.sh` after a change to the backup settings (it reloads PostgreSQL, or restarts it when archiving was off).
 
 ## 9. Lockout recovery
 

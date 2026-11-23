@@ -1,0 +1,6 @@
+// Managed by ops/bin/provision.sh. Reboot when an update needs one at 04:18 UTC, the only minutes of the hour when no
+// job runs (ops/systemd timers, durations measured on 2026-11-23): explore runs from :26:30 to about :12, poll from
+// :10:20 to at most :17:50 (its 7.5-minute deadline), and the next poll starts at :20:20, after the reboot (under a
+// minute on 2026-11-14 and 2026-11-16). 04:48, the time until 2026-11-23, fell inside explore and killed its run.
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "04:18";

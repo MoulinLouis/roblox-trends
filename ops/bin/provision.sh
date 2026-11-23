@@ -84,11 +84,7 @@ install -d /etc/systemd/journald.conf.d
 printf '[Journal]\nSystemMaxUse=2G\n' >/etc/systemd/journald.conf.d/90-radar.conf
 systemctl restart systemd-journald
 printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' >/etc/apt/apt.conf.d/20auto-upgrades
-# 04:48 sits between job starts (ops/systemd timers); a reboot costs at most one poll slot.
-cat >/etc/apt/apt.conf.d/52radar-unattended-upgrades <<'EOF'
-Unattended-Upgrade::Automatic-Reboot "true";
-Unattended-Upgrade::Automatic-Reboot-Time "04:48";
-EOF
+install -m 644 "${ops}/apt/52radar-unattended-upgrades" /etc/apt/apt.conf.d/52radar-unattended-upgrades
 install -m 644 "${ops}/needrestart/90-radar.conf" /etc/needrestart/conf.d/90-radar.conf
 
 # SSH: keys only, root by key (the image allows passwords for other users). sshd keeps the first value it reads and

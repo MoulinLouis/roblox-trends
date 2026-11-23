@@ -93,6 +93,15 @@ describe("operations scripts", () => {
     expect(script("provision.sh")).toContain('install -m 644 "${ops}/needrestart/90-radar.conf" /etc/needrestart/conf.d/90-radar.conf');
   });
 
+  it("reboots for updates at 04:18 UTC, when no job runs", () => {
+    const settings = readFileSync(new URL("../../../ops/apt/52radar-unattended-upgrades", import.meta.url), "utf8");
+    expect(settings).toContain('Unattended-Upgrade::Automatic-Reboot "true";');
+    expect(settings).toContain('Unattended-Upgrade::Automatic-Reboot-Time "04:18";');
+    expect(script("provision.sh")).toContain(
+      'install -m 644 "${ops}/apt/52radar-unattended-upgrades" /etc/apt/apt.conf.d/52radar-unattended-upgrades',
+    );
+  });
+
   it("pins the TimescaleDB version of the CI image", () => {
     const image = /timescale\/timescaledb:([\d.]+)-pg18/.exec(readFileSync(new URL("../../../.github/workflows/ci.yml", import.meta.url), "utf8"));
     expect(script("provision.sh")).toContain(`readonly timescaledb_version=${image?.[1]}`);
